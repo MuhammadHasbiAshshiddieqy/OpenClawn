@@ -1712,10 +1712,10 @@ Prinsip: DB in-memory (`:memory:`), mock semua LLM call, satu file test per inov
 - [x] Context compactor + **prompt caching** (P2) — token budget estimasi len/4; Claude `cache_control: ephemeral`
 
 ### Sprint 2 — Skills + Decay (3-4 hari)
-- [ ] Tool loop + 5 tools
-- [ ] **code_run sandbox** Docker (P0, keamanan)
-- [ ] **Inovasi 3 (crystallizer)** — **evaluator valid** (P0)
-- [ ] **Inovasi 2 (decay)** — **exponential + throttled** (P1)
+- [x] Tool loop + 5 tools
+- [x] **code_run sandbox** Docker (P0, keamanan)
+- [x] **Inovasi 3 (crystallizer)** — **evaluator valid** (P0)
+- [x] **Inovasi 2 (decay)** — **exponential + throttled** (P1)
 
 ### Sprint 3 — Multi-Role + HITL (3-4 hari)
 - [ ] QA + Dev role

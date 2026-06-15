@@ -9,7 +9,7 @@
     <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python 3.12+">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
     <img src="https://img.shields.io/badge/LLM-Ollama%20%2B%20Claude-purple" alt="Hybrid LLM">
-    <img src="https://img.shields.io/badge/tests-29%20passing-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-95%20passing-brightgreen" alt="Tests">
   </p>
 </div>
 
@@ -170,7 +170,7 @@ All tests use in-memory SQLite and mocked LLM calls — no real Ollama or Claude
 | 0 | Infra · LLM client · Agent loop · Web UI · Audit | ✅ Done |
 | 1 | Soul-aware router · Memory L1-L4 · Compactor + caching | ✅ Done |
 | 2 | Tools · Docker sandbox · Crystallizer · Skill decay | ✅ Done |
-| 3 | Role contracts · Vault · Shield · ApprovalGate (auto) | 🔶 Partial |
+| 3 | Role contracts · Vault · Shield · ApprovalGate (auto) | 🔲 Pending |
 | 4 | Router tuning · Extract modules · Interactive approval | 🔲 Pending |
 
 ---

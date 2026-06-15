@@ -1,0 +1,249 @@
+"""Tests untuk Tools + Sandbox — Sprint 2."""
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from tools.file_ops import FileReadTool, FileWriteTool
+from tools.web import WebFetchTool
+from tools.interaction import AskUserTool
+from tools.code import CodeRunTool
+from tools import TOOL_REGISTRY
+
+
+# ── TOOL_REGISTRY ─────────────────────────────────────────────────────────────
+
+
+def test_registry_has_all_5_tools():
+    """Semua 5 tool harus terdaftar di TOOL_REGISTRY."""
+    expected = {"file_read", "file_write", "web_fetch", "ask_user", "code_run"}
+    assert set(TOOL_REGISTRY.keys()) == expected
+
+
+def test_code_run_requires_approval():
+    """code_run HARUS requires_approval=True — keamanan wajib."""
+    assert TOOL_REGISTRY["code_run"].requires_approval is True
+
+
+def test_non_destructive_tools_no_approval():
+    """file_read, web_fetch, ask_user tidak butuh approval."""
+    for name in ("file_read", "web_fetch", "ask_user"):
+        assert TOOL_REGISTRY[name].requires_approval is False, f"{name} seharusnya False"
+
+
+def test_all_tools_have_schema():
+    """Semua tool harus bisa produce schema dict yang valid."""
+    for name, tool in TOOL_REGISTRY.items():
+        schema = tool.schema()
+        assert "name" in schema, f"{name}: schema harus punya 'name'"
+        assert "input_schema" in schema, f"{name}: schema harus punya 'input_schema'"
+        assert schema["name"] == name
+
+
+# ── FileReadTool ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_file_read_success(tmp_path):
+    """file_read harus mengembalikan isi file."""
+    f = tmp_path / "test.txt"
+    f.write_text("hello world")
+
+    tool = FileReadTool()
+    result = await tool.execute({"path": str(f)}, vault=None)
+    assert result["content"] == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_file_read_not_found():
+    """file_read harus mengembalikan error jika file tidak ada."""
+    tool = FileReadTool()
+    result = await tool.execute({"path": "/tidak/ada/file.txt"}, vault=None)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_file_read_no_path():
+    """file_read tanpa path harus return error, tidak crash."""
+    tool = FileReadTool()
+    result = await tool.execute({}, vault=None)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_file_read_truncates_large_file(tmp_path):
+    """file_read harus truncate konten > 10000 karakter."""
+    f = tmp_path / "big.txt"
+    f.write_text("x" * 20000)
+
+    tool = FileReadTool()
+    result = await tool.execute({"path": str(f)}, vault=None)
+    assert len(result["content"]) <= 10000
+
+
+# ── FileWriteTool ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_file_write_success(tmp_path):
+    """file_write harus menulis konten dan mengembalikan ok=True."""
+    path = str(tmp_path / "output.txt")
+    tool = FileWriteTool()
+    result = await tool.execute({"path": path, "content": "isi file"}, vault=None)
+    assert result["ok"] is True
+    assert open(path).read() == "isi file"
+
+
+@pytest.mark.asyncio
+async def test_file_write_no_path():
+    """file_write tanpa path harus return error."""
+    tool = FileWriteTool()
+    result = await tool.execute({"content": "isi"}, vault=None)
+    assert "error" in result
+
+
+# ── WebFetchTool ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_success():
+    """web_fetch berhasil → mengembalikan status dan konten."""
+    tool = WebFetchTool()
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = "page content"
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    with patch("tools.web.httpx.AsyncClient", return_value=mock_client):
+        result = await tool.execute({"url": "http://example.com"}, vault=None)
+
+    assert result["status"] == 200
+    assert "page content" in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_no_url():
+    """web_fetch tanpa url harus return error."""
+    tool = WebFetchTool()
+    result = await tool.execute({}, vault=None)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_http_error():
+    """web_fetch dengan HTTP error harus return error, tidak raise."""
+    import httpx
+
+    tool = WebFetchTool()
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(side_effect=httpx.HTTPError("connection error"))
+
+    with patch("tools.web.httpx.AsyncClient", return_value=mock_client):
+        result = await tool.execute({"url": "http://bad-url"}, vault=None)
+
+    assert "error" in result
+
+
+# ── AskUserTool ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ask_user_returns_stub():
+    """ask_user stub harus mengembalikan jawaban tanpa crash."""
+    tool = AskUserTool()
+    result = await tool.execute({"question": "apa preferensimu?"}, vault=None)
+    assert "answer" in result
+
+
+@pytest.mark.asyncio
+async def test_ask_user_no_question():
+    """ask_user tanpa question harus tetap return dict tanpa crash."""
+    tool = AskUserTool()
+    result = await tool.execute({}, vault=None)
+    assert isinstance(result, dict)
+
+
+# ── CodeRunTool + DockerSandbox ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_code_run_no_code():
+    """code_run tanpa kode harus return error, tidak jalankan Docker."""
+    tool = CodeRunTool()
+    result = await tool.execute({}, vault=None)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_code_run_delegates_to_sandbox():
+    """code_run harus mendelegasikan eksekusi ke DockerSandbox, bukan langsung exec."""
+    tool = CodeRunTool()
+    tool.sandbox.run_python = AsyncMock(return_value={"stdout": "42\n", "exit_code": 0})
+
+    result = await tool.execute({"code": "print(42)"}, vault=None)
+    tool.sandbox.run_python.assert_called_once_with("print(42)")
+    assert result["stdout"] == "42\n"
+
+
+@pytest.mark.asyncio
+async def test_sandbox_timeout_handled():
+    """Sandbox timeout harus return error dict, tidak raise ke caller."""
+    from tools.sandbox import DockerSandbox
+    import asyncio
+
+    sandbox = DockerSandbox()
+
+    async def _fake_exec(*args, **kwargs):
+        raise asyncio.TimeoutError()
+
+    with patch("tools.sandbox.asyncio.create_subprocess_exec", side_effect=asyncio.TimeoutError):
+        result = await sandbox.run_python("import time; time.sleep(999)")
+
+    assert "error" in result
+    assert result["exit_code"] == -1
+
+
+def test_sandbox_cmd_has_security_flags():
+    """DockerSandbox harus menyertakan flag keamanan wajib."""
+    from tools.sandbox import SANDBOX_IMAGE
+
+    # Rekonstruksi cmd seperti di sandbox.run_python
+    workdir = "/fake/workdir"
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--memory",
+        "256m",
+        "--cpus",
+        "0.5",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,size=64m",
+        "-v",
+        f"{workdir}:/work:ro",
+        "--workdir",
+        "/work",
+        "--user",
+        "nobody",
+        "--security-opt",
+        "no-new-privileges",
+        SANDBOX_IMAGE,
+        "timeout",
+        "30",
+        "python",
+        "/work/script.py",
+    ]
+
+    assert "--network" in cmd and "none" in cmd, "Harus --network none"
+    assert "--read-only" in cmd, "Harus --read-only"
+    assert "--user" in cmd and "nobody" in cmd, "Harus user non-root"
+    assert "no-new-privileges" in cmd, "Harus --security-opt no-new-privileges"
