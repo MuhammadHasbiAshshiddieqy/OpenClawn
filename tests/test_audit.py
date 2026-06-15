@@ -29,7 +29,7 @@ def auditor(db):
 def _fake_route(complexity=Complexity.SIMPLE, score=2, soul_hit=False):
     """RouteDecision dummy untuk testing."""
     return RouteDecision(
-        model="qwen2.5:7b",
+        model="gemma4:e4b",
         provider="ollama",
         complexity=complexity,
         complexity_score=score,

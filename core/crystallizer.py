@@ -8,9 +8,9 @@ CONFIDENCE_THRESHOLD = 4
 # Audit #4: evaluator harus minimal setara generator.
 # Solusi Sonnet TIDAK BOLEH dinilai 7B — ini yang membuat inovasi ini valid.
 EVALUATOR_FOR: dict[str, tuple[str, str]] = {
-    "qwen2.5:3b": ("ollama", "qwen2.5:7b"),
-    "qwen2.5:7b": ("ollama", "qwen2.5:14b"),
-    "qwen2.5:14b": ("anthropic", "claude-haiku-4-5-20251001"),
+    "gemma4:e2b": ("ollama", "gemma4:e4b"),
+    "gemma4:e4b": ("ollama", "gemma4:12b"),
+    "gemma4:12b": ("anthropic", "claude-haiku-4-5-20251001"),
     "claude-haiku-4-5-20251001": ("anthropic", "claude-haiku-4-5-20251001"),
     "claude-sonnet-4-6": ("anthropic", "claude-sonnet-4-6"),
 }

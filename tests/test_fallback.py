@@ -8,7 +8,7 @@ from infra.config import AppConfig
 def config():
     return AppConfig(
         fallback_chain=(
-            ("ollama", "qwen2.5:7b"),
+            ("ollama", "gemma4:e4b"),
             ("anthropic", "claude-haiku-4-5-20251001"),
         )
     )
@@ -42,7 +42,7 @@ async def test_fallback_when_ollama_down(client):
     client._stream_one = mock_stream_one
 
     chunks = []
-    async for chunk in client.stream_with_fallback("ollama", "qwen2.5:7b", []):
+    async for chunk in client.stream_with_fallback("ollama", "gemma4:e4b", []):
         chunks.append(chunk)
 
     # Satu chunk type="fallback" (signal) + satu chunk type="text" dari anthropic
@@ -67,7 +67,7 @@ async def test_fallback_signal_not_emitted_for_primary(client):
     client._stream_one = mock_stream
 
     chunks = []
-    async for chunk in client.stream_with_fallback("ollama", "qwen2.5:7b", []):
+    async for chunk in client.stream_with_fallback("ollama", "gemma4:e4b", []):
         chunks.append(chunk)
 
     assert not any(c.type == "fallback" for c in chunks)
@@ -83,7 +83,7 @@ async def test_all_providers_fail_raises(client):
     client._health_check = always_down
 
     with pytest.raises(ProviderUnavailable):
-        async for _ in client.stream_with_fallback("ollama", "qwen2.5:7b", []):
+        async for _ in client.stream_with_fallback("ollama", "gemma4:e4b", []):
             pass
 
 
@@ -102,7 +102,7 @@ async def test_primary_success_no_fallback(client):
     client._health_check = mock_health
     client._stream_one = mock_stream
 
-    async for _ in client.stream_with_fallback("ollama", "qwen2.5:7b", []):
+    async for _ in client.stream_with_fallback("ollama", "gemma4:e4b", []):
         pass
 
     assert calls == ["ollama"]  # hanya primary, fallback tidak dipanggil

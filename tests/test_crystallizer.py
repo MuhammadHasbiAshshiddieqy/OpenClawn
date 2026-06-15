@@ -42,12 +42,12 @@ def test_evaluator_at_least_as_strong_as_generator():
     assert EVALUATOR_FOR["claude-sonnet-4-6"] == ("anthropic", "claude-sonnet-4-6")
     # Haiku generator → evaluator minimal Haiku
     assert EVALUATOR_FOR["claude-haiku-4-5-20251001"] == ("anthropic", "claude-haiku-4-5-20251001")
-    # 7B generator → evaluator naik ke 14B
-    assert EVALUATOR_FOR["qwen2.5:7b"][1] == "qwen2.5:14b"
-    # 3B generator → evaluator naik ke 7B
-    assert EVALUATOR_FOR["qwen2.5:3b"][1] == "qwen2.5:7b"
-    # 14B generator → evaluator naik ke Haiku (cloud)
-    assert EVALUATOR_FOR["qwen2.5:14b"][0] == "anthropic"
+    # e4b generator → evaluator naik ke 12b
+    assert EVALUATOR_FOR["gemma4:e4b"][1] == "gemma4:12b"
+    # e2b generator → evaluator naik ke e4b
+    assert EVALUATOR_FOR["gemma4:e2b"][1] == "gemma4:e4b"
+    # 12b generator → evaluator naik ke Haiku (cloud)
+    assert EVALUATOR_FOR["gemma4:12b"][0] == "anthropic"
 
 
 @pytest.mark.asyncio
@@ -75,7 +75,7 @@ async def test_low_confidence_crystallizes_as_draft(db):
         task="analisis kebutuhan sistem",
         solution="solusi belum lengkap",
         history=[],
-        generator_model="qwen2.5:7b",
+        generator_model="gemma4:e4b",
     )
     assert result["status"] == "draft"
 
@@ -112,7 +112,7 @@ async def test_parse_failure_defaults_to_draft(db):
         task="tugas apapun",
         solution="solusi",
         history=[],
-        generator_model="qwen2.5:3b",
+        generator_model="gemma4:e2b",
     )
     assert result["status"] == "draft"
 

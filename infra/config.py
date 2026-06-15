@@ -22,9 +22,9 @@ class AppConfig:
     # fallback chain: urutan model jika provider utama gagal
     fallback_chain: tuple = field(
         default_factory=lambda: (
-            ("ollama", "qwen2.5:14b"),
-            ("ollama", "qwen2.5:7b"),
-            ("ollama", "qwen2.5:3b"),
+            ("ollama", "gemma4:12b"),
+            ("ollama", "gemma4:e4b"),
+            ("ollama", "gemma4:e2b"),
             ("anthropic", "claude-haiku-4-5-20251001"),
         )
     )

@@ -187,7 +187,7 @@ async def test_sesuatu():
 Hal-hal ini sudah diputuskan. Jangan tanya ulang atau ubah tanpa instruksi eksplisit:
 
 - **Stack:** Python 3.12, FastAPI, HTMX, SQLite (aiosqlite), Pydantic, httpx, tenacity, structlog. Final.
-- **LLM:** Hybrid. Ollama (`qwen2.5:3b/7b/14b`) untuk ringan, Claude (`claude-haiku-4-5-20251001`, `claude-sonnet-4-6`) untuk berat. Final.
+- **LLM:** Hybrid. Ollama (`gemma4:e2b/e4b/12b`) untuk ringan, Claude (`claude-haiku-4-5-20251001`, `claude-sonnet-4-6`) untuk berat. Final.
 - **Interface:** Web UI dengan SSE streaming. Final untuk research phase.
 - **Fase:** Research/eksperimen. Single-user. Belum perlu auth, multi-tenant, atau scaling horizontal.
 - **Nama model Claude:** sudah diverifikasi benar per Juni 2026. Jangan "perbaiki" ke versi lama.

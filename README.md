@@ -48,9 +48,9 @@ mkdir -p data
 sqlite3 data/openclawn.db < migrations/001_initial.sql
 
 # Pull Ollama models
-ollama pull qwen2.5:3b
-ollama pull qwen2.5:7b
-ollama pull qwen2.5:14b
+ollama pull gemma4:e2b
+ollama pull gemma4:e4b
+ollama pull gemma4:12b
 
 # Build sandbox image for code_run
 docker build -t openclawn-sandbox:latest -f Dockerfile.sandbox .
@@ -109,7 +109,7 @@ Every routing decision is logged **before** the LLM call with 8 dimensions (toke
 Skills age with **exponential decay** (`score × 0.97^days_since_used`). Unused skills drop below 0.3 and get archived. A revived skill recovers score immediately. Decay runs throttled (max once per hour) so it never blocks a turn.
 
 ### 3. Confidence-Gated Crystallization
-After a successful multi-step task, the agent evaluates its own solution using a model **at least as capable as the generator** (`EVALUATOR_FOR` map: 7B→14B, Sonnet→Sonnet). Solutions with confidence < 4/5 or critical gaps are stored as `draft`, not `active`, and never injected into future context automatically.
+After a successful multi-step task, the agent evaluates its own solution using a model **at least as capable as the generator** (`EVALUATOR_FOR` map: e4b→12b, Sonnet→Sonnet). Solutions with confidence < 4/5 or critical gaps are stored as `draft`, not `active`, and never injected into future context automatically.
 
 ### 4. Role Output Contracts
 Handoffs between roles (PM → QA → Dev) use Pydantic models as typed contracts. Invalid output is stored with `validation_ok=0` for debugging — no crash, no silent data loss.
@@ -121,9 +121,9 @@ Handoffs between roles (PM → QA → Dev) use Pydantic models as typed contract
 ```
 Query complexity → model selection:
 
-TRIVIAL  → qwen2.5:3b   (Ollama, local)
-SIMPLE   → qwen2.5:7b   (Ollama, local)
-MODERATE → qwen2.5:14b  (Ollama, local)
+TRIVIAL  → gemma4:e2b  (Ollama, local)
+SIMPLE   → gemma4:e4b  (Ollama, local)
+MODERATE → gemma4:12b  (Ollama, local)
 COMPLEX  → claude-haiku-4-5-20251001  (Anthropic API)
 CRITICAL → claude-sonnet-4-6          (Anthropic API)
 ```

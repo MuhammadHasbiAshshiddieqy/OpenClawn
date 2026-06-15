@@ -297,9 +297,9 @@ class AppConfig:
     approval_timeout_sec: int = 120
     # fallback chain: urutan model jika provider utama gagal
     fallback_chain: tuple = field(default=(
-        ("ollama", "qwen2.5:14b"),
-        ("ollama", "qwen2.5:7b"),
-        ("ollama", "qwen2.5:3b"),
+        ("ollama", "gemma4:12b"),
+        ("ollama", "gemma4:e4b"),
+        ("ollama", "gemma4:e2b"),
         ("anthropic", "claude-haiku-4-5-20251001"),
     ))
 
@@ -770,9 +770,9 @@ class SmartRouter:
     """
 
     MODELS = {
-        Complexity.TRIVIAL:  ("qwen2.5:3b",  "ollama", 0.0),
-        Complexity.SIMPLE:   ("qwen2.5:7b",  "ollama", 0.0),
-        Complexity.MODERATE: ("qwen2.5:14b", "ollama", 0.0),
+        Complexity.TRIVIAL:  ("gemma4:e2b", "ollama", 0.0),
+        Complexity.SIMPLE:   ("gemma4:e4b", "ollama", 0.0),
+        Complexity.MODERATE: ("gemma4:12b", "ollama", 0.0),
         Complexity.COMPLEX:  ("claude-haiku-4-5-20251001", "anthropic", 0.001),
         Complexity.CRITICAL: ("claude-sonnet-4-6", "anthropic", 0.003),
     }
@@ -1032,9 +1032,9 @@ CONFIDENCE_THRESHOLD = 4
 # Audit #4: evaluator harus minimal setara generator.
 # Map: model generator → model evaluator minimal.
 EVALUATOR_FOR = {
-    "qwen2.5:3b":  ("ollama", "qwen2.5:7b"),
-    "qwen2.5:7b":  ("ollama", "qwen2.5:14b"),
-    "qwen2.5:14b": ("anthropic", "claude-haiku-4-5-20251001"),
+    "gemma4:e2b": ("ollama", "gemma4:e4b"),
+    "gemma4:e4b": ("ollama", "gemma4:12b"),
+    "gemma4:12b": ("anthropic", "claude-haiku-4-5-20251001"),
     "claude-haiku-4-5-20251001": ("anthropic", "claude-haiku-4-5-20251001"),
     "claude-sonnet-4-6": ("anthropic", "claude-sonnet-4-6"),
 }
@@ -1687,8 +1687,8 @@ def test_evaluator_at_least_as_strong_as_generator():
     from core.crystallizer import EVALUATOR_FOR
     # Sonnet generator → evaluator minimal Sonnet, bukan 7B
     assert EVALUATOR_FOR["claude-sonnet-4-6"] == ("anthropic", "claude-sonnet-4-6")
-    # 7B generator → evaluator naik ke 14B
-    assert EVALUATOR_FOR["qwen2.5:7b"][1] == "qwen2.5:14b"
+    # e4b generator → evaluator naik ke 12b
+    assert EVALUATOR_FOR["gemma4:e4b"][1] == "gemma4:12b"
 ```
 
 Prinsip: DB in-memory (`:memory:`), mock semua LLM call, satu file test per inovasi + fallback.
@@ -1747,7 +1747,7 @@ cp .env.example .env          # isi ANTHROPIC_API_KEY
 docker build -t openclawn-sandbox:latest -f Dockerfile.sandbox .
 
 # Ollama
-ollama pull qwen2.5:3b && ollama pull qwen2.5:7b && ollama pull qwen2.5:14b
+ollama pull gemma4:e2b && ollama pull gemma4:e4b && ollama pull gemma4:12b
 
 uvicorn web.main:app --reload --port 8000
 # Chat:    http://localhost:8000

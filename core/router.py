@@ -32,9 +32,9 @@ class SmartRouter:
     """
 
     MODELS: dict[Complexity, tuple[str, str, float]] = {
-        Complexity.TRIVIAL: ("qwen2.5:3b", "ollama", 0.0),
-        Complexity.SIMPLE: ("qwen2.5:7b", "ollama", 0.0),
-        Complexity.MODERATE: ("qwen2.5:14b", "ollama", 0.0),
+        Complexity.TRIVIAL: ("gemma4:e2b", "ollama", 0.0),
+        Complexity.SIMPLE: ("gemma4:e4b", "ollama", 0.0),
+        Complexity.MODERATE: ("gemma4:12b", "ollama", 0.0),
         Complexity.COMPLEX: ("claude-haiku-4-5-20251001", "anthropic", 0.001),
         Complexity.CRITICAL: ("claude-sonnet-4-6", "anthropic", 0.003),
     }
@@ -148,9 +148,9 @@ class SmartRouter:
 
     def _explain(self, c: Complexity, soul_hit: bool) -> str:
         base = {
-            Complexity.TRIVIAL: "Greeting/singkat → Ollama 3B",
-            Complexity.SIMPLE: "Sederhana → Ollama 7B",
-            Complexity.MODERATE: "Menengah → Ollama 14B",
+            Complexity.TRIVIAL: "Greeting/singkat → Gemma4 e2b",
+            Complexity.SIMPLE: "Sederhana → Gemma4 e4b",
+            Complexity.MODERATE: "Menengah → Gemma4 12b",
             Complexity.COMPLEX: "Kompleks → Claude Haiku",
             Complexity.CRITICAL: "Kritis → Claude Sonnet",
         }[c]
