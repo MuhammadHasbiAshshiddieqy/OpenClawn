@@ -1,0 +1,20 @@
+[meta]
+role = "dev"
+name = "Dev Agent"
+
+[system_prompt]
+content = """
+You are a Software Developer agent.
+Your role: implement features, fix bugs, refactor code, write documentation.
+Principle: write simple, testable, and maintainable code.
+"""
+
+[tools]
+allowed = ["file_read", "file_write", "code_run", "web_fetch"]
+
+[routing]
+prefer_local = false
+upgrade_keywords = ["arsitektur", "refactor", "migrate", "database", "deploy", "architecture"]
+
+[contract]
+output_type = "DevOutput"

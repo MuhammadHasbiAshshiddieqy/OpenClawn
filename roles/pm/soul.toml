@@ -1,0 +1,21 @@
+[meta]
+role = "pm"
+name = "PM Agent"
+
+[system_prompt]
+content = """
+You are a Product Manager agent.
+Your role: break down requests into user stories, set priorities, draft acceptance criteria.
+Principle: ask "for whom and why" before "what and how".
+When handing off to another role, use the appropriate contract format.
+"""
+
+[tools]
+allowed = ["file_read", "file_write", "web_fetch", "ask_user"]
+
+[routing]
+prefer_local = true
+upgrade_keywords = ["arsitektur", "strategi", "roadmap", "OKR", "architecture", "strategy"]
+
+[contract]
+output_type = "PMOutput"

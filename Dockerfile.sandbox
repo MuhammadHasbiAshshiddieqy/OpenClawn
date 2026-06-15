@@ -1,0 +1,9 @@
+FROM python:3.12-slim
+
+# Hanya stdlib + paket aman. Tidak ada akses network saat run (--network none).
+RUN pip install --no-cache-dir numpy pandas
+
+# Non-root — keamanan wajib (spec §16)
+USER nobody
+
+WORKDIR /work

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCLAWN</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>OpenCLAWN</h1>
+            <nav>
+                {% for r in available_roles %}
+                <a href="/?role={{ r }}" class="{{ 'active' if r == role else '' }}">{{ r.upper() }}</a>
+                {% endfor %}
+                <a href="/metrics">Metrics</a>
+            </nav>
+        </header>
+
+        <div id="chat-box" class="chat-box"></div>
+
+        <form
+            hx-post="/chat/stream"
+            hx-target="#chat-box"
+            hx-swap="beforeend"
+            hx-ext="sse"
+            hx-trigger="submit"
+        >
+            <input type="hidden" name="role" value="{{ role }}">
+            <input type="hidden" name="session_id" value="{{ session_id }}">
+            <div class="input-row">
+                <textarea name="message" placeholder="Type your message..." rows="3" autofocus></textarea>
+                <button type="submit">Send</button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        // SSE streaming via HTMX
+        document.body.addEventListener('htmx:sseMessage', function(evt) {
+            const chatBox = document.getElementById('chat-box');
+            chatBox.scrollTop = chatBox.scrollHeight;
+        });
+
+        // Submit on Ctrl+Enter
+        document.querySelector('textarea').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && e.ctrlKey) {
+                e.preventDefault();
+                this.closest('form').requestSubmit();
+            }
+        });
+    </script>
+</body>
+</html>

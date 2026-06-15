@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>OpenCLAWN Metrics</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Routing Calibration</h1>
+            <nav><a href="/">← Chat</a></nav>
+        </header>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Complexity</th>
+                    <th>Total</th>
+                    <th>Corrections</th>
+                    <th>Correction Rate</th>
+                    <th>Avg Cost (USD)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in report %}
+                <tr class="{{ 'warn' if row.correction_rate > 20 else '' }}">
+                    <td>{{ row.complexity_label }}</td>
+                    <td>{{ row.total }}</td>
+                    <td>{{ row.corrections }}</td>
+                    <td>{{ row.correction_rate }}%</td>
+                    <td>{{ row.avg_cost }}</td>
+                </tr>
+                {% endfor %}
+                {% if not report %}
+                <tr><td colspan="5">No data yet. Start chatting!</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>

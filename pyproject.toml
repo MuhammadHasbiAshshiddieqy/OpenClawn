@@ -1,0 +1,34 @@
+[project]
+name = "openclawn"
+version = "0.3.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+    "aiosqlite>=0.20",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.6",
+    "structlog>=24.1",
+    "tenacity>=8.2",
+    "aiofiles>=23.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.3",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "infra*", "memory*", "roles*", "tools*", "security*", "web*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
