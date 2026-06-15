@@ -1718,10 +1718,10 @@ Prinsip: DB in-memory (`:memory:`), mock semua LLM call, satu file test per inov
 - [x] **Inovasi 2 (decay)** — **exponential + throttled** (P1)
 
 ### Sprint 3 — Multi-Role + HITL (3-4 hari)
-- [ ] QA + Dev role
-- [ ] **Inovasi 4 (contracts)** + RoleNegotiator
-- [ ] **Human-in-the-loop approval** interaktif (P2)
-- [ ] Docker per role + Vault + Shield (NFKD)
+- [x] QA + Dev role
+- [x] **Inovasi 4 (contracts)** + RoleNegotiator
+- [x] **Human-in-the-loop approval** interaktif (P2)
+- [x] Docker per role + Vault + Shield (NFKD)
 
 ### Sprint 4 — Hardening (ongoing)
 - [ ] Test coverage 4 inovasi + fallback

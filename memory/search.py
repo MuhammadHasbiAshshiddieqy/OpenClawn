@@ -2,6 +2,7 @@
 modul ini mengekspos interface standalone agar bisa diekstrak sebagai paket terpisah."""
 
 from infra.database import DatabaseManager
+from infra.logging import log
 
 SPECIFIC_TERMS = ["bug", "error", "oauth", "api", "deploy", "fix", "crash"]
 
@@ -31,8 +32,9 @@ class SessionSearch:
                 (self.role, query, limit),
             )
             return [r["summary"] for r in rows]
-        except Exception:
-            # FTS5 syntax error atau table belum ada → skip gracefully
+        except Exception as e:
+            # FTS5 syntax error atau table belum ada → skip gracefully, tapi tetap log.
+            log.debug("fts5_search_skipped", role=self.role, error=str(e))
             return []
 
     async def archive(self, session_id: str, summary: str, full_content: str) -> None:

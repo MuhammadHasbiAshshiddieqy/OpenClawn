@@ -11,8 +11,12 @@ from core.audit import RoutingAuditor
 from infra.config import CONFIG
 from infra.database import DatabaseManager
 from infra.logging import setup_logging
+from security.approval import ApprovalGate
 
 db = DatabaseManager(CONFIG)
+# ApprovalGate shared di tingkat app: AgentLoop dibuat baru tiap request, tapi
+# Future approval harus bertahan agar /approve bisa me-resolve-nya (HITL §17).
+approval_gate = ApprovalGate(db, CONFIG)
 
 
 @asynccontextmanager
@@ -50,7 +54,7 @@ async def chat_stream(request: Request):
     if not message:
         return HTMLResponse("")
 
-    agent = AgentLoop(AgentConfig(role=role, session_id=session_id), db=db)
+    agent = AgentLoop(AgentConfig(role=role, session_id=session_id), db=db, approval=approval_gate)
 
     async def generate():
         yield "data: <div class='msg assistant'>\n\n"
@@ -65,6 +69,25 @@ async def chat_stream(request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/approvals")
+async def approvals(session_id: str | None = None):
+    """Daftar approval yang menunggu keputusan — dipakai Web UI untuk polling HITL."""
+    return {"pending": approval_gate.pending_list(session_id)}
+
+
+@app.post("/approve")
+async def approve(request: Request):
+    """User menekan approve/reject di Web UI → resolve Future approval."""
+    form = await request.form()
+    approval_id = (form.get("approval_id") or "").strip()
+    decision = (form.get("decision") or "").strip().lower()
+    if not approval_id or decision not in ("approve", "reject"):
+        return {"ok": False, "error": "approval_id dan decision (approve|reject) wajib"}
+
+    resolved = approval_gate.resolve(approval_id, decision == "approve")
+    return {"ok": resolved, "approval_id": approval_id, "decision": decision}
 
 
 @app.get("/metrics", response_class=HTMLResponse)

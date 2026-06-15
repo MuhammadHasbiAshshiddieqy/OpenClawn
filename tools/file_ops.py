@@ -33,7 +33,7 @@ class FileReadTool(Tool):
 
 class FileWriteTool(Tool):
     name = "file_write"
-    requires_approval = False
+    requires_approval = True  # tool destruktif — memodifikasi filesystem user
 
     async def execute(self, input_data: dict, vault) -> dict:
         path = input_data.get("path", "")

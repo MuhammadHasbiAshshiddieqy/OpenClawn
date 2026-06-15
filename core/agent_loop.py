@@ -17,6 +17,7 @@ from memory.skill_decay import SkillDecayManager
 from tools import TOOL_REGISTRY
 from security.vault import Vault
 from security.approval import ApprovalGate
+from security.shield import Shield
 
 
 @dataclass
@@ -40,7 +41,13 @@ class Turn:
 
 
 class AgentLoop:
-    def __init__(self, agent_cfg: AgentConfig, db: DatabaseManager, config: AppConfig = CONFIG):
+    def __init__(
+        self,
+        agent_cfg: AgentConfig,
+        db: DatabaseManager,
+        config: AppConfig = CONFIG,
+        approval: ApprovalGate | None = None,
+    ):
         self.cfg = agent_cfg
         self.config = config
         self.db = db
@@ -52,7 +59,10 @@ class AgentLoop:
         self.auditor = RoutingAuditor(db)
         self.compactor = ContextCompactor(config.max_context_tokens)
         self.crystallizer = ConfidenceCrystallizer(agent_cfg.role, self.llm, db)
-        self.approval = ApprovalGate(db, config)
+        # ApprovalGate di-inject dari Web UI agar resolve() mengenai Future yang sama
+        # (AgentLoop dibuat baru per request, tapi approval harus shared antar request).
+        self.approval = approval or ApprovalGate(db, config)
+        self.shield = Shield()
         self.history: list[Turn] = []
 
         # nit #2: cache soul.toml sekali, jangan baca tiap turn
@@ -64,6 +74,14 @@ class AgentLoop:
 
     async def run(self, user_message: str) -> AsyncGenerator[str, None]:
         start = time.monotonic()
+
+        # 0. Shield: scan input (lapisan kosmetik, BUKAN pertahanan utama — lihat §17).
+        # Pertahanan utama tetap container isolation di code_run.
+        safe, reason = self.shield.scan_input(user_message)
+        if not safe:
+            log.warning("shield_blocked_input", session=self.cfg.session_id, reason=reason)
+            yield reason
+            return
 
         # 1. Deteksi koreksi user (audit feedback) [#1]
         if self.history:

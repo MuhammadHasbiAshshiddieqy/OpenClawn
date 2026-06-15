@@ -23,10 +23,22 @@ def test_code_run_requires_approval():
     assert TOOL_REGISTRY["code_run"].requires_approval is True
 
 
+def test_file_write_requires_approval():
+    """file_write HARUS requires_approval=True — tool destruktif (modifikasi filesystem)."""
+    assert TOOL_REGISTRY["file_write"].requires_approval is True
+
+
 def test_non_destructive_tools_no_approval():
     """file_read, web_fetch, ask_user tidak butuh approval."""
     for name in ("file_read", "web_fetch", "ask_user"):
         assert TOOL_REGISTRY[name].requires_approval is False, f"{name} seharusnya False"
+
+
+def test_all_destructive_tools_require_approval():
+    """Semua tool yang memodifikasi state (code_run, file_write) harus requires_approval=True."""
+    destructive = [n for n, t in TOOL_REGISTRY.items() if t.requires_approval]
+    assert "code_run" in destructive
+    assert "file_write" in destructive
 
 
 def test_all_tools_have_schema():
@@ -247,3 +259,78 @@ def test_sandbox_cmd_has_security_flags():
     assert "--read-only" in cmd, "Harus --read-only"
     assert "--user" in cmd and "nobody" in cmd, "Harus user non-root"
     assert "no-new-privileges" in cmd, "Harus --security-opt no-new-privileges"
+
+
+# ── Approval gate integration ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_approval_called_for_destructive_tool():
+    """Tool requires_approval=True memicu HITL: request() dicatat & menunggu keputusan.
+
+    Sprint 3: approval interaktif (bukan auto-approve). Di sini kita simulasikan
+    user menekan 'approve' lewat resolve(). Coverage HITL lengkap di test_security.py.
+    """
+    import asyncio
+    from security.approval import ApprovalGate
+    from infra.config import AppConfig
+    from infra.database import DatabaseManager
+
+    cfg = AppConfig(db_path=":memory:", approval_timeout_sec=1)
+    db = DatabaseManager(cfg)
+    with open("migrations/001_initial.sql") as f:
+        conn = await db.conn()
+        await conn.executescript(f.read())
+        await conn.commit()
+
+    gate = ApprovalGate(db=db, config=cfg)
+
+    async def _user_approves():
+        await asyncio.sleep(0.05)
+        pending = gate.pending_list("test-s1")
+        gate.resolve(pending[0]["approval_id"], True)
+
+    asyncio.create_task(_user_approves())
+    approved = await gate.request(
+        session_id="test-s1", tool_name="code_run", tool_input={"code": "print(42)"}
+    )
+    assert approved is True
+
+    # Verifikasi tersimpan di approval_log dengan keputusan final
+    row = await db.fetchone(
+        "SELECT tool_name, decision FROM approval_log WHERE session_id='test-s1'"
+    )
+    assert row is not None
+    assert row["tool_name"] == "code_run"
+    assert row["decision"] == "approved"
+
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_approval_log_contains_tool_input():
+    """Approval log harus menyimpan tool_input untuk audit trail."""
+    from security.approval import ApprovalGate
+    from infra.config import AppConfig
+    from infra.database import DatabaseManager
+    import json
+
+    cfg = AppConfig(db_path=":memory:")
+    db = DatabaseManager(cfg)
+    with open("migrations/001_initial.sql") as f:
+        conn = await db.conn()
+        await conn.executescript(f.read())
+        await conn.commit()
+
+    gate = ApprovalGate(db=db, config=cfg)
+    await gate.request(
+        session_id="s2",
+        tool_name="file_write",
+        tool_input={"path": "/tmp/test.py", "content": "print(1)"},
+    )
+
+    row = await db.fetchone("SELECT tool_input FROM approval_log WHERE session_id='s2'")
+    parsed = json.loads(row["tool_input"])
+    assert parsed["path"] == "/tmp/test.py"
+
+    await db.close()

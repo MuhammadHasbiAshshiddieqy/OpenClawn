@@ -1,6 +1,7 @@
 import json
 from datetime import datetime
 from infra.database import DatabaseManager
+from infra.logging import log
 
 MIN_TOOL_CALLS = 3
 CONFIDENCE_THRESHOLD = 4
@@ -78,7 +79,10 @@ class ConfidenceCrystallizer:
                 "evaluator": eval_model,
                 **evaluation,
             }
-        except Exception:
+        except Exception as e:
+            # Umumnya UNIQUE constraint (skill sudah ada) → anggap duplicate.
+            # Log agar error DB lain tidak hilang diam-diam (CLAUDE.md §6).
+            log.warning("crystallize_insert_failed", skill_name=skill_name, error=str(e))
             return {"skill_name": skill_name, "status": "duplicate"}
 
     async def _self_evaluate(self, task: str, solution: str, provider: str, model: str) -> dict:

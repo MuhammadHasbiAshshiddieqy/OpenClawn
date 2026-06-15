@@ -1,4 +1,5 @@
 from infra.database import DatabaseManager
+from infra.logging import log
 
 SPECIFIC_TERMS = ["bug", "error", "oauth", "api", "deploy", "fix", "crash"]
 
@@ -34,8 +35,9 @@ class MemoryManager:
                     (self.role, query),
                 )
                 l4 = [r["summary"] for r in l4_rows]
-            except Exception:
-                pass  # FTS5 syntax error → skip gracefully
+            except Exception as e:
+                # FTS5 syntax error → skip gracefully, tapi tetap log (CLAUDE.md §6)
+                log.debug("fts5_load_skipped", role=self.role, error=str(e))
 
         return {"l1": l1, "l2": l2, "l3": skills, "l4": l4}
 
