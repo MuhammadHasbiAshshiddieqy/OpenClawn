@@ -90,7 +90,7 @@ class RoutingAuditor:
             """
             UPDATE routing_events SET had_correction=1, correction_detail=?
             WHERE id = (SELECT id FROM routing_events
-                        WHERE session_id=? ORDER BY created_at DESC LIMIT 1)
+                        WHERE session_id=? ORDER BY id DESC LIMIT 1)
             """,
             (user_message[:200], session_id),
         )

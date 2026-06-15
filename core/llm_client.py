@@ -15,6 +15,8 @@ class LLMChunk:
     tool_name: str = ""
     tool_input: dict = field(default_factory=dict)
     usage: dict = field(default_factory=dict)
+    fallback_used: bool = False
+    fallback_model: str = ""
 
 
 class ProviderUnavailable(Exception):
@@ -53,7 +55,7 @@ class LLMClient:
                 if idx > 0:
                     log.warning("llm_fallback", from_model=model, to_model=mdl, attempt=idx)
                     # Signal ke consumer bahwa fallback aktif, untuk audit logging
-                    yield LLMChunk(type="fallback")
+                    yield LLMChunk(type="fallback", fallback_used=True, fallback_model=mdl)
 
                 async for chunk in self._stream_one(prov, mdl, messages, tools, max_tokens):
                     yield chunk

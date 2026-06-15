@@ -1711,24 +1711,23 @@ Prinsip: DB in-memory (`:memory:`), mock semua LLM call, satu file test per inov
 - [x] Memory L1-L2-L4 + FTS5 (threshold adaptif) — `memory/layers.py` + `memory/search.py`
 - [x] Context compactor + **prompt caching** (P2) — token budget estimasi len/4; Claude `cache_control: ephemeral`
 
-### Sprint 2 — Skills + Decay ✅ SELESAI (2026-06-15)
-- [x] Tool loop + 5 tools — `file_read`, `file_write`, `web_fetch`, `code_run`, `ask_user`
-- [x] **code_run sandbox** Docker (P0, keamanan) — `DockerSandbox` + `Dockerfile.sandbox` (no-net, read-only, non-root)
-- [x] **Inovasi 3 (crystallizer)** — **evaluator valid** (P0) — `EVALUATOR_FOR` map, Sonnet→Sonnet, 7B→14B
-- [x] **Inovasi 2 (decay)** — **exponential + throttled** (P1) — base 0.97, throttle 1 jam, archive < 0.3
+### Sprint 2 — Skills + Decay (3-4 hari)
+- [ ] Tool loop + 5 tools
+- [ ] **code_run sandbox** Docker (P0, keamanan)
+- [ ] **Inovasi 3 (crystallizer)** — **evaluator valid** (P0)
+- [ ] **Inovasi 2 (decay)** — **exponential + throttled** (P1)
 
-### Sprint 3 — Multi-Role + HITL 🔶 SEBAGIAN (2026-06-15)
-- [x] QA + Dev role — `roles/qa/soul.toml`, `roles/dev/soul.toml`
-- [x] **Inovasi 4 (contracts)** + `RoleNegotiator` — `PMOutput`, `QAOutput`, `DevOutput` + validasi Pydantic
-- [x] Docker per role + Vault + Shield (NFKD) — `Dockerfile.role`, `docker-compose.yml`, `Vault`, `Shield`
-- [ ] **Human-in-the-loop approval interaktif** — `ApprovalGate` saat ini auto-approve + log (research phase default). Ganti ke interaktif via Web UI SSE event di Sprint 3 lanjutan.
+### Sprint 3 — Multi-Role + HITL (3-4 hari)
+- [ ] QA + Dev role
+- [ ] **Inovasi 4 (contracts)** + RoleNegotiator
+- [ ] **Human-in-the-loop approval** interaktif (P2)
+- [ ] Docker per role + Vault + Shield (NFKD)
 
 ### Sprint 4 — Hardening (ongoing)
-- [x] Test coverage 4 inovasi + fallback — 29 test, semua hijau
+- [ ] Test coverage 4 inovasi + fallback
 - [ ] Tuning router dari data audit nyata
 - [ ] Pertimbangkan embedding routing **jika data audit membuktikan keyword tidak cukup**
 - [ ] Extract 4 inovasi jadi modul standalone
-- [ ] `ask_user` tool: ganti stub ke SSE event nyata ke Web UI
 
 ---
 

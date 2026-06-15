@@ -137,7 +137,7 @@ class AgentLoop:
                 elif chunk.type == "usage":
                     turn.tokens_in = chunk.usage.get("input_tokens", 0)
                     turn.tokens_out = chunk.usage.get("output_tokens", 0)
-                elif chunk.type == "fallback":
+                elif chunk.type == "fallback" and chunk.fallback_used:
                     turn.fallback_used = True
 
             if not pending_tool:
