@@ -1285,11 +1285,21 @@ class MemoryManager:
             (self.role, fact, importance, locale))
 
     async def archive_session(self, summary, full_content):
+        # Idempoten per sesi: ganti arsip lama agar tidak menumpuk duplikat di L4
+        # (FTS5 tak punya UNIQUE). Dipanggil dari agent_loop._post_turn setelah
+        # sesi melewati config.archive_after_turns.
+        await self.db.execute(
+            "DELETE FROM memory_l4 WHERE role=? AND session_id=?",
+            (self.role, self.session_id))
         await self.db.execute("""
             INSERT INTO memory_l4 (role, session_id, summary, full_content, created_at)
             VALUES (?,?,?,?, datetime('now'))
         """, (self.role, self.session_id, summary, full_content))
 ```
+
+> **Wiring (Sprint 4 hardening):** `_post_turn` menulis L1 checkpoint tiap turn
+> (`update_checkpoint`) dan mengarsipkan ke L4 (`archive_session`) saat history
+> ≥ `archive_after_turns`. Tanpa ini, memori jangka panjang tak pernah terisi.
 
 ---
 

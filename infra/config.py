@@ -19,6 +19,9 @@ class AppConfig:
     skill_revive_boost: float = 0.5
     max_active_skills: int = 8
     confidence_threshold: int = 4
+    # Memori jangka panjang: arsipkan sesi ke L4 setelah melewati ambang turn ini
+    # (cukup bermakna untuk dicari lagi lintas sesi, tapi tidak tiap turn).
+    archive_after_turns: int = 6
     # fallback chain: urutan model jika provider utama gagal
     fallback_chain: tuple = field(
         default_factory=lambda: (

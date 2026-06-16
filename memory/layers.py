@@ -60,6 +60,12 @@ class MemoryManager:
         )
 
     async def archive_session(self, summary: str, full_content: str) -> None:
+        """Arsipkan sesi ke L4. Idempoten per sesi: ganti arsip lama session ini
+        agar tidak menumpuk duplikat saat dipanggil berulang (FTS5 tak punya UNIQUE)."""
+        await self.db.execute(
+            "DELETE FROM memory_l4 WHERE role=? AND session_id=?",
+            (self.role, self.session_id),
+        )
         await self.db.execute(
             """INSERT INTO memory_l4 (role, session_id, summary, full_content, created_at)
                VALUES (?,?,?,?, datetime('now'))""",

@@ -196,7 +196,20 @@ class AgentLoop:
     async def _post_turn(
         self, user_message: str, turn: Turn, active_skills: list, history_snapshot: list
     ) -> None:
-        """Background: decay pass + crystallize jika syarat terpenuhi."""
+        """Background: tulis memori + decay pass + crystallize jika syarat terpenuhi."""
+        # Memori L1: checkpoint state terakhir tiap turn agar turn berikut punya konteks
+        # ringkas tanpa memuat seluruh history (token-first, §1.4).
+        if turn.content:
+            await self.memory.update_checkpoint(turn.content)
+
+        # Memori L4: arsipkan sesi yang sudah cukup panjang untuk cross-session search.
+        # Tidak tiap turn — hanya saat bermakna (ambang archive_after_turns).
+        if len(history_snapshot) >= self.config.archive_after_turns:
+            await self.memory.archive_session(
+                summary=turn.content[:200],
+                full_content=self._render_history(history_snapshot),
+            )
+
         await self.decay.maybe_run_decay_pass()
         if self.crystallizer.should_attempt(history_snapshot):
             await self.crystallizer.crystallize(
@@ -205,3 +218,8 @@ class AgentLoop:
                 history=history_snapshot,
                 generator_model=turn.model_used,
             )
+
+    @staticmethod
+    def _render_history(history: list[Turn]) -> str:
+        """Serialisasi history jadi teks untuk arsip L4 (full_content yang bisa di-search)."""
+        return "\n".join(f"{t.role}: {t.content}" for t in history if t.content)
