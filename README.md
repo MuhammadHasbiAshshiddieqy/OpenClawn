@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/OpenClawn.png" alt="OpenCLAWN Logo" width="320" />
+  <img src="assets/OpenClawn.jpeg" alt="OpenCLAWN Logo" width="420" />
 
   <h1>OpenCLAWN</h1>
   <p><strong>Playfully Powerful AI Assistance</strong></p>
@@ -156,10 +156,27 @@ openclawn/
 
 ```bash
 pytest tests/ -v
-# 29 passed
 ```
 
 All tests use in-memory SQLite and mocked LLM calls — no real Ollama or Claude API needed.
+
+---
+
+## Documentation
+
+Detailed reference for every module, class, and function:
+
+| Folder | Doc |
+|---|---|
+| `infra/` | [docs/infra.md](docs/infra.md) — config, database, logging |
+| `core/` | [docs/core.md](docs/core.md) — agent loop, LLM client, router, audit, crystallizer, calibration |
+| `memory/` | [docs/memory.md](docs/memory.md) — L1–L4 layers, skill decay, FTS5 search |
+| `roles/` | [docs/roles.md](docs/roles.md) — contracts, role registry, soul.toml format |
+| `security/` | [docs/security.md](docs/security.md) — vault, shield, approval gate HITL |
+| `tools/` | [docs/tools.md](docs/tools.md) — file/web/code tools, Docker sandbox |
+| `web/` | [docs/web.md](docs/web.md) — FastAPI endpoints, SSE streaming |
+| Database | [docs/database.md](docs/database.md) — full schema + example queries |
+| Tests | [docs/tests.md](docs/tests.md) — test index + patterns |
 
 ---
 

@@ -1,0 +1,75 @@
+# Dokumentasi OpenCLAWN
+
+Referensi teknis lengkap untuk semua modul dan fungsi dalam OpenCLAWN. Dibaca bersama [`CLAUDE.md`](../CLAUDE.md) dan [`openclawn-core-spec-v0.3.md`](../openclawn-core-spec-v0.3.md).
+
+---
+
+## Panduan Cepat
+
+| Saya ingin tahu tentang... | Baca |
+|---|---|
+| Konfigurasi global, koneksi DB, logging | [infra.md](infra.md) |
+| Agent loop, LLM client, router, audit, crystallizer | [core.md](core.md) |
+| Sistem memori L1–L4, skill decay, FTS5 search | [memory.md](memory.md) |
+| Role PM/QA/Dev, handoff contract, soul.toml | [roles.md](roles.md) |
+| Vault, Shield, ApprovalGate HITL | [security.md](security.md) |
+| Tool file/web/code, Docker sandbox | [tools.md](tools.md) |
+| Endpoint FastAPI, SSE streaming, Web UI | [web.md](web.md) |
+| Schema tabel SQLite, query contoh | [database.md](database.md) |
+| Cara menulis test, daftar test per file | [tests.md](tests.md) |
+| Script seed routing & sensitivity analysis | [scripts.md](scripts.md) |
+
+---
+
+## Peta Arsitektur → Dokumen
+
+```
+web/main.py          → web.md
+│
+├── AgentLoop        → core.md (agent_loop)
+│   ├── LLMClient    → core.md (llm_client)
+│   ├── SmartRouter  → core.md (router)
+│   ├── RoutingAuditor → core.md (audit)
+│   ├── ContextCompactor → core.md (compactor)
+│   ├── ConfidenceCrystallizer → core.md (crystallizer)
+│   ├── MemoryManager → memory.md (layers)
+│   ├── SkillDecayManager → memory.md (skill_decay)
+│   ├── ApprovalGate → security.md
+│   ├── Shield       → security.md
+│   └── Vault        → security.md
+│
+├── TOOL_REGISTRY
+│   ├── FileReadTool / FileWriteTool → tools.md
+│   ├── WebFetchTool → tools.md
+│   ├── AskUserTool  → tools.md
+│   └── CodeRunTool + DockerSandbox → tools.md
+│
+└── RoleNegotiator   → roles.md (registry + contracts)
+    ├── PMOutput
+    ├── QAOutput
+    └── DevOutput
+```
+
+---
+
+## 4 Inovasi Inti — Letak di Dokumentasi
+
+| Inovasi | File | Dokumen |
+|---|---|---|
+| **1. Routing Audit + Self-Calibration** | `core/audit.py`, `core/calibration.py`, `scripts/` | [core.md §audit](core.md), [core.md §calibration](core.md), [scripts.md](scripts.md) |
+| **2. Skill Decay** | `memory/skill_decay.py` | [memory.md §skill_decay](memory.md) |
+| **3. Confidence-Gated Crystallization** | `core/crystallizer.py` | [core.md §crystallizer](core.md) |
+| **4. Role Output Contracts** | `roles/contracts.py`, `roles/registry.py` | [roles.md](roles.md) |
+
+---
+
+## Cara Update Dokumentasi Ini
+
+Dokumentasi ini dihasilkan dari membaca source code secara langsung. Saat ada perubahan kode:
+
+1. **Fungsi berubah signature/behavior** → update file `docs/*.md` yang relevan
+2. **File/kelas baru ditambahkan** → tambahkan section baru di dokumen folder yang sesuai
+3. **Tabel DB berubah** → update [database.md](database.md)
+4. **Test baru ditambahkan** → update [tests.md](tests.md) dengan deskripsi singkat
+
+Aturan: dokumentasi harus selalu mencerminkan **kode yang ada sekarang**, bukan rencana atau state masa lalu.

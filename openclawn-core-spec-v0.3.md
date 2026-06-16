@@ -1736,7 +1736,8 @@ Prinsip: DB in-memory (`:memory:`), mock semua LLM call, satu file test per inov
 ### Sprint 4 — Hardening (ongoing)
 - [x] Test coverage 4 inovasi + fallback
 - [x] Tooling tuning: `RoutingCalibrator` (saran threshold dari audit, di /metrics)
-- [ ] Tuning router dari data audit nyata — **BLOCKED: butuh traffic nyata** (advisor siap pakai)
+- [x] Tooling bersiap-tuning: `scripts/seed_routing.py` (demo /metrics + validasi pipa kalibrasi end-to-end) & `scripts/route_sensitivity.py` (simulasi pergeseran threshold deterministik). Lihat `docs/scripts.md`.
+- [ ] Tuning router dari data audit nyata — **BLOCKED: butuh traffic nyata** (advisor + tooling siap; keputusan menyetel threshold menunggu data nyata, bukan data seed — §1.4, §8)
 - [ ] Pertimbangkan embedding routing — **BLOCKED: hanya jika data buktikan keyword tak cukup (§1.6, §8)**
 - [ ] Extract 4 inovasi jadi modul standalone — backlog (refactor struktural)
 

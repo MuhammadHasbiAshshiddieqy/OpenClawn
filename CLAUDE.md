@@ -124,7 +124,8 @@ Ikuti roadmap Sprint di spec §21. Dalam setiap sprint, urutannya:
 3. **Jalankan test** sampai hijau.
 4. **`ruff format` + `ruff check`** sampai bersih.
 5. **Verifikasi manual** via query SQLite (lihat "Verifikasi" di spec §22) jika menyentuh DB.
-6. **Centang** checklist sprint di spec.
+6. **Update dokumentasi** di `docs/` (lihat §11).
+7. **Centang** checklist sprint di spec.
 
 Jangan menumpuk banyak komponen sekaligus tanpa test di antaranya. Satu komponen → hijau → lanjut.
 
@@ -135,6 +136,7 @@ Jangan menumpuk banyak komponen sekaligus tanpa test di antaranya. Satu komponen
 - [ ] Komentar referensi audit jika relevan
 - [ ] Tidak ada hardcoded secret/domain/locale
 - [ ] Error path ditangani (tidak ada `except: pass` tanpa log)
+- [ ] Dokumentasi di `docs/` di-update jika ada perubahan publik (method, field, behavior)
 
 ---
 
@@ -230,6 +232,55 @@ Saat file ini dibawa ke repo baru, lakukan ini berurutan:
 8. [ ] Setelah tiap komponen: test hijau + ruff bersih sebelum lanjut.
 
 Jangan lompati langkah. Fondasi yang rapuh akan meruntuhkan semua di atasnya.
+
+---
+
+## 11. Aturan dokumentasi `docs/`
+
+Folder `docs/` berisi referensi teknis per folder modul. File ini **WAJIB di-update** setiap kali ada perubahan kode yang relevan. Dokumentasi yang stale lebih berbahaya dari tidak ada dokumentasi.
+
+### File yang ada
+
+| File | Folder yang didokumentasikan |
+|---|---|
+| `docs/infra.md` | `infra/` |
+| `docs/core.md` | `core/` |
+| `docs/memory.md` | `memory/` |
+| `docs/roles.md` | `roles/` |
+| `docs/security.md` | `security/` |
+| `docs/tools.md` | `tools/` |
+| `docs/web.md` | `web/` |
+| `docs/database.md` | `migrations/001_initial.sql` + schema |
+| `docs/tests.md` | `tests/` |
+| `docs/README.md` | Indeks navigasi |
+
+### Kapan harus update
+
+| Perubahan kode | Yang harus di-update |
+|---|---|
+| Method baru / signature berubah | Section method di file docs folder terkait |
+| Field baru di dataclass/config | Tabel field di docs folder terkait |
+| Tabel DB baru / kolom baru | `docs/database.md` |
+| Tool baru | `docs/tools.md` + tabel permission matrix |
+| Role baru atau soul.toml berubah | `docs/roles.md` |
+| Endpoint baru di `web/main.py` | `docs/web.md` |
+| Test baru | `docs/tests.md` (tambah baris di tabel file test terkait) |
+| File baru di folder manapun | Section baru di docs folder terkait + `docs/README.md` jika perlu |
+| Behavior berubah (bukan hanya signature) | Deskripsi method di docs yang relevan |
+
+### Yang TIDAK perlu di-update
+
+- Perubahan implementasi internal yang tidak mengubah interface publik (refactor, optimasi)
+- Perubahan komentar kode
+- Perubahan test yang hanya memperbaiki assertion (bukan test case baru)
+
+### Aturan penulisan docs
+
+- Tulis dalam **bahasa yang sama** dengan docs di file itu (saat ini campuran Indonesia/English — ikuti file yang ada)
+- Jangan duplikasi logika kode — jelaskan **apa yang dilakukan dan kapan memanggilnya**, bukan implementasinya
+- Untuk method async: tandai dengan `*(async)*` di judul
+- Untuk method private: tandai dengan `*(private)*`
+- Update `docs/README.md` hanya jika ada file atau folder baru yang perlu masuk indeks
 
 ---
 
