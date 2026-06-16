@@ -1,9 +1,13 @@
 <div align="center">
-  <img src="assets/OpenClawn.jpeg" alt="OpenCLAWN Logo" width="420" />
+  <img src="assets/OpenClawn.png" alt="OpenCLAWN Logo" width="420" />
 
   <h1>OpenCLAWN</h1>
-  <p><strong>Playfully Powerful AI Assistance</strong></p>
+  <p><strong>Playful by Design. Powerful by Nature.</strong></p>
   <p>Lightweight, safe, self-improving multi-role agent framework</p>
+
+  <p>
+    <strong>Route Smarter</strong> · <strong>Learn Continuously</strong> · <strong>Stay Safe</strong> · <strong>Hand Off Cleanly</strong>
+  </p>
 
   <p>
     <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python 3.12+">
