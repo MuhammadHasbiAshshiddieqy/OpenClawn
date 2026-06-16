@@ -1724,10 +1724,11 @@ Prinsip: DB in-memory (`:memory:`), mock semua LLM call, satu file test per inov
 - [x] Docker per role + Vault + Shield (NFKD)
 
 ### Sprint 4 — Hardening (ongoing)
-- [ ] Test coverage 4 inovasi + fallback
-- [ ] Tuning router dari data audit nyata
-- [ ] Pertimbangkan embedding routing **jika data audit membuktikan keyword tidak cukup**
-- [ ] Extract 4 inovasi jadi modul standalone
+- [x] Test coverage 4 inovasi + fallback
+- [x] Tooling tuning: `RoutingCalibrator` (saran threshold dari audit, di /metrics)
+- [ ] Tuning router dari data audit nyata — **BLOCKED: butuh traffic nyata** (advisor siap pakai)
+- [ ] Pertimbangkan embedding routing — **BLOCKED: hanya jika data buktikan keyword tak cukup (§1.6, §8)**
+- [ ] Extract 4 inovasi jadi modul standalone — backlog (refactor struktural)
 
 ---
 

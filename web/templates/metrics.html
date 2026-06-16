@@ -37,6 +37,32 @@
                 {% endif %}
             </tbody>
         </table>
+
+        <section class="recommendations">
+            <h2>Tuning Recommendations</h2>
+            {% if not calibration.has_enough_data %}
+            <p class="muted">
+                Not enough audit data yet ({{ calibration.total_events }} events).
+                Recommendations appear once enough routing decisions are collected.
+            </p>
+            {% elif not calibration.recommendations %}
+            <p class="muted">Routing looks well-calibrated — no changes suggested.</p>
+            {% else %}
+            <ul>
+                {% for rec in calibration.recommendations %}
+                <li class="rec rec-{{ rec.issue }}">
+                    <strong>{{ rec.label }}</strong>
+                    <span class="tag">{{ rec.issue }}</span>
+                    <span class="muted">({{ rec.correction_rate }}% over {{ rec.sample_size }} events)</span>
+                    <p>{{ rec.suggestion }}</p>
+                </li>
+                {% endfor %}
+            </ul>
+            <p class="muted">
+                These are suggestions only — router thresholds are not changed automatically.
+            </p>
+            {% endif %}
+        </section>
     </div>
 </body>
 </html>

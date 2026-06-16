@@ -8,6 +8,7 @@ from fastapi.templating import Jinja2Templates
 
 from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
+from core.calibration import RoutingCalibrator
 from infra.config import CONFIG
 from infra.database import DatabaseManager
 from infra.logging import setup_logging
@@ -35,9 +36,9 @@ templates = Jinja2Templates(directory="web/templates")
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, role: str = "pm"):
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "role": role,
             "available_roles": ["pm", "qa", "dev"],
             "session_id": str(uuid.uuid4()),
@@ -93,4 +94,10 @@ async def approve(request: Request):
 @app.get("/metrics", response_class=HTMLResponse)
 async def metrics(request: Request):
     report = await RoutingAuditor(db).calibration_report()
-    return templates.TemplateResponse("metrics.html", {"request": request, "report": report})
+    # Sprint 4: tampilkan rekomendasi tuning (saran saja, tidak auto-apply ke router)
+    calibration = RoutingCalibrator().summary(report)
+    return templates.TemplateResponse(
+        request,
+        "metrics.html",
+        {"report": report, "calibration": calibration},
+    )
