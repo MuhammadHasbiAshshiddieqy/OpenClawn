@@ -4,54 +4,390 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenCLAWN</title>
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
-    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <!-- Render markdown jawaban agent → HTML, lalu sanitasi (cegah XSS). -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>OpenCLAWN</h1>
-            <nav>
-                {% for r in available_roles %}
-                <a href="/?role={{ r }}" class="{{ 'active' if r == role else '' }}">{{ r.upper() }}</a>
-                {% endfor %}
-                <a href="/metrics">Metrics</a>
-                <a href="/settings">Settings</a>
-            </nav>
-        </header>
-
-        <div id="chat-box" class="chat-box"></div>
-
-        <form
-            hx-post="/chat/stream"
-            hx-target="#chat-box"
-            hx-swap="beforeend"
-            hx-ext="sse"
-            hx-trigger="submit"
-        >
-            <input type="hidden" name="role" value="{{ role }}">
-            <input type="hidden" name="session_id" value="{{ session_id }}">
-            <div class="input-row">
-                <textarea name="message" placeholder="Type your message..." rows="3" autofocus></textarea>
-                <button type="submit">Send</button>
+<div class="app">
+    {% set roles_meta = {'pm': ['Product', 'breakdown & prioritas'], 'qa': ['Quality', 'review & test'], 'dev': ['Developer', 'implement & fix']} %}
+    <aside class="sidebar">
+        <div class="brand">
+            <img src="/static/logo.png" alt="OpenCLAWN">
+            <div>
+                <div class="name">Open<b>CLAWN</b></div>
+                <div class="tag">playful · sharp</div>
             </div>
-        </form>
-    </div>
+        </div>
 
-    <script>
-        // SSE streaming via HTMX
-        document.body.addEventListener('htmx:sseMessage', function(evt) {
-            const chatBox = document.getElementById('chat-box');
-            chatBox.scrollTop = chatBox.scrollHeight;
-        });
+        <div>
+            <div class="side-label">Roles</div>
+            <div class="roles">
+                {% for r in available_roles %}
+                <a href="/?role={{ r }}" class="role-link {{ 'active' if r == role else '' }}">
+                    <span class="dot"></span>
+                    <span class="meta">
+                        {{ r.upper() }}
+                        <small>{{ roles_meta.get(r, ['agent', ''])[1] }}</small>
+                    </span>
+                </a>
+                {% endfor %}
+            </div>
+        </div>
 
-        // Submit on Ctrl+Enter
-        document.querySelector('textarea').addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && e.ctrlKey) {
-                e.preventDefault();
-                this.closest('form').requestSubmit();
+        <div>
+            <div class="side-label">Workspace</div>
+            <nav class="nav-links">
+                <a href="/" class="nav-link active"><span class="ico">💬</span> Chat</a>
+                <a href="/metrics" class="nav-link"><span class="ico">📊</span> Metrics</a>
+                <a href="/settings" class="nav-link"><span class="ico">⚙️</span> Settings</a>
+            </nav>
+        </div>
+
+        <div class="spacer"></div>
+
+        <div class="model-card">
+            <div class="label">Model</div>
+            <div class="row">
+                <span class="pulse"></span>
+                <span class="val">{{ active_model or 'Auto (router)' }}</span>
+            </div>
+        </div>
+    </aside>
+
+    <main class="main">
+        <div class="topbar">
+            <div>
+                <h1>{{ roles_meta.get(role, ['Agent',''])[0] }} Agent</h1>
+                <div class="sub">{{ roles_meta.get(role, ['',''])[1] }}</div>
+            </div>
+            <span class="role-pill">{{ role.upper() }}</span>
+        </div>
+
+        <div class="chat-scroll">
+            <div id="chat-box" class="chat-box">
+                <div id="empty" class="empty">
+                    <img src="/static/logo.png" alt="">
+                    <h2>Halo, saya <span class="accent">CLAWN</span> 🤹</h2>
+                    <p>Agent AI yang lincah sekaligus tajam — punya 18 tool untuk menjelajah kode, mencari di web, dan mengeksekusi tugas dengan aman.</p>
+                    <div class="suggest">
+                        <button data-q="Apa isi folder ini? Gunakan list_dir lalu jelaskan strukturnya.">📂 Jelajahi folder</button>
+                        <button data-q="Cari semua fungsi async di codebase dengan grep.">🔎 Cari di kode</button>
+                        <button data-q="Ringkas apa itu OpenCLAWN dalam 3 poin.">✨ Perkenalan</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="status-line" class="status-line" hidden></div>
+
+        <div class="composer-wrap">
+            <div class="mode-bar">
+                <label class="mode-pick">
+                    <span>Mode</span>
+                    <select id="mode">
+                        <option value="single">💬 Single — 1 agent</option>
+                        <option value="pipeline">🔗 Pipeline — PM→Dev→QA</option>
+                        <option value="debate">⚔️ Debate — diskusi N ronde</option>
+                        <option value="orchestrator">🎯 Orchestrator — lead delegasi</option>
+                    </select>
+                </label>
+                <span id="convo-hint" class="convo-hint" hidden>Agent akan saling mengobrol otomatis</span>
+            </div>
+            <form id="chat-form" class="composer">
+                <input type="hidden" name="role" value="{{ role }}">
+                <input type="hidden" name="session_id" value="{{ session_id }}">
+                <textarea name="message" placeholder="Tanya apa saja ke CLAWN…" rows="1" autofocus></textarea>
+                <button type="submit" class="send-btn" title="Kirim (Enter)">➤</button>
+                <button type="button" id="stop-btn" class="stop-btn" title="Hentikan" hidden>■</button>
+            </form>
+            <div class="composer-hint">Enter untuk kirim · Shift+Enter baris baru</div>
+        </div>
+    </main>
+</div>
+
+<script>
+    const form = document.getElementById('chat-form');
+    const chatBox = document.getElementById('chat-box');
+    const statusLine = document.getElementById('status-line');
+    const textarea = form.querySelector('textarea');
+    const sendBtn = form.querySelector('button[type="submit"]');
+    const emptyState = document.getElementById('empty');
+
+    // Bila tidak ada frame apa pun (token/status) dalam jendela ini, anggap
+    // server tidak merespons — beri tahu user, jangan biarkan diam menggantung.
+    const STALL_MS = 20000;
+
+    function escapeHtml(s) {
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+    }
+
+    // Render markdown mentah → HTML aman (marked + DOMPurify). Fallback ke
+    // escape biasa bila lib gagal load, agar tetap aman dari XSS.
+    marked.setOptions({ breaks: true, gfm: true });
+    function renderMarkdown(raw) {
+        try {
+            return DOMPurify.sanitize(marked.parse(raw));
+        } catch (_) {
+            return escapeHtml(raw);
+        }
+    }
+
+    // Label status manusiawi dari event backend.
+    function statusLabel(text, detail) {
+        switch (text) {
+            case 'routing':      return '🧭 Memilih model… (' + detail + ')';
+            case 'thinking':     return '💭 Berpikir…';
+            case 'tool':         return '🔧 ' + detail;
+            case 'fallback':     return '↩️ Fallback ke ' + detail;
+            case 'loop_stopped': return '⛔ Loop dihentikan: ' + detail + ' dipanggil berulang';
+            default:             return '⏳ ' + (detail ? text + ' ' + detail : text);
+        }
+    }
+
+    function showStatus(html, kind) {
+        statusLine.className = 'status-line' + (kind ? ' ' + kind : '');
+        statusLine.innerHTML = html;
+        statusLine.hidden = false;
+    }
+    function hideStatus() {
+        statusLine.hidden = true;
+        statusLine.innerHTML = '';
+    }
+
+    // Action persisten: tertinggal di kolom chat sebagai jejak histori
+    // (routing/tool/fallback/error). Disisipkan SEBELUM bubble jawaban
+    // agar urutan terbaca: user → action → action → jawaban.
+    function appendAction(html, kind, beforeEl) {
+        const el = document.createElement('div');
+        el.className = 'action' + (kind ? ' ' + kind : '');
+        el.innerHTML = html;
+        chatBox.insertBefore(el, beforeEl);
+        return el;
+    }
+
+    // Auto-grow textarea sesuai isi.
+    function autoGrow() {
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 180) + 'px';
+    }
+    textarea.addEventListener('input', autoGrow);
+
+    const modeSelect = document.getElementById('mode');
+    const stopBtn = document.getElementById('stop-btn');
+    const convoHint = document.getElementById('convo-hint');
+    let activeConvo = null;   // AbortController saat conversation berjalan (untuk STOP + interject)
+
+    modeSelect.addEventListener('change', function() {
+        convoHint.hidden = (modeSelect.value === 'single');
+    });
+
+    function userBubble(message) {
+        const el = document.createElement('div');
+        el.className = 'msg user';
+        el.innerHTML = escapeHtml(message);
+        chatBox.appendChild(el);
+    }
+    function newAssistantBubble(role) {
+        const el = document.createElement('div');
+        el.className = 'msg assistant md' + (role ? ' role-' + role : '');
+        if (role) {
+            const label = document.createElement('div');
+            label.className = 'msg-role';
+            label.textContent = role.toUpperCase();
+            chatBox.appendChild(label);
+        }
+        chatBox.appendChild(el);
+        return el;
+    }
+
+    // Tangani satu status event → status-line efemeral atau action chip persisten.
+    function handleStatus(s, beforeEl) {
+        if (s.text === 'thinking') {
+            showStatus(statusLabel(s.text, s.detail));
+        } else {
+            const kind = s.text === 'fallback' ? 'fallback'
+                       : s.text === 'loop_stopped' ? 'error' : '';
+            appendAction(statusLabel(s.text, s.detail), kind, beforeEl);
+        }
+    }
+
+    // ── Mode SINGLE: 1 agent (endpoint /chat/stream) ──────────────────────────
+    async function runSingle(message) {
+        userBubble(message);
+        showStatus('💭 Mengirim…');
+        const body = new URLSearchParams({ message, role: form.role.value, session_id: form.session_id.value });
+
+        const assistantEl = newAssistantBubble('');
+        let raw = '';
+        let watchdog;
+        const arm = () => { clearTimeout(watchdog); watchdog = setTimeout(() => showStatus('⚠️ Server tidak merespons…', 'warn'), STALL_MS); };
+
+        try {
+            arm();
+            const resp = await fetch('/chat/stream', { method: 'POST', body });
+            if (!resp.ok || !resp.body) { showStatus('❌ Error HTTP ' + resp.status, 'error'); assistantEl.remove(); return; }
+            await readSSE(resp, (evType, data) => {
+                arm();
+                if (evType === 'token') {
+                    let piece = data; try { piece = JSON.parse(data); } catch (_) {}
+                    raw += piece; assistantEl.innerHTML = renderMarkdown(raw); showStatus('💬 Menulis jawaban…');
+                } else if (evType === 'status') {
+                    try { handleStatus(JSON.parse(data), assistantEl); } catch (_) {}
+                } else if (evType === 'error') {
+                    let txt = data; try { txt = JSON.parse(data).text; } catch (_) {}
+                    appendAction('❌ ' + escapeHtml(txt), 'error', assistantEl); showStatus('❌ ' + escapeHtml(txt), 'error');
+                }
+            });
+            clearTimeout(watchdog);
+            if (!assistantEl.innerHTML.trim()) {
+                assistantEl.remove();
+                if (statusLine.className.indexOf('error') === -1)
+                    appendAction('⚠️ Tidak ada jawaban (semua model gagal/kosong)', 'error', null);
             }
+            if (statusLine.className.indexOf('error') === -1) hideStatus();
+        } catch (err) {
+            clearTimeout(watchdog);
+            appendAction('❌ Koneksi terputus', 'error', assistantEl);
+            if (!assistantEl.innerHTML.trim()) assistantEl.remove();
+            hideStatus();
+        }
+    }
+
+    // ── Mode CONVERSATION: banyak agent (endpoint /converse/stream) ───────────
+    async function runConversation(message, pattern) {
+        userBubble(message);
+        showStatus('🤝 Memulai percakapan…');
+        const body = new URLSearchParams({ message, pattern, session_id: form.session_id.value });
+
+        const controller = new AbortController();
+        activeConvo = controller;
+        stopBtn.hidden = false;
+        sendBtn.hidden = true;
+
+        let currentEl = null, currentRaw = '';
+        try {
+            const resp = await fetch('/converse/stream', { method: 'POST', body, signal: controller.signal });
+            if (!resp.ok || !resp.body) { showStatus('❌ Error HTTP ' + resp.status, 'error'); return; }
+            await readSSE(resp, (evType, data) => {
+                let d = {}; try { d = JSON.parse(data); } catch (_) {}
+                if (evType === 'turn') {
+                    currentEl = newAssistantBubble(d.role); currentRaw = '';
+                    showStatus('💬 ' + (d.label || d.role) + ' sedang menjawab…');
+                } else if (evType === 'token') {
+                    if (!currentEl) currentEl = newAssistantBubble(d.role);
+                    currentRaw += (d.text || ''); currentEl.innerHTML = renderMarkdown(currentRaw);
+                } else if (evType === 'status') {
+                    handleStatus(d, currentEl);
+                } else if (evType === 'conversation_end') {
+                    const reasons = { stopped: '⛔ Percakapan dihentikan', max_turns: '⏹️ Batas giliran tercapai', strategy_done: '✅ Percakapan selesai' };
+                    appendAction(reasons[d.reason] || ('Selesai: ' + d.reason), d.reason === 'stopped' ? 'error' : '', null);
+                } else if (evType === 'error') {
+                    appendAction('❌ ' + escapeHtml(d.text || data), 'error', null);
+                }
+                chatBox.scrollTop = chatBox.scrollHeight;
+            });
+            hideStatus();
+        } catch (err) {
+            if (err.name === 'AbortError') {
+                appendAction('⛔ Percakapan dihentikan', 'error', null);
+            } else {
+                appendAction('❌ Koneksi terputus', 'error', null);
+            }
+            hideStatus();
+        } finally {
+            activeConvo = null;
+            stopBtn.hidden = true;
+            sendBtn.hidden = false;
+        }
+    }
+
+    // Parser SSE bersama: panggil onFrame(evType, data) per frame; berhenti di 'done'.
+    async function readSSE(resp, onFrame) {
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '', done = false;
+        while (!done) {
+            const chunk = await reader.read();
+            done = chunk.done;
+            buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !done });
+            let idx;
+            while ((idx = buffer.indexOf('\n\n')) !== -1) {
+                const frame = buffer.slice(0, idx);
+                buffer = buffer.slice(idx + 2);
+                let evType = 'message', data = '';
+                for (const line of frame.split('\n')) {
+                    if (line.startsWith('event: ')) evType = line.slice(7);
+                    else if (line.startsWith('data: ')) data = line.slice(6);
+                }
+                if (evType === 'done') { done = true; break; }
+                onFrame(evType, data);
+            }
+        }
+    }
+
+    async function sendMessage() {
+        const message = textarea.value.trim();
+        if (!message) return;
+        if (emptyState) emptyState.remove();
+        textarea.value = ''; autoGrow();
+
+        // INTERJECT: bila percakapan sedang aktif, sela alih-alih memulai baru.
+        if (activeConvo) {
+            userBubble(message);
+            const body = new URLSearchParams({ session_id: form.session_id.value, message });
+            fetch('/converse/interject', { method: 'POST', body }).catch(() => {});
+            showStatus('✋ Menyela — akan diperhitungkan giliran berikutnya…');
+            return;
+        }
+
+        const mode = modeSelect.value;
+        sendBtn.disabled = true;
+        chatBox.scrollTop = chatBox.scrollHeight;
+        try {
+            if (mode === 'single') await runSingle(message);
+            else await runConversation(message, mode);
+        } finally {
+            sendBtn.disabled = false;
+            textarea.focus();
+        }
+    }
+
+    // STOP: batalkan stream (memicu is_disconnected) + endpoint cadangan.
+    stopBtn.addEventListener('click', function() {
+        if (activeConvo) {
+            const body = new URLSearchParams({ session_id: form.session_id.value });
+            fetch('/converse/stop', { method: 'POST', body }).catch(() => {});
+            activeConvo.abort();
+        }
+    });
+
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        sendMessage();
+    });
+
+    // Enter mengirim; Shift+Enter untuk baris baru.
+    textarea.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    // Klik chip saran → isi composer & kirim.
+    document.querySelectorAll('.suggest button').forEach(function(b) {
+        b.addEventListener('click', function() {
+            textarea.value = b.dataset.q;
+            autoGrow();
+            sendMessage();
         });
-    </script>
+    });
+</script>
 </body>
 </html>

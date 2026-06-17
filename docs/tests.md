@@ -96,6 +96,26 @@ Test untuk `roles/contracts.py` dan `roles/registry.py` (Inovasi 4).
 
 ---
 
+### `tests/test_conversation.py`
+
+Test untuk `core/conversation.py` (multi-agent conversation). Seam = fake `agent_factory` yang `run()`-nya yield `AgentEvent` skrip.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_pipeline_strategy_orders_roles` | Pipeline jalan urut pm→dev→qa lalu `strategy_done` |
+| `test_turn_boundary_events_emitted` | Satu event `type="turn"` per giliran, role+index benar |
+| `test_debate_strategy_round_robin` | Debate `rounds=2` → urutan round-robin penuh |
+| `test_orchestrator_dynamic_delegation` | Lead delegasi via JSON → worker dipanggil → lead `done` |
+| `test_orchestrator_fallback_when_unparseable` | Directive tak terbaca → fallback lead→workers |
+| `test_max_conversation_turns_respected` | Kena cap → `conversation_end` reason `max_turns` |
+| `test_stop_halts_between_turns` | STOP antar-giliran → giliran berikutnya tak jalan, reason `stopped` |
+| `test_interject_consumed_in_next_turn` | Interjection muncul di prompt giliran berikutnya |
+| `test_pipeline_contract_valid` | Output JSON valid → `validation_ok=1` di `role_handoffs` |
+| `test_pipeline_contract_degrades_on_garbage` | Output sampah → `validation_ok=0` TAPI pipeline lanjut |
+| `test_control_interjection_queue` | Antrian interjection FIFO, kosong diabaikan |
+
+---
+
 ### `tests/test_audit.py`
 
 Test untuk `core/audit.py`.
@@ -163,6 +183,7 @@ Test untuk `tools/`.
 
 | Test | Yang Diverifikasi |
 |---|---|
+| `test_registry_has_all_7_tools` | Semua 7 tool (5 asli + `shell_run` + `list_dir`) terdaftar di registry |
 | `test_file_read_returns_content` | `FileReadTool` baca file yang ada |
 | `test_file_read_not_found` | File tidak ada → error dict (tidak crash) |
 | `test_file_write_creates_file` | `FileWriteTool` tulis konten |

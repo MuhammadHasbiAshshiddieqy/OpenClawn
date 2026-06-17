@@ -133,7 +133,7 @@ def test_qa_prefer_local_false_allows_upgrade(qa_router):
     """prefer_local=false: query menengah bisa naik ke Claude."""
     route = qa_router.decide(messages=[], query="analisis keamanan autentikasi OAuth")
     # qa punya upgrade_keywords=["security"] — "keamanan" tidak match tapi query cukup kompleks
-    assert route.provider in ("ollama", "anthropic")  # tidak crash
+    assert route.provider in ("ollama", "gemini", "anthropic")  # tidak crash
 
 
 def test_cost_per_1k_matches_model():
@@ -152,5 +152,5 @@ def test_complexity_enum_maps_all_levels():
     for level in Complexity:
         model, provider, cost = router.MODELS[level]
         assert model  # tidak boleh kosong
-        assert provider in ("ollama", "anthropic")
+        assert provider in ("ollama", "gemini", "anthropic")
         assert cost >= 0.0

@@ -9,7 +9,7 @@ class CodeRunTool(Tool):
     def __init__(self):
         self.sandbox = DockerSandbox()
 
-    async def execute(self, input_data: dict, vault) -> dict:
+    async def execute(self, input_data: dict, vault, db=None) -> dict:
         code = input_data.get("code", "")
         if not code:
             return {"error": "Tidak ada kode untuk dijalankan"}

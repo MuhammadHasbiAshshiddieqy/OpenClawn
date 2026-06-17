@@ -52,18 +52,64 @@ Form data:
 
 Response: `StreamingResponse` dengan `media_type="text/event-stream"`.
 
-Format SSE:
+**Protokol SSE bernama** (named events) — frontend membedakan isi jawaban dari sinyal proses agar user tahu agent sedang apa, bukan diam karena macet:
+
 ```
-data: <div class='msg assistant'>    ← header pembuka
-data: token1                          ← tiap token teks
-data: token2
-data: </div>                          ← penutup
-data: [DONE]                          ← sinyal selesai
+event: status                          ← sinyal proses (tidak ditampilkan sbg jawaban)
+data: {"text":"routing","detail":"gemini:gemini-2.0-flash"}
+
+event: status
+data: {"text":"thinking","detail":""}
+
+event: token                           ← potongan isi jawaban
+data: token1
+
+event: error                           ← hanya jika exception (mis. semua provider gagal)
+data: {"text":"Semua provider gagal..."}
+
+event: done                            ← selalu dikirim terakhir (finally), penanda selesai
+data: [DONE]
 ```
 
-Karakter HTML di-escape (`&`, `<`) dan newline dikonversi ke `<br>` sebelum dikirim.
+Label status: `routing` (model dipilih), `thinking` (LLM mulai), `tool` (`detail`=nama tool), `fallback` (`detail`=model). Payload `status`/`error` berupa JSON; `token` adalah teks yang sudah di-escape (`&`, `<`) dengan newline → `<br>`.
+
+`event: done` selalu di-emit di blok `finally`, dan exception apa pun dari `agent.run()` ditangkap → `event: error` + di-log (`chat_stream_failed`). Jadi stream tidak pernah berakhir diam-diam tanpa penanda.
+
+Frontend ([web/templates/index.html](../web/templates/index.html)) memisahkan dua jenis umpan balik:
+
+- **Action chips (persisten)** — disisipkan ke dalam kolom chat, sebelum bubble jawaban, sehingga **tertinggal sebagai jejak histori**. Untuk action bermakna: `routing`, `tool`, `fallback`, dan `error`. Urutan terbaca: user → action → action → jawaban.
+- **Status line (efemeral)** — di atas input box, hanya untuk sinyal sementara `thinking` ("Berpikir…") dan "Menulis jawaban…". Hilang saat turn selesai (`done`).
+
+Plus **watchdog** 20 detik: bila tak ada frame masuk dalam jendela itu → status "⚠️ Server tidak merespons". Bila stream selesai tanpa token & tanpa error → chip persisten "⚠️ Tidak ada jawaban (semua model gagal/kosong)".
 
 `AgentLoop` dibuat baru per request, tapi menerima singleton `approval_gate` agar HITL bisa berfungsi.
+
+---
+
+#### `POST /converse/stream`
+
+**Multi-agent conversation** — beberapa role saling mengobrol, di-stream per giliran.
+
+Form data: `message`, `pattern` (`pipeline`|`debate`|`orchestrator`), `participants` (CSV opsional), `rounds` (debate), `session_id`.
+
+Membangun `TurnStrategy` via `make_strategy`, `ConversationControl(disconnect_check=request.is_disconnected)`, mendaftarkannya di `_conversations[session_id]` (registry modul-level, pola sama `ApprovalGate._pending`), lalu stream SSE. `finally`: deregister.
+
+Frame SSE (tambahan dari `/chat/stream`):
+```
+event: turn               data: {"role":"pm","label":"PM","turn":0}     ← mulai giliran (UI buka bubble berlabel)
+event: token              data: {"role":"pm","text":"..."}              ← token (objek, beda dari /chat/stream)
+event: status             data: {"role":"pm","text":"thinking","detail":""}
+event: conversation_end   data: {"reason":"strategy_done|max_turns|stopped"}
+event: done               data: [DONE]
+```
+
+#### `POST /converse/interject`
+
+User menyela percakapan aktif. Form: `session_id`, `message` → `control.add_interjection(message)`. Disuntik ke giliran berikutnya. Return `{ok}`.
+
+#### `POST /converse/stop`
+
+Hentikan percakapan (cadangan; STOP utama lewat `AbortController.abort()` di frontend yang memicu `is_disconnected`). Form: `session_id` → `control.stop()`. Return `{ok}`.
 
 ---
 

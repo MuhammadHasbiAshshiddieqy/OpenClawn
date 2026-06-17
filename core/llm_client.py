@@ -1,11 +1,77 @@
 import httpx
 import json
+import re
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from infra.config import AppConfig
 from infra.logging import log
+
+
+# ── Plain-text tool call parsers ───────────────────────────────────────────────
+# Banyak model GGUF lokal mengeluarkan tool call sebagai token teks biasa,
+# bukan sebagai message.tool_calls terstruktur di JSON response Ollama.
+# Regex di bawah menangkap tiap format dari keluarga model yang berbeda.
+
+# Gemma 4: <|tool_call>call:NAME{args}<tool_call|>
+_RE_GEMMA_TC = re.compile(
+    r"<\|tool_call>\s*call:\s*(\w+)\s*(\{.*?\})\s*<tool_call\|>", re.DOTALL
+)
+
+# Qwen 2.5 / 3: <tool_call>\n{"name": "NAME", "arguments": {...}}\n</tool_call>
+_RE_QWEN_TC = re.compile(
+    r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL
+)
+
+# Llama 3.1 / 3.2: <|python_tag|>{"name": "NAME", "parameters": {...}}
+# Greedy sampai akhir string — tool call selalu di ujung respons Llama3.
+_RE_LLAMA3_TC = re.compile(
+    r"<\|python_tag\|>\s*(\{.*\})\s*$", re.DOTALL
+)
+
+# Mistral / Mixtral: [TOOL_CALLS] [{"name": "NAME", "arguments": {...}}, ...]
+_RE_MISTRAL_TC = re.compile(
+    r"\[TOOL_CALLS\]\s*(\[.*?\])", re.DOTALL
+)
+
+# DeepSeek: <｜tool▁calls▁begin｜>...<｜tool▁call▁begin｜>{...}<｜tool▁call▁end｜>
+_RE_DEEPSEEK_TC = re.compile(
+    r"<｜tool▁call▁begin｜>\s*(\{.*?\}|.+?)\s*<｜tool▁call▁end｜>", re.DOTALL
+)
+
+# Functionary v3: <|from|>assistant\n<|recipient|>NAME\n<|content|>{args}\n<|stop|>
+_RE_FUNCTIONARY_TC = re.compile(
+    r"<\|from\|>assistant\n<\|recipient\|>(\w+)\n<\|content\|>(.*?)<\|stop\|>", re.DOTALL
+)
+
+# Generic <tool_code>NAME</tool_code> atau <tool_code>NAME\n{args}</tool_code>
+_RE_TOOL_CODE_TC = re.compile(
+    r"<tool_code>\s*(\w+)\s*(\{.*?\})?\s*</tool_code>", re.DOTALL
+)
+
+# Pola untuk mendeteksi SEMUA prefix tool call (untuk strip dari output teks)
+_RE_TOOL_STRIP = re.compile(
+    r"(<\|tool_call>.*?(?:<tool_call\|>|$))"          # Gemma
+    r"|(<tool_call>.*?(?:</tool_call>|$))"             # Qwen
+    r"|(<\|python_tag\|>.*?(?:\n|$))"                  # Llama3
+    r"|(\[TOOL_CALLS\].*?(?:\]|$))"                    # Mistral
+    r"|(<｜tool▁call▁begin｜>.*?(?:<｜tool▁call▁end｜>|$))"  # DeepSeek
+    r"|(<\|from\|>assistant.*?(?:<\|stop\|>|$))"       # Functionary
+    r"|(<tool_code>.*?(?:</tool_code>|$))",            # Generic
+    re.DOTALL,
+)
+
+# Daftar parser: (regex, parser_name, has_named_groups)
+_PLAINTEXT_PARSERS: list[tuple[re.Pattern, str]] = [
+    (_RE_GEMMA_TC, "gemma"),
+    (_RE_QWEN_TC, "qwen"),
+    (_RE_LLAMA3_TC, "llama3"),
+    (_RE_MISTRAL_TC, "mistral"),
+    (_RE_DEEPSEEK_TC, "deepseek"),
+    (_RE_FUNCTIONARY_TC, "functionary"),
+    (_RE_TOOL_CODE_TC, "tool_code"),
+]
 
 
 @dataclass
@@ -29,6 +95,91 @@ class LLMClient:
     def __init__(self, vault, config: AppConfig):
         self.vault = vault
         self.config = config
+
+    @staticmethod
+    def parse_plaintext_tool_calls(text: str) -> tuple[str, list[dict]]:
+        """Parse tool call dari plain text token yang disisipkan model lokal.
+
+        Banyak model GGUF (Gemma, Qwen, Llama, Mistral, DeepSeek) mengeluarkan
+        tool call sebagai token teks di stream content, bukan sebagai field
+        terstruktur di JSON response.
+
+        Return: (cleaned_text, list_of_tool_calls)
+          - cleaned_text: teks asli tanpa token tool call
+          - tool_calls: [{"name": "...", "input": {...}}, ...]
+        """
+        cleaned = text
+        tool_calls: list[dict] = []
+
+        for pattern, family in _PLAINTEXT_PARSERS:
+            for match in pattern.finditer(text):
+                try:
+                    name, args = LLMClient._extract_tool_call(match, family)
+                    if name:
+                        tool_calls.append({"name": name, "input": args})
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    log.debug("plaintext_tool_parse_failed", family=family)
+                    continue
+
+        # Strip SEMUA tool call token dari teks output
+        if tool_calls:
+            cleaned = _RE_TOOL_STRIP.sub("", text).strip()
+
+        return cleaned, tool_calls
+
+    @staticmethod
+    def _extract_tool_call(match: re.Match, family: str) -> tuple[str | None, dict]:
+        """Ekstrak nama tool + arguments dari regex match berdasarkan family."""
+        args: dict = {}
+
+        if family == "gemma":
+            name = match.group(1)
+            raw_args = match.group(2)
+            args = json.loads(raw_args)
+        elif family == "qwen":
+            data = json.loads(match.group(1))
+            name = data.get("name", "")
+            args = data.get("arguments", {})
+        elif family == "llama3":
+            data = json.loads(match.group(1))
+            name = data.get("name", "")
+            args = data.get("parameters", data.get("arguments", {}))
+        elif family == "mistral":
+            tools = json.loads(match.group(1))
+            if tools and isinstance(tools, list):
+                first = tools[0]
+                name = first.get("name", "")
+                args = first.get("arguments", {})
+            else:
+                name = None
+        elif family == "deepseek":
+            raw = match.group(1).strip()
+            try:
+                data = json.loads(raw)
+                name = data.get("name", "")
+                args = data.get("arguments", {})
+            except json.JSONDecodeError:
+                # DeepSeek kadang mengeluarkan nama tool tanpa JSON
+                name = raw
+        elif family == "functionary":
+            name = match.group(1)
+            raw_args = match.group(2).strip()
+            try:
+                args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                args = {"raw": raw_args}
+        elif family == "tool_code":
+            name = match.group(1)
+            raw_args = match.group(2)
+            if raw_args:
+                try:
+                    args = json.loads(raw_args)
+                except json.JSONDecodeError:
+                    args = {"raw": raw_args.strip()}
+        else:
+            name = None
+
+        return name, args
 
     async def stream_with_fallback(
         self,
@@ -119,27 +270,55 @@ class LLMClient:
                 "POST", f"{self.config.ollama_base}/api/chat", json=payload
             ) as resp:
                 resp.raise_for_status()
+                # Buffer teks dari stream — model lokal (GGUF) sering mengeluarkan
+                # tool call sebagai plain text token di content, bukan di field
+                # message.tool_calls. Kita kumpulkan dulu, lalu parse di akhir.
+                text_buf: list[str] = []
+                native_tool_calls: list[dict] = []
+                usage_data: dict = {}
+
                 async for line in resp.aiter_lines():
                     if not line.strip():
                         continue
                     data = json.loads(line)
                     msg = data.get("message", {})
                     if msg.get("content"):
-                        yield LLMChunk(type="text", text=msg["content"])
+                        text_buf.append(msg["content"])
                     for tc in msg.get("tool_calls", []):
+                        native_tool_calls.append({
+                            "name": tc["function"]["name"],
+                            "input": tc["function"]["arguments"],
+                        })
+                    if data.get("done") and data.get("prompt_eval_count"):
+                        usage_data = {
+                            "input_tokens": data.get("prompt_eval_count", 0),
+                            "output_tokens": data.get("eval_count", 0),
+                        }
+
+                # Post-processing: deteksi tool call plain-text di konten teks
+                raw_text = "".join(text_buf)
+                cleaned_text, parsed_calls = LLMClient.parse_plaintext_tool_calls(raw_text)
+
+                # Prioritas: native tool_calls (Ollama API) > parsed plaintext
+                all_calls = native_tool_calls + parsed_calls
+
+                if all_calls:
+                    # Ada tool call → yield teks bersih (tanpa token tool call)
+                    if cleaned_text:
+                        yield LLMChunk(type="text", text=cleaned_text)
+                    for tc in all_calls:
                         yield LLMChunk(
                             type="tool_call",
-                            tool_name=tc["function"]["name"],
-                            tool_input=tc["function"]["arguments"],
+                            tool_name=tc["name"],
+                            tool_input=tc.get("input", {}),
                         )
-                    if data.get("done") and data.get("prompt_eval_count"):
-                        yield LLMChunk(
-                            type="usage",
-                            usage={
-                                "input_tokens": data.get("prompt_eval_count", 0),
-                                "output_tokens": data.get("eval_count", 0),
-                            },
-                        )
+                else:
+                    # Tidak ada tool call → yield teks mentah apa adanya
+                    if raw_text:
+                        yield LLMChunk(type="text", text=raw_text)
+
+                if usage_data:
+                    yield LLMChunk(type="usage", usage=usage_data)
 
     async def _claude(
         self, model: str, messages: list, tools: list | None, max_tokens: int

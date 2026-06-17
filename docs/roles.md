@@ -69,8 +69,11 @@ Alur handoff lengkap:
 1. Lookup contract dari `CONTRACT_REGISTRY[to_role]`
 2. Instansiasi sub-agent via `agent_factory(to_role)`
 3. Prompt sub-agent dengan task + schema JSON contract
-4. Validasi output dengan `_validate()`
-5. Simpan ke tabel `role_handoffs` (selalu simpan, valid atau tidak — untuk debugging)
+4. Kumpulkan teks dari event `type=="token"` (sub-agent `run()` yield `AgentEvent`, bukan str)
+5. Validasi output dengan `parse_contract()`
+6. Simpan ke tabel `role_handoffs` (selalu simpan, valid atau tidak — untuk debugging)
+
+> **Helper modul-level `parse_contract(raw, contract_cls) → tuple[dict, bool]`** — parse JSON (toleran pembungkus ```json) → instance contract; gagal → `({"raw","error"}, False)`. Dipakai ulang oleh `RoleNegotiator` dan `ConversationOrchestrator` (`core/conversation.py`), yang juga menulis `role_handoffs` untuk pola Pipeline (degrade graceful: validasi gagal → teruskan teks mentah, percakapan tetap lanjut).
 
 Return:
 ```python
@@ -123,9 +126,9 @@ output_type = "PMOutput"
 
 | Role | `prefer_local` | Upgrade Keywords | Tool yang Diizinkan |
 |---|---|---|---|
-| **pm** | `true` | arsitektur, strategi, roadmap, OKR, architecture, strategy | file_read, file_write, web_fetch, ask_user |
-| **qa** | `false` | security, performance, race condition, injection, vulnerability | file_read, file_write, code_run, ask_user |
-| **dev** | `false` | arsitektur, refactor, migrate, database, deploy, architecture | file_read, file_write, code_run, web_fetch |
+| **pm** | `true` | arsitektur, strategi, roadmap, OKR, architecture, strategy | file_read, file_write, web_fetch, ask_user, shell_run, list_dir |
+| **qa** | `false` | security, performance, race condition, injection, vulnerability | file_read, file_write, code_run, ask_user, shell_run, list_dir |
+| **dev** | `false` | arsitektur, refactor, migrate, database, deploy, architecture | file_read, file_write, code_run, web_fetch, shell_run, list_dir |
 
 **`prefer_local = true`** pada PM artinya: PM lebih suka tetap di Ollama untuk query biasa, naik ke Claude hanya jika kata kunci upgrade cocok atau skor tinggi. QA dan Dev tidak prefer local — lebih agresif naik ke cloud jika perlu.
 

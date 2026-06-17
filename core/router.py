@@ -31,12 +31,15 @@ class SmartRouter:
     - prefer_local menaikkan threshold upgrade ke Claude (+1)
     """
 
+    # Setup utama LOKAL: tier ringan→sedang dilayani gemma4:e4b (satu-satunya gemma4
+    # yang ter-pull & terbukti tool-capable). Tier berat naik ke Gemini (cloud).
+    # Semua tier lokal disamakan dulu ke e4b — bisa di-spesialisasi nanti.
     MODELS: dict[Complexity, tuple[str, str, float]] = {
-        Complexity.TRIVIAL: ("gemma4:e2b", "ollama", 0.0),
+        Complexity.TRIVIAL: ("gemma4:e4b", "ollama", 0.0),
         Complexity.SIMPLE: ("gemma4:e4b", "ollama", 0.0),
-        Complexity.MODERATE: ("gemma4:12b", "ollama", 0.0),
-        Complexity.COMPLEX: ("claude-haiku-4-5-20251001", "anthropic", 0.001),
-        Complexity.CRITICAL: ("claude-sonnet-4-6", "anthropic", 0.003),
+        Complexity.MODERATE: ("gemma4:e4b", "ollama", 0.0),
+        Complexity.COMPLEX: ("gemini-2.5-flash", "gemini", 0.0),
+        Complexity.CRITICAL: ("gemini-2.5-pro", "gemini", 0.0),
     }
 
     BASE_TECH_KW = [

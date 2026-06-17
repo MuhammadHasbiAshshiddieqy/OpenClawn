@@ -12,14 +12,17 @@ from infra.database import DatabaseManager
 # Pilihan model yang diketahui, untuk dropdown /settings.
 # Bukan pembatas keras — hanya saran tampilan. (provider, model, label).
 KNOWN_MODELS: list[tuple[str, str, str]] = [
-    ("ollama", "gemma4:e2b", "Gemma4 e2b (lokal, ringan)"),
-    ("ollama", "gemma4:e4b", "Gemma4 e4b (lokal)"),
-    ("ollama", "gemma4:12b", "Gemma4 12b (lokal, berat)"),
-    ("anthropic", "claude-haiku-4-5-20251001", "Claude Haiku 4.5 (cloud)"),
-    ("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6 (cloud)"),
-    ("gemini", "gemini-2.0-flash", "Gemini 2.0 Flash (cloud)"),
+    # Lokal (Ollama) — setup utama. Daftar di atas = yang ter-pull di mesin ini.
+    ("ollama", "gemma4:e4b", "Gemma4 e4b (lokal, utama)"),
+    ("ollama", "deepseek-r1:latest", "DeepSeek-R1 (lokal, reasoning)"),
+    ("ollama", "neural-chat:latest", "Neural Chat (lokal, ringan)"),
+    ("ollama", "qwen2.5-coder:latest", "Qwen2.5 Coder (lokal, tool-capable)"),
+    # Cloud — hanya untuk tier berat / eksperimen.
     ("gemini", "gemini-2.5-flash", "Gemini 2.5 Flash (cloud)"),
     ("gemini", "gemini-2.5-pro", "Gemini 2.5 Pro (cloud)"),
+    ("gemini", "gemini-2.0-flash", "Gemini 2.0 Flash (cloud)"),
+    ("anthropic", "claude-haiku-4-5-20251001", "Claude Haiku 4.5 (cloud)"),
+    ("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6 (cloud)"),
 ]
 
 _KEY_PROVIDER = "model_override_provider"

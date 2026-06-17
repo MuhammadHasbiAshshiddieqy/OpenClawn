@@ -13,6 +13,7 @@ dependencies = [
     "structlog>=24.1",
     "tenacity>=8.2",
     "aiofiles>=23.2",
+    "pypdf>=4.0",
 ]
 
 [project.optional-dependencies]

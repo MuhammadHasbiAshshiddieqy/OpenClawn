@@ -29,6 +29,21 @@ class AgentConfig:
 
 
 @dataclass
+class AgentEvent:
+    """Event yang di-stream ke UI.
+
+    `type="token"` → potongan jawaban (content) yang harus ditampilkan.
+    `type="status"` → sinyal proses (routing/thinking/tool/approval/fallback)
+    agar user tahu agent sedang apa, bukan diam karena macet. `text` adalah
+    label singkat untuk status, `detail` opsional (mis. nama model/tool).
+    """
+
+    type: str
+    text: str = ""
+    detail: str = ""
+
+
+@dataclass
 class Turn:
     role: str
     content: str = ""
@@ -39,6 +54,26 @@ class Turn:
     cost_usd: float = 0.0
     latency_ms: int = 0
     fallback_used: bool = False
+
+
+def _format_tool_params(tool_name: str, params: dict) -> str:
+    """Buat label ringkas 'tool_name(param=value)' untuk action chip di UI."""
+    KEY_MAP = {
+        "list_dir": "path",
+        "file_read": "path",
+        "file_write": "path",
+        "shell_run": "command",
+        "web_fetch": "url",
+        "code_run": "code",
+        "ask_user": "question",
+    }
+    key = KEY_MAP.get(tool_name)
+    if key and key in params:
+        val = str(params[key])
+        if len(val) > 60:
+            val = "…" + val[-57:]
+        return f"{tool_name}({val})"
+    return tool_name
 
 
 class AgentLoop:
@@ -74,7 +109,7 @@ class AgentLoop:
         with open(f"roles/{self.cfg.role}/soul.toml", "rb") as f:
             return tomllib.load(f)
 
-    async def run(self, user_message: str) -> AsyncGenerator[str, None]:
+    async def run(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         start = time.monotonic()
 
         # 0. Shield: scan input (lapisan kosmetik, BUKAN pertahanan utama — lihat §17).
@@ -82,7 +117,7 @@ class AgentLoop:
         safe, reason = self.shield.scan_input(user_message)
         if not safe:
             log.warning("shield_blocked_input", session=self.cfg.session_id, reason=reason)
-            yield reason
+            yield AgentEvent(type="token", text=reason)
             return
 
         # 1. Deteksi koreksi user (audit feedback) [#1]
@@ -118,13 +153,15 @@ class AgentLoop:
         event_id = await self.auditor.log_decision(
             self.cfg.session_id, self.cfg.role, user_message, route
         )
+        # Status: beri tahu UI model/provider yang dipilih sebelum LLM dipanggil.
+        yield AgentEvent(type="status", text="routing", detail=f"{route.provider}:{route.model}")
 
         # 6. Iterative tool loop (audit #10: bukan rekursif)
         turn = Turn(role="assistant", model_used=route.model)
         tools_schema = self._tools_for_role()
 
-        async for chunk in self._run_tool_loop(messages, route, tools_schema, turn):
-            yield chunk
+        async for event in self._run_tool_loop(messages, route, tools_schema, turn):
+            yield event
 
         # 7. Finalize
         turn.latency_ms = int((time.monotonic() - start) * 1000)
@@ -151,17 +188,25 @@ class AgentLoop:
 
     async def _run_tool_loop(
         self, messages: list, route, tools_schema: list, turn: Turn
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[AgentEvent, None]:
         """Audit #10: iterative, bukan rekursif."""
         hop = 0
+        # Deteksi loop: track (tool_name, input_repr) dari panggilan sebelumnya.
+        # Jika model memanggil tool yang sama dengan input identik berturut-turut,
+        # injeksi peringatan ke context agar model tidak stuck looping.
+        last_call: tuple[str, str] | None = None
+        repeat_count = 0
+
         while hop <= self.config.max_tool_hops:
             pending_tool = None
+            # Status: LLM mulai memproses (mengisi gap antara request dan token pertama).
+            yield AgentEvent(type="status", text="thinking")
             async for chunk in self.llm.stream_with_fallback(
                 route.provider, route.model, messages, tools_schema
             ):
                 if chunk.type == "text":
                     turn.content += chunk.text
-                    yield chunk.text
+                    yield AgentEvent(type="token", text=chunk.text)
                 elif chunk.type == "tool_call":
                     pending_tool = chunk
                 elif chunk.type == "usage":
@@ -169,10 +214,38 @@ class AgentLoop:
                     turn.tokens_out = chunk.usage.get("output_tokens", 0)
                 elif chunk.type == "fallback" and chunk.fallback_used:
                     turn.fallback_used = True
+                    yield AgentEvent(type="status", text="fallback", detail=route.model)
 
             if not pending_tool:
                 break  # tidak ada tool call → selesai
 
+            # Deteksi panggilan identik berturut-turut (tool + input sama persis).
+            # Gemma lokal mengabaikan pesan peringatan di context, jadi hard-break
+            # langsung tanpa memberi kesempatan model lagi.
+            call_key = (pending_tool.tool_name, repr(sorted(pending_tool.tool_input.items())))
+            if call_key == last_call:
+                repeat_count += 1
+                if repeat_count >= 2:
+                    log.warning(
+                        "tool_loop_detected",
+                        tool=pending_tool.tool_name,
+                        repeat=repeat_count + 1,
+                        session=self.cfg.session_id,
+                    )
+                    yield AgentEvent(
+                        type="status",
+                        text="loop_stopped",
+                        detail=pending_tool.tool_name,
+                    )
+                    break  # hard stop — model mengabaikan pesan peringatan
+            else:
+                repeat_count = 0
+            last_call = call_key
+
+            # Status: tool akan dijalankan — tampilkan nama tool + parameter utamanya
+            # agar user bisa lihat path/command apa yang sedang dijelajahi.
+            param_preview = _format_tool_params(pending_tool.tool_name, pending_tool.tool_input)
+            yield AgentEvent(type="status", text="tool", detail=param_preview)
             result = await self._execute_tool(pending_tool.tool_name, pending_tool.tool_input)
             turn.tool_calls.append(
                 {"name": pending_tool.tool_name, "input": pending_tool.tool_input}
@@ -195,7 +268,7 @@ class AgentLoop:
             if not approved:
                 return {"error": f"Tool '{name}' ditolak oleh user"}
 
-        return await tool.execute(input_data, vault=self.vault)
+        return await tool.execute(input_data, vault=self.vault, db=self.db)
 
     def _tool_allowed(self, name: str) -> bool:
         return name in self._soul.get("tools", {}).get("allowed", [])

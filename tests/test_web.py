@@ -36,8 +36,8 @@ def test_metrics_renders_empty(client):
     resp = client.get("/metrics")
     assert resp.status_code == 200
     assert "Tuning Recommendations" in resp.text
-    # Belum ada event → blok 'not enough' atau tabel kosong
-    assert "Not enough audit data" in resp.text or "No data yet" in resp.text
+    # Belum ada event → blok 'data belum cukup' atau tabel kosong
+    assert "Data audit belum cukup" in resp.text or "Belum ada data" in resp.text
 
 
 def test_index_renders(client):

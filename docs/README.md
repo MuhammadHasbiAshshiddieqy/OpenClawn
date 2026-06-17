@@ -43,7 +43,9 @@ web/main.py          → web.md
 │   ├── FileReadTool / FileWriteTool → tools.md
 │   ├── WebFetchTool → tools.md
 │   ├── AskUserTool  → tools.md
-│   └── CodeRunTool + DockerSandbox → tools.md
+│   ├── CodeRunTool + DockerSandbox → tools.md
+│   ├── ShellRunTool → tools.md
+│   └── ListDirTool  → tools.md
 │
 └── RoleNegotiator   → roles.md (registry + contracts)
     ├── PMOutput

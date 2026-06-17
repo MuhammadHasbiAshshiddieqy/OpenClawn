@@ -7,7 +7,7 @@ class AskUserTool(Tool):
     name = "ask_user"
     requires_approval = False
 
-    async def execute(self, input_data: dict, vault) -> dict:
+    async def execute(self, input_data: dict, vault, db=None) -> dict:
         question = input_data.get("question", "")
         # Sprint 3: kirim event ke Web UI dan tunggu jawaban
         return {"answer": f"[stub] pertanyaan tertunda: {question}"}

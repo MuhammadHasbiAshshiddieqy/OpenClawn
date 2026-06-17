@@ -1,6 +1,11 @@
 from dataclasses import dataclass, field
 import os
 
+from infra.env import load_dotenv
+
+# Muat `.env` SEBELUM CONFIG dibaca dari os.environ (lihat infra/env.py).
+load_dotenv()
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -23,13 +28,26 @@ class AppConfig:
     # Memori jangka panjang: arsipkan sesi ke L4 setelah melewati ambang turn ini
     # (cukup bermakna untuk dicari lagi lintas sesi, tapi tidak tiap turn).
     archive_after_turns: int = 6
+    # Workspace root: semua tool file (read/write/edit/glob/grep/list_dir) dibatasi
+    # ke folder ini. Path di luar root ditolak (anti ../ & symlink escape). Keamanan #1.
+    workspace_root: str = "."
+    # Batas hasil tool agar tidak membanjiri context (token-first §1.4).
+    tool_max_output: int = 10_000
+    # Multi-agent conversation: batasi total giliran agar tidak loop tak berujung
+    # & token blowout (pola sama max_tool_hops). Ronde default untuk debate.
+    max_conversation_turns: int = 12
+    debate_default_rounds: int = 2
+    conversation_default_participants: tuple = field(default_factory=lambda: ("pm", "dev", "qa"))
     # fallback chain: urutan model jika provider utama gagal
+    # Fallback chain LOKAL-dulu: model lokal yang BENAR-BENAR ter-pull, lalu Gemini
+    # (cloud) sebagai pengaman terakhir. gemma4:e4b utama; deepseek-r1 & neural-chat
+    # cadangan lokal bila e4b gagal load (mis. kehabisan RAM).
     fallback_chain: tuple = field(
         default_factory=lambda: (
-            ("ollama", "gemma4:12b"),
             ("ollama", "gemma4:e4b"),
-            ("ollama", "gemma4:e2b"),
-            ("anthropic", "claude-haiku-4-5-20251001"),
+            ("ollama", "deepseek-r1:latest"),
+            ("ollama", "neural-chat:latest"),
+            ("gemini", "gemini-2.5-flash"),
         )
     )
 
@@ -40,6 +58,7 @@ class AppConfig:
             ollama_base=os.environ.get("OLLAMA_BASE", "http://localhost:11434"),
             anthropic_base=os.environ.get("ANTHROPIC_BASE", "https://api.anthropic.com"),
             gemini_base=os.environ.get("GEMINI_BASE", "https://generativelanguage.googleapis.com"),
+            workspace_root=os.environ.get("OPENCLAWN_WORKSPACE", "."),
         )
 
 

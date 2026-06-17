@@ -1,7 +1,23 @@
 import json
-from pydantic import ValidationError
+
+from pydantic import BaseModel, ValidationError
+
 from infra.database import DatabaseManager
 from roles.contracts import CONTRACT_REGISTRY
+
+
+def parse_contract(raw: str, contract_cls: type[BaseModel]) -> tuple[dict, bool]:
+    """Parse teks mentah → instance contract Pydantic.
+
+    Toleran terhadap pembungkus markdown ```json. Gagal → (dict berisi raw+error, False),
+    tidak pernah crash. Dipakai ulang oleh RoleNegotiator dan ConversationOrchestrator.
+    """
+    try:
+        cleaned = raw.strip().replace("```json", "").replace("```", "").strip()
+        instance = contract_cls(**json.loads(cleaned))
+        return instance.model_dump(), True
+    except (json.JSONDecodeError, ValidationError, TypeError) as e:
+        return {"raw": raw[:500], "error": str(e)}, False
 
 
 class RoleNegotiator:
@@ -31,11 +47,13 @@ class RoleNegotiator:
             f"{task_input}\n\nPENTING: Jawab dalam JSON sesuai schema, tanpa teks lain:\n{schema}"
         )
 
+        # Fix: run() yield AgentEvent, bukan str — kumpulkan teks dari event type "token".
         raw = ""
-        async for token in sub_agent.run(prompt):
-            raw += token
+        async for ev in sub_agent.run(prompt):
+            if getattr(ev, "type", None) == "token":
+                raw += ev.text
 
-        validated, ok = self._validate(raw, contract_cls)
+        validated, ok = parse_contract(raw, contract_cls)
         await self.db.execute(
             """INSERT INTO role_handoffs (session_id, from_role, to_role, task_input,
                                           contract_name, output_json, validation_ok)
@@ -46,9 +64,5 @@ class RoleNegotiator:
         return {"from": from_role, "to": to_role, "output": validated, "valid": ok}
 
     def _validate(self, raw: str, contract_cls) -> tuple[dict, bool]:
-        try:
-            cleaned = raw.strip().replace("```json", "").replace("```", "").strip()
-            instance = contract_cls(**json.loads(cleaned))
-            return instance.model_dump(), True
-        except (json.JSONDecodeError, ValidationError) as e:
-            return {"raw": raw[:500], "error": str(e)}, False
+        # Dipertahankan untuk kompatibilitas; delegasi ke helper modul-level.
+        return parse_contract(raw, contract_cls)

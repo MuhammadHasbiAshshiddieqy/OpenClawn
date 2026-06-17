@@ -2,58 +2,89 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>OpenCLAWN Settings</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCLAWN · Settings</title>
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>Model Settings</h1>
-            <nav><a href="/">← Chat</a> · <a href="/metrics">Metrics</a></nav>
-        </header>
+<div class="app">
+    <aside class="sidebar">
+        <div class="brand">
+            <img src="/static/logo.png" alt="OpenCLAWN">
+            <div>
+                <div class="name">Open<b>CLAWN</b></div>
+                <div class="tag">playful · sharp</div>
+            </div>
+        </div>
+        <div>
+            <div class="side-label">Workspace</div>
+            <nav class="nav-links">
+                <a href="/" class="nav-link"><span class="ico">💬</span> Chat</a>
+                <a href="/metrics" class="nav-link"><span class="ico">📊</span> Metrics</a>
+                <a href="/settings" class="nav-link active"><span class="ico">⚙️</span> Settings</a>
+            </nav>
+        </div>
+        <div class="spacer"></div>
+    </aside>
 
-        {% if saved %}
-        <p class="saved">✓ Tersimpan.</p>
-        {% endif %}
+    <main class="main">
+        <div class="topbar">
+            <div>
+                <h1>Model Settings</h1>
+                <div class="sub">override model untuk semua query</div>
+            </div>
+        </div>
 
-        <p>
-            Secara default, OpenCLAWN memilih model otomatis per kompleksitas query
-            (router cerdas — Inovasi #1). Override di bawah <strong>memaksa semua query
-            ke satu model</strong> — berguna untuk eksperimen, mis. memakai Gemini saja.
-        </p>
-
-        <form method="post" action="/settings">
-            <label for="model_choice"><strong>Model aktif</strong></label>
-            <select name="model_choice" id="model_choice">
-                <option value="auto" {{ 'selected' if not current else '' }}>
-                    Otomatis (router memilih per kompleksitas) — disarankan
-                </option>
-                {% for provider, model, label in known_models %}
-                <option value="{{ provider }}|{{ model }}"
-                    {{ 'selected' if current and current[0] == provider and current[1] == model else '' }}>
-                    {{ label }}
-                </option>
-                {% endfor %}
-            </select>
-            <button type="submit">Simpan</button>
-        </form>
-
-        <p class="current-status">
-            {% if current %}
-            Status: override aktif → <code>{{ current[0] }} / {{ current[1] }}</code>.
-            Semua query memakai model ini.
-            {% else %}
-            Status: <strong>mode otomatis</strong>. Router memilih model per query.
+        <div class="page">
+            {% if saved %}
+            <p class="saved">✓ Tersimpan.</p>
             {% endif %}
-        </p>
 
-        <hr>
-        <p class="note">
-            Catatan: model cloud (Claude/Gemini) butuh API key di <code>.env</code>
-            (<code>ANTHROPIC_API_KEY</code> / <code>GOOGLE_API_KEY</code>). Model lokal
-            (gemma4) butuh Ollama berjalan dan model sudah di-<code>pull</code>.
-            Jika model terpilih tidak tersedia, OpenCLAWN turun ke fallback chain.
-        </p>
-    </div>
+            <p>
+                Secara default, OpenCLAWN memilih model otomatis per kompleksitas query
+                (router cerdas — Inovasi #1). Override di bawah <strong>memaksa semua query
+                ke satu model</strong> — berguna untuk eksperimen, mis. memakai Gemini saja.
+            </p>
+
+            <div class="card">
+                <form method="post" action="/settings">
+                    <label for="model_choice"><strong>Model aktif</strong></label>
+                    <select name="model_choice" id="model_choice">
+                        <option value="auto" {{ 'selected' if not current else '' }}>
+                            Otomatis (router memilih per kompleksitas) — disarankan
+                        </option>
+                        {% for provider, model, label in known_models %}
+                        <option value="{{ provider }}|{{ model }}"
+                            {{ 'selected' if current and current[0] == provider and current[1] == model else '' }}>
+                            {{ label }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" class="btn">Simpan</button>
+                </form>
+            </div>
+
+            <p class="current-status" style="margin-top:16px">
+                {% if current %}
+                Status: override aktif → <code>{{ current[0] }} / {{ current[1] }}</code>.
+                Semua query memakai model ini.
+                {% else %}
+                Status: <strong>mode otomatis</strong>. Router memilih model per query.
+                {% endif %}
+            </p>
+
+            <hr>
+            <p class="muted">
+                Catatan: model cloud (Claude/Gemini) butuh API key di <code>.env</code>
+                (<code>ANTHROPIC_API_KEY</code> / <code>GOOGLE_API_KEY</code>). Model lokal
+                (gemma4) butuh Ollama berjalan dan model sudah di-<code>pull</code>.
+                Jika model terpilih tidak tersedia, OpenCLAWN turun ke fallback chain.
+            </p>
+        </div>
+    </main>
+</div>
 </body>
 </html>

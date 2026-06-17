@@ -1,6 +1,47 @@
 # `core/` — Otak Agent
 
-Modul core berisi logika utama: agent loop, LLM client, router, audit, crystallizer, compactor, dan calibration advisor.
+Modul core berisi logika utama: agent loop, LLM client, router, audit, crystallizer, compactor, calibration advisor, dan multi-agent conversation.
+
+---
+
+## `core/conversation.py` — Multi-Agent Conversation
+
+Beberapa agent (role) saling mengobrol. Ide inti: **percakapan = urutan giliran agent; sebuah `TurnStrategy` memutuskan siapa bicara berikutnya & kapan berhenti.** Tiga pola = tiga strategy di atas satu orchestrator. Modul extractable: hanya bergantung `DatabaseManager`, `AppConfig`, `agent_factory` — tanpa import web. Tiap giliran = `AgentLoop.run()` penuh.
+
+### Dataclass: `ConversationEvent`
+
+| Field | Keterangan |
+|---|---|
+| `type` | `"turn"` (mulai giliran → UI buka bubble baru) / `"token"` / `"status"` / `"conversation_end"` |
+| `role` | Role yang sedang bicara |
+| `text`, `detail` | Seperti `AgentEvent`; untuk `turn` text=label role, untuk `conversation_end` detail=alasan |
+| `turn_index` | Ordinal giliran (0-based) |
+
+### Dataclass: `ConversationState`
+Transkrip `(role, content)` lintas giliran, `last_output` (contract tervalidasi terakhir atau `{"text": raw}`), `turn_index`, `round_index`.
+
+### Kelas: `ConversationControl`
+Kontrol STOP + INTERJECT, web-agnostic. `stop()`, `add_interjection(text)`, `pop_interjection()`, `is_stopped() → bool` *(async)* (cek flag + `disconnect_check` opsional yang di-wire ke `request.is_disconnected`).
+
+### Kelas: `TurnStrategy` (ABC) + turunannya
+- `next_speaker(state) → str | None` — role berikutnya, `None` = selesai.
+- `build_turn_input(state, role, interjection) → str` — rakit prompt giliran.
+- `wants_contract(role) → bool` — apakah output divalidasi vs `CONTRACT_REGISTRY`.
+
+| Strategy | Pola | Terminasi |
+|---|---|---|
+| `PipelineStrategy(participants)` | Urut sekali: pm→dev→qa. Suapkan output role sebelumnya; `wants_contract=True`. | Setelah participant terakhir |
+| `DebateStrategy(participants, rounds)` | Round-robin `rounds` siklus; suapkan transkrip penuh (free text). | Setelah `rounds × len(participants)` giliran |
+| `OrchestratorStrategy(lead, workers)` | Lead delegasi dinamis via directive JSON (`{"delegate_to","task"}`/`{"done":true}`). Setelah worker → balik ke lead. | Lead `done`, atau **fallback** alur tetap (lead→workers→lead) bila directive tak terbaca |
+
+### Kelas: `ConversationOrchestrator`
+`__init__(strategy, db, agent_factory, session_id, config=CONFIG, control=None)`.
+
+**`run(initial_message) → AsyncGenerator[ConversationEvent, None]`** *(async)*
+Loop sampai `max_conversation_turns`/strategy selesai/STOP. Per giliran: cek stop → `next_speaker` → rakit input (+interjection) → emit `turn` → jalankan `agent_factory(role).run()` (re-wrap token/status, cek stop tiap event) → bila `wants_contract` validasi + tulis `role_handoffs` (**gagal → tetap lanjut dgn teks mentah**, keputusan degrade-graceful).
+
+### Fungsi: `make_strategy(pattern, participants, rounds, config) → TurnStrategy`
+Bangun strategy dari parameter request (`pipeline`/`debate`/`orchestrator`); default participants dari config.
 
 ---
 
@@ -34,6 +75,16 @@ Merepresentasikan satu turn percakapan.
 | `latency_ms` | Latensi total turn dalam milidetik |
 | `fallback_used` | Apakah fallback chain aktif |
 
+### Dataclass: `AgentEvent`
+
+Event yang di-stream `run()` ke Web UI. Memisahkan isi jawaban dari sinyal proses agar user tahu agent sedang apa (tidak terlihat menggantung).
+
+| Field | Keterangan |
+|---|---|
+| `type` | `"token"` (potongan jawaban) atau `"status"` (sinyal proses) |
+| `text` | Untuk `token`: isi teks. Untuk `status`: label (`routing`/`thinking`/`tool`/`fallback`) |
+| `detail` | Konteks status opsional (mis. `provider:model` saat `routing`, nama tool saat `tool`) |
+
 ### Kelas: `AgentLoop`
 
 Orkestrasi lengkap satu sesi percakapan.
@@ -43,8 +94,8 @@ Inisialisasi semua komponen: LLM client, memory manager, skill decay, router, au
 
 > `approval` harus di-inject dari level app (singleton `ApprovalGate`) agar endpoint `/approve` bisa me-resolve Future yang sama yang ditunggu di sini.
 
-**`run(user_message: str) → AsyncGenerator[str, None]`** *(async generator)*  
-Pipeline utama per turn. Menghasilkan token teks ke Web UI via SSE. Urutan:
+**`run(user_message: str) → AsyncGenerator[AgentEvent, None]`** *(async generator)*  
+Pipeline utama per turn. Menghasilkan `AgentEvent` (`token` + `status`) ke Web UI via SSE. Status di-emit di titik kunci: `routing` (setelah model dipilih), `thinking` (sebelum tiap stream LLM), `tool` (sebelum eksekusi tool), `fallback` (saat fallback chain aktif). Urutan:
 
 1. **Shield scan** — tolak input mencurigakan sebelum masuk pipeline
 2. **Correction check** — deteksi apakah turn sebelumnya dikoreksi user (audit feedback)
@@ -56,8 +107,8 @@ Pipeline utama per turn. Menghasilkan token teks ke Web UI via SSE. Urutan:
 8. **Finalize** — update audit record dengan latensi, cost, token
 9. **Post-turn** — background task: tulis L1 checkpoint, arsip L4, decay pass, crystallize
 
-**`_run_tool_loop(messages, route, tools_schema, turn) → AsyncGenerator[str, None]`** *(async generator, private)*  
-Loop iteratif (bukan rekursif) untuk menangani tool call. Berhenti saat tidak ada tool call pending atau `max_tool_hops` tercapai.
+**`_run_tool_loop(messages, route, tools_schema, turn) → AsyncGenerator[AgentEvent, None]`** *(async generator, private)*  
+Loop iteratif (bukan rekursif) untuk menangani tool call. Meng-emit `AgentEvent` (`thinking`/`token`/`tool`/`fallback`). Berhenti saat tidak ada tool call pending atau `max_tool_hops` tercapai.
 
 **`_execute_tool(name, input_data) → dict`** *(async, private)*  
 Eksekusi satu tool: cek keberadaan, cek izin role, minta approval jika `requires_approval=True`, lalu jalankan.
@@ -131,6 +182,28 @@ Retry dengan exponential backoff (tenacity). Dispatch ke `_ollama()` atau `_clau
 **`_ollama(model, messages, tools, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
 Streaming request ke `POST /api/chat` Ollama. Parse NDJSON response.
 
+> **Plaintext tool call parsing:** Banyak model GGUF lokal (Gemma, Qwen, Llama, Mistral, DeepSeek)
+> mengeluarkan tool call sebagai token teks di stream `content`, bukan sebagai field JSON
+> `message.tool_calls`. `_ollama` kini me-*buffer* seluruh teks stream, lalu memanggil
+> `parse_plaintext_tool_calls()` di akhir untuk mendeteksi 7 format tool call berbeda.
+> Tool call yang terdeteksi di-prioritaskan bersama native `tool_calls`. Hasil teks
+> dibersihkan dari token tool call sebelum dikirim ke user.
+
+**`parse_plaintext_tool_calls(text) → tuple[str, list[dict]]`** *(static method)*  
+Parse 7 format plaintext tool call dari berbagai keluarga model:
+
+| Format | Keluarga Model | Pola |
+|---|---|---|
+| `gemma` | Gemma 4 | `<\|tool_call>call:NAME{args}<tool_call\|>` |
+| `qwen` | Qwen 2.5/3 | `<tool_call>{"name":...,"arguments":...}</tool_call>` |
+| `llama3` | Llama 3.1/3.2 | `<\|python_tag\|>{"name":...,"parameters":...}` |
+| `mistral` | Mistral/Mixtral | `[TOOL_CALLS] [{"name":...,"arguments":...}]` |
+| `deepseek` | DeepSeek | `<｜tool▁call▁begin｜>{...}<｜tool▁call▁end｜>` |
+| `functionary` | Functionary v3 | `<\|from\|>assistant\n<\|recipient\|>NAME\n<\|content\|>{args}\n<\|stop\|>` |
+| `tool_code` | Generic | `<tool_code>NAME{args}</tool_code>` |
+
+Return: `(cleaned_text, [{"name": "...", "input": {...}}, ...])` — teks bersih tanpa token tool call + daftar parsed call.
+
 **`_claude(model, messages, tools, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
 Streaming request ke `POST /v1/messages` Anthropic. Parse SSE response (`data:` lines). API key diambil dari `Vault` tepat sebelum request — tidak pernah di-cache di memori lebih lama dari perlu.
 
@@ -195,15 +268,17 @@ Map skor ke label. `threshold_shift = 1` jika `prefer_local=True` (threshold nai
 **`_explain(complexity, soul_hit) → str`** *(private)*  
 Teks penjelasan untuk audit record.
 
-**Peta model:**
+**Peta model** (setup utama LOKAL — tier ringan→sedang dilayani Ollama, tier berat naik ke Gemini cloud):
 
 | Complexity | Model | Provider |
 |---|---|---|
-| TRIVIAL | `gemma4:e2b` | Ollama |
+| TRIVIAL | `gemma4:e4b` | Ollama |
 | SIMPLE | `gemma4:e4b` | Ollama |
-| MODERATE | `gemma4:12b` | Ollama |
-| COMPLEX | `claude-haiku-4-5-20251001` | Anthropic |
-| CRITICAL | `claude-sonnet-4-6` | Anthropic |
+| MODERATE | `gemma4:e4b` | Ollama |
+| COMPLEX | `gemini-2.5-flash` | Gemini |
+| CRITICAL | `gemini-2.5-pro` | Gemini |
+
+> Semua tier lokal disamakan ke `gemma4:e4b` (satu-satunya gemma4 yang ter-pull & tool-capable). Bisa di-spesialisasi (mis. `deepseek-r1` untuk MODERATE) bila model lain di-`pull`.
 
 ---
 

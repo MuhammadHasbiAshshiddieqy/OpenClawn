@@ -37,7 +37,7 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 
 **Fallback chain default:**
 ```
-gemma4:12b (ollama) → gemma4:e4b (ollama) → gemma4:e2b (ollama) → claude-haiku-4-5-20251001 (anthropic)
+gemma4:e4b (ollama) → deepseek-r1:latest (ollama) → neural-chat:latest (ollama) → gemini-2.5-flash (gemini)
 ```
 
 #### Method
@@ -50,6 +50,25 @@ Baca konfigurasi dari environment variables. Variabel yang dibaca:
 - `GEMINI_BASE` → `gemini_base`
 
 > **API key** (`ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`) tidak masuk `AppConfig` — diambil saat dibutuhkan lewat `Vault` (lihat [security.md](security.md)), bukan disimpan di config.
+
+> **`.env` di-load otomatis.** Saat modul ini di-import, `load_dotenv()` (dari `infra/env.py`) dipanggil **sebelum** `CONFIG` dibangun, sehingga key dari file `.env` tersedia di `os.environ` untuk config maupun `Vault`. Tidak perlu lagi men-source `.env` manual saat menjalankan `uvicorn`.
+
+---
+
+## `infra/env.py`
+
+Pemuat `.env` minimal — tanpa dependency eksternal (`python-dotenv` sengaja tidak ditambahkan, stack final).
+
+#### Method
+
+**`load_dotenv(path: str | Path | None = None) → None`**  
+Baca pasangan `KEY=VALUE` dari file `.env` (default: `.env` di root project) ke `os.environ`. Idempoten dan aman dipanggil berkali-kali.
+
+- File tidak ada → diam, tidak error (`.env` opsional).
+- Key yang **sudah ada** di environment tidak ditimpa — env asli (CI/deploy) selalu menang.
+- Komentar (`#`) dan baris kosong diabaikan; tanda kutip pembungkus nilai di-strip.
+
+Dipanggil sekali di puncak `infra/config.py`. Karena hampir semua entry point meng-import `infra.config`, loader berlaku untuk web server, script, maupun test.
 
 ---
 

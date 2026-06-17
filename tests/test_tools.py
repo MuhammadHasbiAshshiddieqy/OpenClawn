@@ -12,9 +12,28 @@ from tools import TOOL_REGISTRY
 # ── TOOL_REGISTRY ─────────────────────────────────────────────────────────────
 
 
-def test_registry_has_all_5_tools():
-    """Semua 5 tool harus terdaftar di TOOL_REGISTRY."""
-    expected = {"file_read", "file_write", "web_fetch", "ask_user", "code_run"}
+def test_registry_has_all_18_tools():
+    """Semua 18 tool harus terdaftar di TOOL_REGISTRY."""
+    expected = {
+        "file_read",
+        "file_write",
+        "file_edit",
+        "file_append",
+        "apply_patch",
+        "list_dir",
+        "glob",
+        "grep",
+        "pdf_read",
+        "shell_run",
+        "code_run",
+        "web_fetch",
+        "web_search",
+        "http_request",
+        "db_query",
+        "memory_search",
+        "json_query",
+        "ask_user",
+    }
     assert set(TOOL_REGISTRY.keys()) == expected
 
 
@@ -54,13 +73,24 @@ def test_all_tools_have_schema():
 
 
 @pytest.mark.asyncio
-async def test_file_read_success(tmp_path):
-    """file_read harus mengembalikan isi file."""
+def _set_workspace(monkeypatch, path):
+    """Arahkan workspace_root tool file ke `path` (CONFIG frozen → ganti referensi)."""
+    import dataclasses
+
+    from infra.config import CONFIG
+
+    patched = dataclasses.replace(CONFIG, workspace_root=str(path))
+    monkeypatch.setattr("tools.file_ops.CONFIG", patched)
+
+
+async def test_file_read_success(tmp_path, monkeypatch):
+    """file_read harus mengembalikan isi file (dalam workspace)."""
+    _set_workspace(monkeypatch, tmp_path)
     f = tmp_path / "test.txt"
     f.write_text("hello world")
 
     tool = FileReadTool()
-    result = await tool.execute({"path": str(f)}, vault=None)
+    result = await tool.execute({"path": "test.txt"}, vault=None)
     assert result["content"] == "hello world"
 
 
@@ -81,13 +111,14 @@ async def test_file_read_no_path():
 
 
 @pytest.mark.asyncio
-async def test_file_read_truncates_large_file(tmp_path):
+async def test_file_read_truncates_large_file(tmp_path, monkeypatch):
     """file_read harus truncate konten > 10000 karakter."""
+    _set_workspace(monkeypatch, tmp_path)
     f = tmp_path / "big.txt"
     f.write_text("x" * 20000)
 
     tool = FileReadTool()
-    result = await tool.execute({"path": str(f)}, vault=None)
+    result = await tool.execute({"path": "big.txt"}, vault=None)
     assert len(result["content"]) <= 10000
 
 
@@ -95,13 +126,13 @@ async def test_file_read_truncates_large_file(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_file_write_success(tmp_path):
+async def test_file_write_success(tmp_path, monkeypatch):
     """file_write harus menulis konten dan mengembalikan ok=True."""
-    path = str(tmp_path / "output.txt")
+    _set_workspace(monkeypatch, tmp_path)
     tool = FileWriteTool()
-    result = await tool.execute({"path": path, "content": "isi file"}, vault=None)
+    result = await tool.execute({"path": "output.txt", "content": "isi file"}, vault=None)
     assert result["ok"] is True
-    assert open(path).read() == "isi file"
+    assert (tmp_path / "output.txt").read_text() == "isi file"
 
 
 @pytest.mark.asyncio

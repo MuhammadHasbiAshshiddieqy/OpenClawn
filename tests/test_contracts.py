@@ -5,6 +5,7 @@ import pytest
 from unittest.mock import AsyncMock
 from infra.config import AppConfig
 from infra.database import DatabaseManager
+from core.agent_loop import AgentEvent
 from roles.contracts import PMOutput, QAOutput, DevOutput, CONTRACT_REGISTRY
 from roles.registry import RoleNegotiator
 
@@ -85,7 +86,8 @@ async def test_valid_output_passes_validation(db):
     )
 
     async def mock_agent_run(prompt: str):
-        yield valid_pm_json
+        # run() yield AgentEvent (bukan str) — sesuai loop nyata.
+        yield AgentEvent(type="token", text=valid_pm_json)
 
     mock_agent = AsyncMock()
     mock_agent.run = mock_agent_run
@@ -112,7 +114,7 @@ async def test_invalid_output_does_not_crash(db):
     negotiator = RoleNegotiator(db=db)
 
     async def mock_agent_run(prompt: str):
-        yield "ini bukan json!!!"
+        yield AgentEvent(type="token", text="ini bukan json!!!")
 
     mock_agent = AsyncMock()
     mock_agent.run = mock_agent_run
