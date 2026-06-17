@@ -288,7 +288,7 @@ Mencatat setiap keputusan routing dan apakah terbukti tepat.
 
 ### Konstanta: `CORRECTION_SIGNALS`
 
-Daftar kata/frasa yang menandakan user mengoreksi respons sebelumnya (sinyal feedback).
+Daftar kata/frasa yang menandakan user mengoreksi respons sebelumnya (sinyal feedback). Mencakup Indonesia & English (core locale-neutral §1.5).
 
 ### Kelas: `RoutingAuditor`
 
@@ -299,7 +299,7 @@ Catat keputusan routing ke tabel `routing_events` **sebelum** LLM call. Return `
 Update record dengan hasil aktual **setelah** turn selesai: token in/out, cost, latensi, fallback flag.
 
 **`check_correction(user_message, session_id) → None`** *(async)*  
-Dipanggil di **awal turn berikutnya**. Jika pesan user mengandung sinyal koreksi, update record turn sebelumnya dengan `had_correction=1`.
+Dipanggil di **awal setiap turn** (oleh `AgentLoop.run`). Jika pesan user mengandung sinyal koreksi, update record turn **sebelumnya** di session yang sama dengan `had_correction=1`. Aman dipanggil selalu — UPDATE hanya kena bila ada event sebelumnya untuk session. (Tidak boleh di-gate `self.history`: AgentLoop dibuat baru tiap request web → history selalu kosong → koreksi tak pernah terdeteksi.)
 
 **`calibration_report() → list[dict]`** *(async)*  
 Agregasi per `complexity_label`: total event, jumlah koreksi, correction rate (%), avg cost. Dipakai oleh `/metrics` dan `RoutingCalibrator`.

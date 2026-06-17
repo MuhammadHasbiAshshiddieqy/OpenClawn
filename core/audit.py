@@ -2,6 +2,7 @@ from infra.database import DatabaseManager
 from core.router import RouteDecision
 
 CORRECTION_SIGNALS = [
+    # Indonesia
     "salah",
     "bukan itu",
     "coba lagi",
@@ -12,6 +13,17 @@ CORRECTION_SIGNALS = [
     "keliru",
     "bukan begitu",
     "harusnya",
+    # English (core harus locale-neutral, §1.5)
+    "that's wrong",
+    "thats wrong",
+    "not what i",
+    "try again",
+    "incorrect",
+    "i meant",
+    "no, ",
+    "redo",
+    "not right",
+    "should be",
 ]
 
 

@@ -121,8 +121,11 @@ class AgentLoop:
             return
 
         # 1. Deteksi koreksi user (audit feedback) [#1]
-        if self.history:
-            await self.auditor.check_correction(user_message, self.cfg.session_id)
+        # Audit: JANGAN gate dengan self.history — AgentLoop dibuat baru tiap request
+        # web (history selalu kosong di awal), sehingga koreksi tak pernah terdeteksi.
+        # check_correction aman dipanggil selalu: hanya UPDATE bila ada event sebelumnya
+        # untuk session ini (turn sebelumnya), berdasarkan session_id yang persisten.
+        await self.auditor.check_correction(user_message, self.cfg.session_id)
 
         # 2. Load skill aktif (belum decayed) [#2]
         active_skills = await self.decay.get_active_skills(query=user_message)

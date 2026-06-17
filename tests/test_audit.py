@@ -134,6 +134,21 @@ async def test_correction_detected(auditor, db):
 
 
 @pytest.mark.asyncio
+async def test_correction_detected_english(auditor, db):
+    """Sinyal koreksi bahasa Inggris juga terdeteksi (core locale-neutral §1.5)."""
+    route = _fake_route()
+    event_id = await auditor.log_decision("s5en", "pm", "first query", route)
+    await auditor.finalize(event_id, _FakeTurn())
+
+    await auditor.check_correction("no, that's wrong, try again", "s5en")
+
+    row = await db.fetchone(
+        "SELECT had_correction FROM routing_events WHERE id=?", (event_id,)
+    )
+    assert row["had_correction"] == 1
+
+
+@pytest.mark.asyncio
 async def test_no_correction_on_normal_query(auditor, db):
     """Query normal tanpa sinyal koreksi tidak boleh memicu had_correction."""
     route = _fake_route()
