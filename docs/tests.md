@@ -213,6 +213,25 @@ Smoke test untuk endpoints Web UI.
 
 ---
 
+### `tests/test_settings.py`
+
+Test untuk fitur pilih model: `SettingsStore`, provider Gemini, override routing.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_override_none_by_default` | Tanpa setting → mode otomatis (`None`) |
+| `test_set_and_get_override` | Set override → kebaca sebagai `(provider, model)` |
+| `test_clear_override_returns_to_auto` | Set lalu hapus → kembali ke otomatis |
+| `test_partial_override_is_not_active` | Hanya provider tanpa model → bukan override valid |
+| `test_override_upsert_overwrites` | Set dua kali → nilai terakhir menang |
+| `test_gemini_provider_dispatch` | `_stream_one` mengarahkan `gemini` ke `_gemini()` |
+| `test_gemini_health_check_assumes_up` | Gemini diasumsikan up (seperti anthropic) |
+| `test_gemini_parses_sse_stream` | `_gemini` mem-parse SSE Google AI Studio → text + usage |
+| `test_override_changes_route_in_agent_loop` | Override aktif → provider/model ke LLM dipaksa sesuai pilihan |
+| `test_no_override_uses_router` | Tanpa override → router tetap memilih (query pendek → lokal) |
+
+---
+
 ## Pola Test Async
 
 ```python

@@ -7,6 +7,7 @@ from typing import AsyncGenerator
 from infra.config import AppConfig, CONFIG
 from infra.database import DatabaseManager
 from infra.logging import log
+from infra.settings import SettingsStore
 from core.router import SmartRouter
 from core.audit import RoutingAuditor
 from core.compactor import ContextCompactor
@@ -63,6 +64,7 @@ class AgentLoop:
         # (AgentLoop dibuat baru per request, tapi approval harus shared antar request).
         self.approval = approval or ApprovalGate(db, config)
         self.shield = Shield()
+        self.settings = SettingsStore(db)
         self.history: list[Turn] = []
 
         # nit #2: cache soul.toml sekali, jangan baca tiap turn
@@ -103,6 +105,16 @@ class AgentLoop:
 
         # 5. Route (soul-aware) + log [#1]
         route = self.router.decide(messages, user_message)
+        # Override model dari /settings: pilihan sadar user untuk memaksa 1 model
+        # (mis. Gemini) melewati keputusan otomatis. Audit tetap mencatat keputusan
+        # router ASLI di reason agar transparansi routing tidak hilang.
+        override = await self.settings.get_model_override()
+        if override:
+            ov_provider, ov_model = override
+            route.reason = f"[override→{ov_provider}:{ov_model}] {route.reason}"
+            route.provider = ov_provider
+            route.model = ov_model
+            route.cost_per_1k = 0.0  # biaya nyata model override tak dipetakan; jangan tebak
         event_id = await self.auditor.log_decision(
             self.cfg.session_id, self.cfg.role, user_message, route
         )

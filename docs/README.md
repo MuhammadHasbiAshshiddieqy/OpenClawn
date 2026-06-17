@@ -8,13 +8,14 @@ Referensi teknis lengkap untuk semua modul dan fungsi dalam OpenCLAWN. Dibaca be
 
 | Saya ingin tahu tentang... | Baca |
 |---|---|
-| Konfigurasi global, koneksi DB, logging | [infra.md](infra.md) |
-| Agent loop, LLM client, router, audit, crystallizer | [core.md](core.md) |
+| Konfigurasi global, koneksi DB, logging, **SettingsStore** | [infra.md](infra.md) |
+| Agent loop, LLM client (Ollama/Claude/**Gemini**), router, audit, crystallizer | [core.md](core.md) |
 | Sistem memori L1–L4, skill decay, FTS5 search | [memory.md](memory.md) |
 | Role PM/QA/Dev, handoff contract, soul.toml | [roles.md](roles.md) |
 | Vault, Shield, ApprovalGate HITL | [security.md](security.md) |
 | Tool file/web/code, Docker sandbox | [tools.md](tools.md) |
-| Endpoint FastAPI, SSE streaming, Web UI | [web.md](web.md) |
+| Endpoint FastAPI, SSE streaming, Web UI, **/settings** | [web.md](web.md) |
+| Pilih/override model (Gemini, dll.) | [infra.md](infra.md) · [web.md](web.md) |
 | Schema tabel SQLite, query contoh | [database.md](database.md) |
 | Cara menulis test, daftar test per file | [tests.md](tests.md) |
 | Script seed routing & sensitivity analysis | [scripts.md](scripts.md) |

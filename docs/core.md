@@ -51,7 +51,7 @@ Pipeline utama per turn. Menghasilkan token teks ke Web UI via SSE. Urutan:
 3. **Load active skills** — ambil skill dari decay manager (Inovasi 2)
 4. **Load memory context** — L1/L2/L3/L4 (Inovasi 2 lanjutan)
 5. **Build messages** — compactor merakit context dengan budget token
-6. **Route + log decision** — soul-aware routing, catat ke audit DB (Inovasi 1)
+6. **Route + log decision** — soul-aware routing, catat ke audit DB (Inovasi 1). Jika ada **model override** dari `/settings` (`SettingsStore.get_model_override()`), provider/model dipaksa ke pilihan itu — keputusan router asli tetap tercatat di `reason` untuk transparansi audit
 7. **Tool loop** — iterasi tool call (tidak rekursif)
 8. **Finalize** — update audit record dengan latensi, cost, token
 9. **Post-turn** — background task: tulis L1 checkpoint, arsip L4, decay pass, crystallize
@@ -134,7 +134,12 @@ Streaming request ke `POST /api/chat` Ollama. Parse NDJSON response.
 **`_claude(model, messages, tools, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
 Streaming request ke `POST /v1/messages` Anthropic. Parse SSE response (`data:` lines). API key diambil dari `Vault` tepat sebelum request — tidak pernah di-cache di memori lebih lama dari perlu.
 
-> **Tidak ada SDK.** Raw `httpx` dipakai secara sengaja untuk transparansi audit — setiap header dan payload bisa diperiksa.
+**`_gemini(model, messages, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
+Streaming request ke Google AI Studio (`POST /v1beta/models/{model}:streamGenerateContent?alt=sse`). API key (`GOOGLE_API_KEY`) diambil dari `Vault`, dikirim via header `x-goog-api-key`. Mengonversi format internal (`system`/`assistant`) ke format Gemini (`systemInstruction` + `contents` dengan peran `user`/`model`). Parse SSE → `candidates[].content.parts[].text` dan `usageMetadata`. Tool calling belum didukung di jalur Gemini (cukup teks — audit/crystallizer yang butuh JSON teks tetap jalan).
+
+**Provider yang didukung:** `ollama`, `anthropic`, `gemini`.
+
+> **Tidak ada SDK.** Raw `httpx` dipakai secara sengaja untuk transparansi audit — setiap header dan payload bisa diperiksa. Gemini pun lewat raw httpx, bukan SDK Google.
 
 ---
 
@@ -154,7 +159,7 @@ Keputusan routing yang dikembalikan `SmartRouter.decide()`.
 | Field | Keterangan |
 |---|---|
 | `model` | Nama model yang dipilih |
-| `provider` | `"ollama"` atau `"anthropic"` |
+| `provider` | `"ollama"`, `"anthropic"`, atau `"gemini"` |
 | `complexity` | Level `Complexity` yang dipilih |
 | `complexity_score` | Skor numerik sebelum di-label |
 | `reason` | Penjelasan teks keputusan routing |

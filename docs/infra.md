@@ -21,6 +21,7 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `db_path` | `data/openclawn.db` | Path file SQLite |
 | `ollama_base` | `http://localhost:11434` | URL base Ollama |
 | `anthropic_base` | `https://api.anthropic.com` | URL base Anthropic API |
+| `gemini_base` | `https://generativelanguage.googleapis.com` | URL base Google AI Studio (Gemini) |
 | `max_context_tokens` | `28_000` | Batas token context window |
 | `max_tool_hops` | `5` | Maksimum iterasi tool loop per turn |
 | `llm_max_retries` | `3` | Retry maksimum untuk LLM transient error |
@@ -46,6 +47,9 @@ Baca konfigurasi dari environment variables. Variabel yang dibaca:
 - `OPENCLAWN_DB` → `db_path`
 - `OLLAMA_BASE` → `ollama_base`
 - `ANTHROPIC_BASE` → `anthropic_base`
+- `GEMINI_BASE` → `gemini_base`
+
+> **API key** (`ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`) tidak masuk `AppConfig` — diambil saat dibutuhkan lewat `Vault` (lihat [security.md](security.md)), bukan disimpan di config.
 
 ---
 
@@ -103,3 +107,26 @@ log.error("event_name", ...)
 ```
 
 > **Aturan:** Setiap error di background task **HARUS** ter-log. Jangan `except: pass`.
+
+---
+
+## `infra/settings.py`
+
+Setting runtime yang bisa diubah lewat halaman `/settings` **tanpa restart**. Saat ini menyimpan **override model** — memaksa semua routing ke satu `(provider, model)`, melewati keputusan otomatis `SmartRouter`. Override adalah *pilihan sadar* untuk eksperimen/development; router cerdas tetap default jika override kosong.
+
+### Konstanta: `KNOWN_MODELS`
+
+List `(provider, model, label)` untuk dropdown `/settings`. Mencakup gemma4 lokal, Claude, dan Gemini. Bukan pembatas keras — hanya saran tampilan.
+
+### Kelas: `SettingsStore`
+
+Murni di atas `DatabaseManager` (tabel `app_settings` key-value).
+
+| Method | Keterangan |
+|---|---|
+| `get(key) → str \| None` *(async)* | Baca satu setting |
+| `set(key, value) → None` *(async)* | Tulis setting; `None`/`""` menghapus baris (UPSERT) |
+| `get_model_override() → tuple[str, str] \| None` *(async)* | `(provider, model)` jika override aktif, `None` jika router otomatis |
+| `set_model_override(provider, model) → None` *(async)* | Set override; kirim `None`/`None` untuk kembali ke router otomatis |
+
+Override dianggap aktif hanya jika **provider dan model** keduanya terisi — partial (satu saja) = tetap otomatis.

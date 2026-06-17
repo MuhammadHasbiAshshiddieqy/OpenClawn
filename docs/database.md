@@ -168,6 +168,26 @@ Saat `request()` dipanggil: diinsert dengan `decision="pending:{approval_id}"`. 
 
 ---
 
+## Tabel App Settings
+
+### `app_settings` — Override Runtime
+
+Key-value sederhana untuk setting yang bisa diubah lewat `/settings` tanpa restart. Dikelola oleh `SettingsStore` ([infra.md](infra.md)).
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `key` | TEXT PK | Nama setting |
+| `value` | TEXT | Nilai (string) |
+| `updated_at` | TIMESTAMP | Waktu update terakhir |
+
+Key yang dipakai saat ini:
+- `model_override_provider` — provider override (`ollama`/`anthropic`/`gemini`)
+- `model_override_model` — nama model override
+
+Override dianggap aktif hanya jika **kedua** key terisi. Menghapus salah satu (set kosong) mengembalikan ke mode router otomatis.
+
+---
+
 ## Query Penting
 
 ```sql
@@ -193,4 +213,7 @@ FROM skills WHERE status='active' ORDER BY decay_score ASC LIMIT 10;
 
 -- Approval yang pending (semua sesi)
 SELECT * FROM approval_log WHERE decision LIKE 'pending:%';
+
+-- Override model aktif (jika ada)
+SELECT key, value FROM app_settings WHERE key LIKE 'model_override_%';
 ```

@@ -70,3 +70,12 @@ CREATE TABLE IF NOT EXISTS approval_log (
     decision TEXT,                          -- approved | rejected | timeout
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ===================== APP SETTINGS (runtime override) =====================
+-- Key-value sederhana untuk override yang bisa diubah lewat /settings tanpa restart.
+-- mis. model_override_provider / model_override_model (paksa semua tier ke 1 model).
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

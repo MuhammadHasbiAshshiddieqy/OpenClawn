@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>OpenCLAWN Settings</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Model Settings</h1>
+            <nav><a href="/">← Chat</a> · <a href="/metrics">Metrics</a></nav>
+        </header>
+
+        {% if saved %}
+        <p class="saved">✓ Tersimpan.</p>
+        {% endif %}
+
+        <p>
+            Secara default, OpenCLAWN memilih model otomatis per kompleksitas query
+            (router cerdas — Inovasi #1). Override di bawah <strong>memaksa semua query
+            ke satu model</strong> — berguna untuk eksperimen, mis. memakai Gemini saja.
+        </p>
+
+        <form method="post" action="/settings">
+            <label for="model_choice"><strong>Model aktif</strong></label>
+            <select name="model_choice" id="model_choice">
+                <option value="auto" {{ 'selected' if not current else '' }}>
+                    Otomatis (router memilih per kompleksitas) — disarankan
+                </option>
+                {% for provider, model, label in known_models %}
+                <option value="{{ provider }}|{{ model }}"
+                    {{ 'selected' if current and current[0] == provider and current[1] == model else '' }}>
+                    {{ label }}
+                </option>
+                {% endfor %}
+            </select>
+            <button type="submit">Simpan</button>
+        </form>
+
+        <p class="current-status">
+            {% if current %}
+            Status: override aktif → <code>{{ current[0] }} / {{ current[1] }}</code>.
+            Semua query memakai model ini.
+            {% else %}
+            Status: <strong>mode otomatis</strong>. Router memilih model per query.
+            {% endif %}
+        </p>
+
+        <hr>
+        <p class="note">
+            Catatan: model cloud (Claude/Gemini) butuh API key di <code>.env</code>
+            (<code>ANTHROPIC_API_KEY</code> / <code>GOOGLE_API_KEY</code>). Model lokal
+            (gemma4) butuh Ollama berjalan dan model sudah di-<code>pull</code>.
+            Jika model terpilih tidak tersedia, OpenCLAWN turun ke fallback chain.
+        </p>
+    </div>
+</body>
+</html>

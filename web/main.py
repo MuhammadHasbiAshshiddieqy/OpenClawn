@@ -2,7 +2,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -12,6 +12,7 @@ from core.calibration import RoutingCalibrator
 from infra.config import CONFIG
 from infra.database import DatabaseManager
 from infra.logging import setup_logging
+from infra.settings import KNOWN_MODELS, SettingsStore
 from security.approval import ApprovalGate
 
 db = DatabaseManager(CONFIG)
@@ -101,3 +102,37 @@ async def metrics(request: Request):
         "metrics.html",
         {"report": report, "calibration": calibration},
     )
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request, saved: bool = False):
+    """Halaman override model. Override = pilihan sadar; kosong = router otomatis."""
+    store = SettingsStore(db)
+    current = await store.get_model_override()  # (provider, model) | None
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "known_models": KNOWN_MODELS,
+            "current": current,  # None artinya mode otomatis (router)
+            "saved": saved,
+        },
+    )
+
+
+@app.post("/settings")
+async def settings_save(request: Request):
+    """Simpan override. Nilai 'auto' (atau kosong) → hapus override, kembali ke router."""
+    form = await request.form()
+    choice = (form.get("model_choice") or "").strip()
+    store = SettingsStore(db)
+
+    if not choice or choice == "auto":
+        await store.set_model_override(None, None)
+    else:
+        # value dropdown berformat "provider|model"
+        provider, _, model = choice.partition("|")
+        if provider and model:
+            await store.set_model_override(provider, model)
+
+    return RedirectResponse(url="/settings?saved=true", status_code=303)

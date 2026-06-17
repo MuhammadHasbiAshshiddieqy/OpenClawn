@@ -9,6 +9,7 @@ class AppConfig:
     db_path: str = "data/openclawn.db"
     ollama_base: str = "http://localhost:11434"
     anthropic_base: str = "https://api.anthropic.com"
+    gemini_base: str = "https://generativelanguage.googleapis.com"
     max_context_tokens: int = 28_000
     max_tool_hops: int = 5
     llm_max_retries: int = 3
@@ -38,6 +39,7 @@ class AppConfig:
             db_path=os.environ.get("OPENCLAWN_DB", "data/openclawn.db"),
             ollama_base=os.environ.get("OLLAMA_BASE", "http://localhost:11434"),
             anthropic_base=os.environ.get("ANTHROPIC_BASE", "https://api.anthropic.com"),
+            gemini_base=os.environ.get("GEMINI_BASE", "https://generativelanguage.googleapis.com"),
         )
 
 

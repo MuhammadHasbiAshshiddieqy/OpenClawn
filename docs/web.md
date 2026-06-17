@@ -132,6 +132,35 @@ Context yang dikirim:
 
 ---
 
+#### `GET /settings`
+
+**Halaman override model.**
+
+Template: `web/templates/settings.html`
+
+Menampilkan dropdown pilihan model dari `KNOWN_MODELS` (gemma4 lokal, Claude, Gemini) plus opsi **Otomatis** (default). Membaca override aktif via `SettingsStore.get_model_override()`.
+
+Query params:
+- `saved` (opsional, bool) — tampilkan notifikasi "Tersimpan" setelah POST
+
+Context yang dikirim:
+- `known_models` — list `(provider, model, label)`
+- `current` — `(provider, model)` jika override aktif, `None` jika mode otomatis
+- `saved` — flag notifikasi
+
+#### `POST /settings`
+
+**Simpan pilihan model.**
+
+Form data:
+- `model_choice` — `"auto"` (kembali ke router otomatis) atau `"provider|model"` (mis. `"gemini|gemini-2.0-flash"`)
+
+Menyimpan via `SettingsStore.set_model_override()`, lalu redirect (303) ke `/settings?saved=true`.
+
+> **Hubungan dengan router:** Override adalah *pilihan sadar* yang memaksa semua query ke satu model — berguna untuk eksperimen (mis. memakai Gemini saja). Router otomatis (Inovasi #1) tetap default saat `model_choice=auto`. Keputusan router asli tetap tercatat di audit walaupun override aktif.
+
+---
+
 ## `web/templates/`
 
 ### `index.html`
@@ -149,6 +178,13 @@ Template dashboard `/metrics`. Menampilkan:
 - Bagian **Tuning Recommendations** (dari `RoutingCalibrator`):
   - Badge untuk "cukup data" vs "belum cukup data"
   - Daftar rekomendasi: label, issue (under/over-provisioned), sample size, saran teks
+
+### `settings.html`
+
+Template halaman `/settings`. Menampilkan:
+- Dropdown pilihan model (opsi **Otomatis** + daftar `KNOWN_MODELS`)
+- Status mode aktif (otomatis vs override `provider/model`)
+- Catatan kebutuhan API key (`.env`) untuk model cloud dan Ollama untuk model lokal
 
 ---
 

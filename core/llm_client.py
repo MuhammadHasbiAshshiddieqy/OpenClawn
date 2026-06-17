@@ -74,7 +74,7 @@ class LLMClient:
                 async with httpx.AsyncClient(timeout=3) as c:
                     r = await c.get(f"{self.config.ollama_base}/api/tags")
                     return r.status_code == 200
-            return True  # anthropic: asumsikan up, retry handle transient
+            return True  # anthropic/gemini: asumsikan up, retry handle transient
         except httpx.HTTPError:
             return False
 
@@ -98,6 +98,9 @@ class LLMClient:
                 yield c
         elif provider == "anthropic":
             async for c in self._claude(model, messages, tools, max_tokens):
+                yield c
+        elif provider == "gemini":
+            async for c in self._gemini(model, messages, max_tokens):
                 yield c
 
     async def _ollama(
@@ -190,3 +193,56 @@ class LLMClient:
                     elif etype == "message_delta":
                         if data.get("usage"):
                             yield LLMChunk(type="usage", usage=data["usage"])
+
+    async def _gemini(
+        self, model: str, messages: list, max_tokens: int
+    ) -> AsyncGenerator[LLMChunk, None]:
+        """Google AI Studio (generativelanguage). Raw httpx, SSE streaming.
+
+        Catatan: Gemini memakai peran 'user'/'model' (bukan 'assistant'/'system')
+        dan struktur 'contents'/'parts' — kita konversi dari format internal.
+        Tool calling Gemini belum didukung di sini (cukup teks); audit/crystallizer
+        yang butuh teks JSON tetap berfungsi.
+        """
+        api_key = await self.vault.get("GOOGLE_API_KEY")
+
+        system = next((m["content"] for m in messages if m["role"] == "system"), "")
+        contents = [
+            {
+                "role": "model" if m["role"] == "assistant" else "user",
+                "parts": [{"text": m["content"]}],
+            }
+            for m in messages
+            if m["role"] in ("user", "assistant") and m.get("content")
+        ]
+
+        payload: dict = {
+            "contents": contents,
+            "generationConfig": {"maxOutputTokens": max_tokens},
+        }
+        if system:
+            payload["systemInstruction"] = {"parts": [{"text": system}]}
+
+        url = f"{self.config.gemini_base}/v1beta/models/{model}:streamGenerateContent?alt=sse"
+        headers = {"content-type": "application/json", "x-goog-api-key": api_key}
+
+        async with httpx.AsyncClient(timeout=180) as client:
+            async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = json.loads(line[5:].strip())
+                    for cand in data.get("candidates", []):
+                        for part in cand.get("content", {}).get("parts", []):
+                            if part.get("text"):
+                                yield LLMChunk(type="text", text=part["text"])
+                    usage = data.get("usageMetadata")
+                    if usage:
+                        yield LLMChunk(
+                            type="usage",
+                            usage={
+                                "input_tokens": usage.get("promptTokenCount", 0),
+                                "output_tokens": usage.get("candidatesTokenCount", 0),
+                            },
+                        )
