@@ -253,6 +253,18 @@ Context: `conversations` — list dict `{pattern, participants, initial_message,
 
 ---
 
+#### `GET /router` & `POST /router`
+
+**Editor peta tier→model.** Template: `web/templates/router.html`.
+
+`GET` menampilkan 5 tier (TRIVIAL→CRITICAL) dengan dropdown model dari `KNOWN_MODELS`, preselect model aktif, + tanda `default` per tier. `POST` menyimpan: tiap tier dikirim sebagai field `tier_<key>` berformat `provider|model` → `RouterConfigStore.set_map()`; `action=reset` → `RouterConfigStore.reset()`. Redirect `/router?saved=true`.
+
+Router tetap memutuskan TIER otomatis; halaman ini hanya menentukan MODEL tiap tier. Model offline → fallback chain. Beda dari `/settings` (yang memaksa SEMUA tier ke 1 model, mematikan router).
+
+Context: `tiers` (list `{key, label, model, provider, is_default}`), `known_models`, `overridden`, `saved`.
+
+---
+
 #### `GET /settings`
 
 **Halaman override model.**
@@ -313,6 +325,10 @@ Template dashboard `/skills`. Menampilkan:
 
 Template arsip `/conversations`. Daftar `<details>` per run: pattern + peserta + ringkasan (giliran/alasan/biaya/waktu) di summary, transkrip penuh (bubble per role, user dibedakan) di body.
 
+### `router.html`
+
+Template `/router`. Tabel 5 tier dengan dropdown model per tier (dari `KNOWN_MODELS`) + tombol Simpan/Reset. Tanda `default` bila tier masih memakai model bawaan.
+
 ### `settings.html`
 
 Template halaman `/settings`. Menampilkan:
@@ -346,4 +362,5 @@ Buka:
 - `http://localhost:8000/metrics` — routing calibration dashboard (+ apply/revert kalibrasi)
 - `http://localhost:8000/skills` — skill decay + kristalisasi dashboard
 - `http://localhost:8000/conversations` — arsip percakapan multi-agent
+- `http://localhost:8000/router` — editor peta tier→model
 - `http://localhost:8000/settings` — override model

@@ -11,6 +11,7 @@ from infra.settings import SettingsStore
 from core.router import SmartRouter
 from core.audit import RoutingAuditor
 from core.calibration import CalibrationStore
+from core.router_config import RouterConfigStore
 from core.tool_audit import ToolAudit
 from core.compactor import ContextCompactor
 from core.crystallizer import ConfidenceCrystallizer
@@ -126,6 +127,8 @@ class AgentLoop:
         # Loop tertutup #1: offset threshold hasil kalibrasi dibaca dari DB tiap turn
         # (async), lalu di-set ke router sebelum decide(). Default 0 = router asli.
         self.calibration = CalibrationStore(db)
+        # Override peta tier→model dari /router (dibaca per-turn, di-set sebelum decide()).
+        self.router_config = RouterConfigStore(db)
         # Telemetri tool: dicatat di _execute_tool (titik eksekusi terpusat).
         self.tool_audit = ToolAudit(db)
         self.compactor = ContextCompactor(config.max_context_tokens)
@@ -180,8 +183,9 @@ class AgentLoop:
         context_tokens = self.compactor.estimate_context_tokens(messages)
 
         # 5. Route (soul-aware) + log [#1]
-        # Terapkan offset kalibrasi terbaru sebelum memutuskan (loop tertutup #1).
+        # Terapkan offset kalibrasi + peta model terbaru sebelum memutuskan.
         self.router.threshold_offset = await self.calibration.get_offset()
+        self.router.model_map = await self.router_config.get_map()
         route = self.router.decide(messages, user_message)
         # Override model dari /settings: pilihan sadar user untuk memaksa 1 model
         # (mis. Gemini) melewati keputusan otomatis. Audit tetap mencatat keputusan

@@ -185,3 +185,24 @@ def test_conversations_page_shows_archived_run(client):
     assert "pm,dev" in html
     assert "adu argumen" in html
     assert "setuju" in html
+
+
+def test_router_page_renders_tiers(client):
+    """/router menampilkan 5 tier dengan dropdown model + tanda default."""
+    html = client.get("/router").text
+    assert "Router Model Map" in html
+    for tier in ("TRIVIAL", "SIMPLE", "MODERATE", "COMPLEX", "CRITICAL"):
+        assert tier in html
+    assert "tier_trivial" in html  # nama field form
+    assert "default" in html  # tanda peta default aktif
+
+
+def test_router_save_then_reflected(client):
+    """Simpan peta → tier terpilih berubah di /router; reset → kembali default."""
+    resp = client.post("/router", data={"tier_trivial": "gemini|gemini-2.0-flash"})
+    assert resp.status_code == 200
+    assert "Peta kustom aktif" in resp.text
+
+    resp = client.post("/router", data={"action": "reset"})
+    assert resp.status_code == 200
+    assert "memakai peta default" in resp.text

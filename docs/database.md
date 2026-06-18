@@ -184,6 +184,7 @@ Key yang dipakai saat ini:
 - `model_override_provider` — provider override (`ollama`/`anthropic`/`gemini`)
 - `model_override_model` — nama model override
 - `router_threshold_offset` — offset threshold kalibrasi (int), dibaca `SmartRouter` tiap turn
+- `router_model_map` — JSON override peta tier→model (`RouterConfigStore`), dibaca tiap turn → `router.model_map`
 
 Override model dianggap aktif hanya jika **kedua** key model terisi. Menghapus salah satu (set kosong) mengembalikan ke mode router otomatis.
 

@@ -78,6 +78,11 @@ class SmartRouter:
         # tier murah lebih lama (perbaiki over-provisioning). Default 0 = router asli.
         # Diterapkan di _label() bersama threshold_shift dari prefer_local.
         self.threshold_offset: int = threshold_offset
+        # Peta tier→(model, provider, cost) yang AKTIF. Default = MODELS hardcoded,
+        # tapi bisa di-override per-turn dari DB (RouterConfigStore) agar user memilih
+        # model tiap tier lewat /router tanpa mengubah kode. Router tetap memutuskan
+        # TIER; peta ini hanya menentukan MODEL untuk tier itu.
+        self.model_map: dict[Complexity, tuple[str, str, float]] = dict(self.MODELS)
 
     def _load_soul(self, role: str, soul_path: str | None) -> dict:
         path = soul_path or f"roles/{role}/soul.toml"
@@ -103,7 +108,9 @@ class SmartRouter:
         threshold_shift += self.threshold_offset
 
         complexity = self._label(score, threshold_shift)
-        model, provider, cost = self.MODELS[complexity]
+        # Pakai peta aktif (default MODELS, atau override dari /router); fallback ke
+        # MODELS bila tier tak ada di peta override (jaga-jaga peta korup/parsial).
+        model, provider, cost = self.model_map.get(complexity, self.MODELS[complexity])
 
         return RouteDecision(
             model=model,

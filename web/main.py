@@ -11,6 +11,8 @@ from fastapi.templating import Jinja2Templates
 from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
 from core.calibration import CalibrationStore, RoutingCalibrator
+from core.router import Complexity, SmartRouter
+from core.router_config import RouterConfigStore
 from core.tool_audit import ToolAudit
 from core.conversation import (
     ConversationControl,
@@ -394,6 +396,56 @@ async def conversations_page(request: Request):
         "conversations.html",
         {"conversations": convos},
     )
+
+
+@app.get("/router", response_class=HTMLResponse)
+async def router_page(request: Request, saved: bool = False):
+    """Editor peta tier→model. Router tetap pilih tier; user pilih model tiap tier."""
+    active = await RouterConfigStore(db).get_map()  # {Complexity: (model, provider, cost)}
+    overridden = await RouterConfigStore(db).is_overridden()
+    # Susun baris per tier (urut kompleksitas) untuk template.
+    tiers = []
+    for tier in Complexity:
+        model, provider, _ = active[tier]
+        default_model, default_provider, _ = SmartRouter.MODELS[tier]
+        tiers.append(
+            {
+                "key": tier.value,
+                "label": tier.value.upper(),
+                "model": model,
+                "provider": provider,
+                "is_default": (model == default_model and provider == default_provider),
+            }
+        )
+    return templates.TemplateResponse(
+        request,
+        "router.html",
+        {
+            "tiers": tiers,
+            "known_models": KNOWN_MODELS,
+            "overridden": overridden,
+            "saved": saved,
+        },
+    )
+
+
+@app.post("/router")
+async def router_save(request: Request):
+    """Simpan peta tier→model. Tiap tier kirim 'tier_<key>' berformat 'provider|model'."""
+    form = await request.form()
+    if (form.get("action") or "") == "reset":
+        await RouterConfigStore(db).reset()
+        log.info("router_map_reset")
+        return RedirectResponse(url="/router?saved=true", status_code=303)
+    mapping: dict[str, dict[str, str]] = {}
+    for tier in Complexity:
+        choice = (form.get(f"tier_{tier.value}") or "").strip()
+        provider, _, model = choice.partition("|")
+        if provider and model:
+            mapping[tier.value] = {"provider": provider, "model": model}
+    result = await RouterConfigStore(db).set_map(mapping)
+    log.info("router_map_saved", **result)
+    return RedirectResponse(url="/router?saved=true", status_code=303)
 
 
 @app.get("/settings", response_class=HTMLResponse)

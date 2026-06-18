@@ -35,6 +35,23 @@ Test untuk `core/router.py` (Inovasi 1 — routing).
 
 ---
 
+### `tests/test_router_config.py`
+
+Test `RouterConfigStore` + `SmartRouter.model_map` (pilih model tiap tier via UI).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_default_map_when_unset` | Tanpa override → peta = `MODELS` default |
+| `test_set_and_get_partial_override` | Override sebagian tier; sisanya tetap default |
+| `test_unknown_provider_rejected` | Provider tak dikenal tidak disimpan |
+| `test_reset_clears_override` | `reset()` → kembali default |
+| `test_corrupt_value_falls_safe_to_default` | JSON korup → fail-safe ke default penuh |
+| `test_partial_entry_missing_model_ignored` | Entry tanpa model diabaikan |
+| `test_router_uses_overridden_model_for_tier` | `decide()` pakai model_map override untuk tier |
+| `test_router_falls_back_to_models_if_tier_missing` | model_map parsial → fallback `MODELS`, tak KeyError |
+
+---
+
 ### `tests/test_fallback.py`
 
 Test untuk `core/llm_client.py` — fallback chain.
@@ -323,6 +340,8 @@ Smoke test untuk endpoints Web UI.
 | `test_skills_page_shows_crystallization_attempt` | Percobaan kristalisasi tampil di `/skills` |
 | `test_conversations_page_renders_empty` | `/conversations` tanpa arsip → 200 + pesan kosong |
 | `test_conversations_page_shows_archived_run` | Percakapan tersimpan tampil dengan pattern/peserta/transkrip |
+| `test_router_page_renders_tiers` | `/router` menampilkan 5 tier + dropdown + tanda default |
+| `test_router_save_then_reflected` | Simpan peta → "Peta kustom aktif"; reset → "memakai peta default" |
 
 ---
 

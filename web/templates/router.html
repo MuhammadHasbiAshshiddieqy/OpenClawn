@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenCLAWN · Settings</title>
+    <title>OpenCLAWN · Router</title>
     <link rel="icon" type="image/png" href="/static/logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -38,11 +38,11 @@
                     <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 3h12v8H6l-3 3V3z"/></svg>
                     Conversations
                 </a>
-                <a href="/router" class="nav-link">
+                <a href="/router" class="nav-link active">
                     <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="3.5" r="1.5"/><circle cx="12.5" cy="12.5" r="1.5"/><path d="M5 8h3l3-4.5M8 8l3 4.5"/></svg>
                     Router
                 </a>
-                <a href="/settings" class="nav-link active">
+                <a href="/settings" class="nav-link">
                     <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
                     Settings
                 </a>
@@ -54,56 +54,51 @@
     <main class="main">
         <div class="topbar">
             <div>
-                <h1>Model Settings</h1>
-                <div class="sub">override model untuk semua query</div>
+                <h1>Router Model Map</h1>
+                <div class="sub">pilih model tiap tier — router tetap memutuskan tier otomatis</div>
             </div>
         </div>
 
         <div class="page">
-            {% if saved %}
-            <p class="saved">Tersimpan.</p>
-            {% endif %}
-
-            <p>
-                Secara default, OpenCLAWN memilih model otomatis per kompleksitas query
-                (router cerdas — Inovasi #1). Override di bawah <strong>memaksa semua query
-                ke satu model</strong> — berguna untuk eksperimen, mis. memakai Gemini saja.
-            </p>
-
-            <div class="card">
-                <form method="post" action="/settings">
-                    <label for="model_choice"><strong>Model aktif</strong></label>
-                    <select name="model_choice" id="model_choice">
-                        <option value="auto" {{ 'selected' if not current else '' }}>
-                            Otomatis (router memilih per kompleksitas) — disarankan
-                        </option>
-                        {% for provider, model, label in known_models %}
-                        <option value="{{ provider }}|{{ model }}"
-                            {{ 'selected' if current and current[0] == provider and current[1] == model else '' }}>
-                            {{ label }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                    <button type="submit" class="btn">Simpan</button>
-                </form>
-            </div>
-
-            <p class="current-status" style="margin-top:16px">
-                {% if current %}
-                Status: override aktif → <code>{{ current[0] }} / {{ current[1] }}</code>.
-                Semua query memakai model ini.
-                {% else %}
-                Status: <strong>mode otomatis</strong>. Router memilih model per query.
-                {% endif %}
-            </p>
-
-            <hr>
+            {% if saved %}<div class="saved">Tersimpan.</div>{% endif %}
             <p class="muted">
-                Catatan: model cloud (Claude/Gemini) butuh API key di <code>.env</code>
-                (<code>ANTHROPIC_API_KEY</code> / <code>GOOGLE_API_KEY</code>). Model lokal
-                (gemma4) butuh Ollama berjalan dan model sudah di-<code>pull</code>.
-                Jika model terpilih tidak tersedia, OpenCLAWN turun ke fallback chain.
+                SmartRouter menilai kompleksitas tiap permintaan lalu memilih <b>tier</b>
+                (TRIVIAL→CRITICAL). Di sini kamu menentukan <b>model</b> untuk tiap tier.
+                Bila model lokal sedang offline, fallback chain otomatis dipakai.
+                {% if overridden %}<br><b>Peta kustom aktif.</b>{% else %}<br>Saat ini memakai peta default.{% endif %}
             </p>
+
+            <form method="post" action="/router">
+                <table>
+                    <thead>
+                        <tr><th>Tier</th><th>Model</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for t in tiers %}
+                        <tr>
+                            <td>
+                                <strong>{{ t.label }}</strong>
+                                {% if t.is_default %}<span class="tag">default</span>{% endif %}
+                            </td>
+                            <td>
+                                <select name="tier_{{ t.key }}">
+                                    {% for prov, model, label in known_models %}
+                                    <option value="{{ prov }}|{{ model }}"
+                                        {{ 'selected' if (prov == t.provider and model == t.model) else '' }}>
+                                        {{ label }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <div class="router-actions">
+                    <button type="submit" class="btn">Simpan peta</button>
+                    <button type="submit" name="action" value="reset" class="btn-ghost">Reset ke default</button>
+                </div>
+            </form>
         </div>
     </main>
 </div>

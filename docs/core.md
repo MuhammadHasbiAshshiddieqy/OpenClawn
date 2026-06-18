@@ -268,7 +268,9 @@ Keputusan routing yang dikembalikan `SmartRouter.decide()`.
 Baca `soul.toml` sekali dan ekstrak `prefer_local` serta `upgrade_keywords`. `threshold_offset` = offset kalibrasi global (loop tertutup #1): negatif → router naik tier lebih cepat, positif → bertahan tier murah lebih lama, `0` → perilaku asli. `AgentLoop` menyetel `router.threshold_offset = await CalibrationStore.get_offset()` sebelum tiap `decide()`.
 
 **`decide(messages, query) → RouteDecision`**  
-Hitung dimensi → skor → label → pilih model. Soul upgrade_keyword menambah +3 ke skor dan **bypass** `prefer_local`. `threshold_offset` kalibrasi selalu berlaku (termasuk saat soul hit).
+Hitung dimensi → skor → label → pilih model. Soul upgrade_keyword menambah +3 ke skor dan **bypass** `prefer_local`. `threshold_offset` kalibrasi selalu berlaku (termasuk saat soul hit). Model untuk tier diambil dari `self.model_map` (default = `MODELS`, bisa di-override per-turn dari `RouterConfigStore`); fallback ke `MODELS` bila tier tak ada di peta override.
+
+**Atribut `model_map`** — peta `tier→(model, provider, cost)` aktif. `AgentLoop` menyetelnya dari `RouterConfigStore.get_map()` sebelum tiap `decide()`. Router tetap memutuskan TIER; peta hanya menentukan MODEL tiap tier.
 
 **`_dimensions(messages, query) → dict`** *(private)*  
 Hitung 8 dimensi dari query dan history:
@@ -300,7 +302,27 @@ Teks penjelasan untuk audit record.
 | COMPLEX | `gemini-2.5-flash` | Gemini |
 | CRITICAL | `gemini-2.5-pro` | Gemini |
 
-> Tier lokal dibedakan **per kapasitas model** — makin sulit case, makin mampu model (gemma4:e4b ringan → deepseek-r1 → qwen3.5:9b paling mampu lokal). Fallback chain mengikuti urutan yang sama. Remap lewat `MODELS` dict + `config.fallback_chain`.
+> Tier lokal dibedakan **per kapasitas model** — makin sulit case, makin mampu model (gemma4:e4b ringan → deepseek-r1 → qwen3.5:9b paling mampu lokal). Fallback chain mengikuti urutan yang sama. `MODELS` adalah **default**; user bisa mengubah peta tier→model lewat `/router` (lihat `RouterConfigStore` di bawah) tanpa menyentuh kode.
+
+---
+
+## `core/router_config.py` — Override Peta Tier→Model
+
+DB-bound (hanya `DatabaseManager`, §1.6). Menyimpan override peta tier→model sebagai satu key JSON di `app_settings` (`router_model_map`). Router tetap memutuskan TIER; store ini menentukan MODEL tiap tier. Dibaca `AgentLoop` per-turn → di-set ke `router.model_map` (pola sama `threshold_offset`).
+
+### Kelas: `RouterConfigStore`
+
+**`get_map() → dict[Complexity, tuple]`** *(async)*  
+Peta aktif. Tanpa override / korup / parsial → fail-safe ke `MODELS` penuh (router tak pernah kehilangan tier).
+
+**`set_map(mapping) → dict`** *(async)*  
+Simpan override. `mapping`: `{tier_value: {model, provider}}`. Hanya tier valid + provider dikenal (`ollama`/`gemini`/`anthropic`) yang disimpan.
+
+**`reset()`** *(async)* — hapus override, kembali ke default `MODELS`.
+
+**`is_overridden() → bool`** *(async)* — apakah ada peta kustom aktif.
+
+> Model offline saat dipakai → ditangani `fallback_chain` yang sudah ada (tak ada validasi saat simpan).
 
 ---
 

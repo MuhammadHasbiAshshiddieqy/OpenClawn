@@ -735,6 +735,10 @@ tr.active-row td { background: rgba(80,200,120,.07); }
 .archive-msg.archive-user { border-left-color: var(--purple-bright); background: var(--panel-2); }
 .archive-role { font-size: .68rem; font-weight: 700; letter-spacing: .06em; color: var(--text-dim); margin-bottom: 4px; }
 .archive-text { font-size: .9rem; white-space: pre-wrap; color: var(--text); }
+
+/* Editor peta tier→model (/router) */
+.router-actions { display: flex; gap: 12px; align-items: center; margin-top: 16px; }
+.page td select { width: 100%; max-width: 360px; margin-bottom: 0; }
 .skills-table .role-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .skills-table tr.is-archived td { opacity: .55; }
 tr.near-archive td { background: rgba(240,196,90,.06); }
