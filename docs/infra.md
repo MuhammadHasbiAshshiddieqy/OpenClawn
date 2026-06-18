@@ -110,10 +110,17 @@ Tutup koneksi. Dipanggil saat shutdown.
 ### Fungsi: `setup_logging() → None`
 Konfigurasi `structlog` dengan JSON renderer. Dipanggil **sekali** saat startup aplikasi di `lifespan`. Output berupa JSON satu baris per event yang mudah di-parse oleh log aggregator.
 
-Processor yang diaktifkan:
+Processor yang diaktifkan (urut):
 - `add_log_level` — tambah field `level`
 - `TimeStamper(fmt="iso")` — tambah timestamp ISO 8601
+- `scrub_secrets` — **redact secret** sebelum render (§1.2 defense-in-depth)
 - `JSONRenderer()` — render ke JSON
+
+### Fungsi: `scrub_secrets(logger, method_name, event_dict) → dict`
+Processor structlog yang me-redact secret SEBELUM di-render JSON, sebagai lapisan terakhir di atas `Vault` (yang menjaga credential keluar dari prompt). Bukan izin untuk log secret — tetap jangan log nilai vault.
+- Field dengan nama mengandung `api_key`/`token`/`secret`/`password`/`authorization` → nilai di-`[REDACTED]` penuh.
+- Nilai string berpola secret (`sk-…`, `Bearer …`, `ghp_…`, AWS/Google/Slack key) → bagian yang cocok di-redact.
+- Fail-soft: error saat scrub tidak menjatuhkan logging.
 
 ### Variabel: `log`
 Logger structlog siap pakai. Di-import di semua modul yang butuh logging:
