@@ -183,8 +183,27 @@ Key-value sederhana untuk setting yang bisa diubah lewat `/settings` tanpa resta
 Key yang dipakai saat ini:
 - `model_override_provider` — provider override (`ollama`/`anthropic`/`gemini`)
 - `model_override_model` — nama model override
+- `router_threshold_offset` — offset threshold kalibrasi (int), dibaca `SmartRouter` tiap turn
 
-Override dianggap aktif hanya jika **kedua** key terisi. Menghapus salah satu (set kosong) mengembalikan ke mode router otomatis.
+Override model dianggap aktif hanya jika **kedua** key model terisi. Menghapus salah satu (set kosong) mengembalikan ke mode router otomatis.
+
+---
+
+### `calibration_log` — Jejak Kalibrasi Router (Inovasi 1, loop tertutup)
+
+Audit setiap kali offset threshold router digeser dari rekomendasi kalibrasi. Dikelola `CalibrationStore` ([core.md](core.md)). Menutup loop: audit → rekomendasi → **apply** (tercatat di sini) → revert.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `old_offset` | INTEGER | Offset sebelum apply (juga target saat revert) |
+| `new_offset` | INTEGER | Offset sesudah apply |
+| `reason` | TEXT | Ringkasan rekomendasi pemicu (mis. `simple/under_provisioned`) |
+| `source` | TEXT | `calibration` \| `revert` \| `manual` |
+| `active` | INTEGER | `1` = state aktif terakhir; `0` = sudah digantikan/di-revert |
+| `created_at` | TIMESTAMP | — |
+
+**Index:** `idx_calibration_active` pada `(active)` — cari baris aktif cepat. Invarian: tepat satu baris `active=1` setelah apply/revert pertama.
 
 ---
 

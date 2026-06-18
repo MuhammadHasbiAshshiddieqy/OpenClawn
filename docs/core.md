@@ -255,11 +255,11 @@ Keputusan routing yang dikembalikan `SmartRouter.decide()`.
 
 ### Kelas: `SmartRouter`
 
-**`__init__(role, soul_path=None)`**  
-Baca `soul.toml` sekali dan ekstrak `prefer_local` serta `upgrade_keywords`.
+**`__init__(role, soul_path=None, threshold_offset=0)`**  
+Baca `soul.toml` sekali dan ekstrak `prefer_local` serta `upgrade_keywords`. `threshold_offset` = offset kalibrasi global (loop tertutup #1): negatif → router naik tier lebih cepat, positif → bertahan tier murah lebih lama, `0` → perilaku asli. `AgentLoop` menyetel `router.threshold_offset = await CalibrationStore.get_offset()` sebelum tiap `decide()`.
 
 **`decide(messages, query) → RouteDecision`**  
-Hitung dimensi → skor → label → pilih model. Soul upgrade_keyword menambah +3 ke skor dan **bypass** `prefer_local`.
+Hitung dimensi → skor → label → pilih model. Soul upgrade_keyword menambah +3 ke skor dan **bypass** `prefer_local`. `threshold_offset` kalibrasi selalu berlaku (termasuk saat soul hit).
 
 **`_dimensions(messages, query) → dict`** *(private)*  
 Hitung 8 dimensi dari query dan history:
@@ -276,7 +276,7 @@ Hitung 8 dimensi dari query dan history:
 Konversi dimensi ke skor numerik.
 
 **`_label(score, threshold_shift) → Complexity`** *(private)*  
-Map skor ke label. `threshold_shift = 1` jika `prefer_local=True` (threshold naik → lebih lama di Ollama).
+Map skor ke label. `threshold_shift` menggabungkan `prefer_local` (+1, lebih lama di Ollama) dan `threshold_offset` kalibrasi.
 
 **`_explain(complexity, soul_hit) → str`** *(private)*  
 Teks penjelasan untuk audit record.
@@ -385,6 +385,9 @@ Rakit messages dengan urutan:
 2. History turns (dari terbaru, potong jika budget habis, maks 20 turns)
 3. User message baru
 
+**`estimate_context_tokens(messages) → int`**  
+Estimasi token total context window (prompt-side) dengan heuristik yang sama dengan trimming. Dipakai `AgentLoop` untuk memancarkan meter budget token (§1.4) di event `usage` (`context_tokens` + `max_context_tokens`), dirender frontend sebagai bar yang menguning/memerah saat mendekati batas.
+
 **`_build_system(soul, memory) → str`** *(private)*  
 Gabungkan soul prompt dengan memory yang relevan:
 - `## State` dari L1 (max 20 item)
@@ -396,7 +399,7 @@ Gabungkan soul prompt dengan memory yang relevan:
 
 ## `core/calibration.py` — Inovasi 1 (lanjutan)
 
-Menerjemahkan data audit menjadi rekomendasi threshold yang bisa dibaca manusia. **Tidak auto-apply** — setiap perubahan router adalah keputusan manusia.
+Dua bagian: `RoutingCalibrator` (advisor MURNI, tanpa DB) menerjemahkan data audit menjadi rekomendasi; `CalibrationStore` (DB-bound) menutup loop dengan menyimpan offset threshold aktif + jejak audit. **Apply tetap keputusan manusia** (tombol di `/metrics`) — bukan auto-apply.
 
 ### Konstanta
 
@@ -406,6 +409,8 @@ Menerjemahkan data audit menjadi rekomendasi threshold yang bisa dibaca manusia.
 | `HIGH_CORRECTION_RATE` | `20.0` | % koreksi → under-provisioned |
 | `LOW_CORRECTION_RATE` | `5.0` | % koreksi → over-provisioned (khusus label cloud) |
 | `CLOUD_LABELS` | `{"complex", "critical"}` | Label yang pakai Claude (berbiaya) |
+| `ROUTER_OFFSET_KEY` | `"router_threshold_offset"` | Key di `app_settings` tempat offset aktif disimpan (dibaca `SmartRouter`) |
+| `OFFSET_MIN`, `OFFSET_MAX` | `-3`, `3` | Batas offset agar kalibrasi tak pernah ekstrem |
 
 ### Dataclass: `Recommendation`
 
@@ -416,6 +421,7 @@ Menerjemahkan data audit menjadi rekomendasi threshold yang bisa dibaca manusia.
 | `correction_rate` | Correction rate (%) label ini |
 | `sample_size` | Jumlah sampel yang dianalisis |
 | `suggestion` | Teks saran yang bisa dibaca manusia |
+| `offset_delta` | Arah geser offset disarankan: `-1` (under, naik tier lebih cepat) atau `+1` (over, bertahan murah) |
 
 ### Kelas: `RoutingCalibrator`
 
@@ -436,9 +442,11 @@ Return dict siap-tampil untuk endpoint `/metrics`:
 {
   "total_events": 42,
   "has_enough_data": true,
+  "net_offset_delta": -1,
   "recommendations": [...]
 }
 ```
+`net_offset_delta` = arah geser global (jumlah `offset_delta` semua saran, dijepit ke `{-1,0,+1}`). Frontend memakainya untuk tombol Apply satu-klik; `0` artinya saran saling meniadakan.
 
 **`_suggest_upgrade(label) → str`** *(private)*  
 Teks saran untuk label under-provisioned: arahkan ke tier di atasnya.
@@ -448,3 +456,19 @@ Teks saran untuk label cloud over-provisioned: turun ke tier lebih murah.
 
 **`_neighbor(label, direction) → str | None`** *(private)*  
 Kembalikan label sebelum/sesudah dalam `COMPLEXITY_ORDER`, atau `None` jika sudah di ujung.
+
+### Kelas: `CalibrationStore`
+
+DB-bound (hanya bergantung `DatabaseManager`, §1.6). Mengelola offset threshold aktif + jejak audit untuk loop tertutup. Offset aktif disimpan di `app_settings[ROUTER_OFFSET_KEY]` dan dibaca `SmartRouter` setiap turn (`AgentLoop` set `router.threshold_offset` sebelum `decide()`).
+
+**`get_offset() → int`** *(async)*  
+Offset aktif (default `0` = router asli). Fail-safe ke `0` bila nilai korup — tidak pernah meng-crash router.
+
+**`apply(delta, reason, source="calibration") → dict`** *(async)*  
+Geser offset sebesar `delta` (dijepit ke `[OFFSET_MIN, OFFSET_MAX]`), nonaktifkan baris audit aktif sebelumnya, tulis baris baru `active=1` ke `calibration_log`, update `app_settings`. Return `{old_offset, new_offset, changed}`.
+
+**`revert() → dict`** *(async)*  
+Kembalikan offset ke `old_offset` dari baris aktif terakhir; catat baris `source='revert'`. No-op bila tak ada riwayat. Audit lama tetap utuh (tidak dihapus).
+
+**`history(limit=20) → list[dict]`** *(async)*  
+Riwayat perubahan offset terbaru-dulu untuk ditampilkan di `/metrics`.

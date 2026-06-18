@@ -73,3 +73,63 @@ def test_approvals_empty(client):
     resp = client.get("/approvals")
     assert resp.status_code == 200
     assert resp.json() == {"pending": []}
+
+
+def test_metrics_shows_active_offset(client):
+    """/metrics menampilkan offset threshold aktif (loop tertutup #1)."""
+    html = client.get("/metrics").text
+    assert "Offset threshold aktif" in html
+
+
+def test_calibration_apply_then_revert_roundtrip(client):
+    """Apply menggeser offset (tercermin di /metrics), revert mengembalikannya."""
+    # Apply -1: redirect ke /metrics (TestClient mengikuti redirect → 200).
+    resp = client.post("/calibration/apply", data={"delta": "-1", "reason": "uji"})
+    assert resp.status_code == 200
+    # Offset aktif kini -1 → pill menampilkan tanda & teks "naik tier lebih cepat".
+    assert "naik tier lebih cepat" in resp.text
+    assert "Riwayat Kalibrasi" in resp.text  # baris audit muncul
+
+    # Revert: kembali ke 0 → teks "belum dikalibrasi".
+    resp = client.post("/calibration/revert")
+    assert resp.status_code == 200
+    assert "belum dikalibrasi" in resp.text
+
+
+def test_calibration_apply_zero_delta_is_noop(client):
+    """delta=0 tidak mengubah offset, tetap redirect 200 tanpa baris audit."""
+    resp = client.post("/calibration/apply", data={"delta": "0"})
+    assert resp.status_code == 200
+    assert "belum dikalibrasi" in resp.text
+
+
+def test_skills_page_renders_empty(client):
+    """/skills tanpa skill harus render 200 + pesan kosong + count chip nol."""
+    resp = client.get("/skills")
+    assert resp.status_code == 200
+    assert "Skill Decay" in resp.text
+    assert "Belum ada skill" in resp.text
+
+
+def test_skills_page_shows_seeded_skill(client, tmp_path, monkeypatch):
+    """Skill di DB muncul di tabel dengan status & nama. Verifikasi wiring read.
+
+    Seed lewat koneksi sqlite3 sinkron langsung ke file DB (path dari env), agar
+    tidak bentrok dengan event loop milik TestClient.
+    """
+    import os
+    import sqlite3
+
+    db_file = os.environ["OPENCLAWN_DB"]
+    conn = sqlite3.connect(db_file)
+    conn.execute(
+        """INSERT INTO skills (role, skill_name, skill_content, status,
+           confidence, use_count, decay_score, last_used_at)
+           VALUES ('dev', 'parse_csv', 'isi', 'active', 4.0, 3, 0.9, datetime('now'))"""
+    )
+    conn.commit()
+    conn.close()
+
+    html = client.get("/skills").text
+    assert "parse_csv" in html
+    assert "status-active" in html

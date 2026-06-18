@@ -207,3 +207,30 @@ async def test_no_override_uses_router(db, monkeypatch):
 
     # Query "hi" sangat pendek → router pilih tier lokal (ollama), bukan gemini.
     assert seen["provider"] == "ollama"
+
+
+@pytest.mark.asyncio
+async def test_usage_event_carries_token_budget(db):
+    """AgentLoop memancarkan event usage berisi context_tokens & max_context_tokens.
+
+    Token budget meter (§1.4) bergantung pada field ini — verifikasi wiring end-to-end.
+    """
+    from core.agent_loop import AgentLoop, AgentConfig
+
+    agent = AgentLoop(AgentConfig(role="pm", session_id="s-budget"), db=db)
+
+    async def fake_stream(provider, model, messages, tools=None, max_tokens=4096):
+        yield LLMChunk(type="text", text="jawaban")
+
+    agent.llm.stream_with_fallback = fake_stream
+
+    usage = None
+    async for ev in agent.run("halo dunia"):
+        if ev.type == "usage":
+            usage = ev.usage
+
+    assert usage is not None
+    assert "context_tokens" in usage and usage["context_tokens"] > 0
+    assert usage["max_context_tokens"] == agent.config.max_context_tokens
+    # Context tak boleh melebihi batas (compactor menjaga ini).
+    assert usage["context_tokens"] <= usage["max_context_tokens"]

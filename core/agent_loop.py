@@ -10,6 +10,7 @@ from infra.logging import log
 from infra.settings import SettingsStore
 from core.router import SmartRouter
 from core.audit import RoutingAuditor
+from core.calibration import CalibrationStore
 from core.compactor import ContextCompactor
 from core.crystallizer import ConfidenceCrystallizer
 from core.llm_client import LLMClient
@@ -101,6 +102,9 @@ class AgentLoop:
         self.decay = SkillDecayManager(agent_cfg.role, db, config)
         self.router = SmartRouter(role=agent_cfg.role)
         self.auditor = RoutingAuditor(db)
+        # Loop tertutup #1: offset threshold hasil kalibrasi dibaca dari DB tiap turn
+        # (async), lalu di-set ke router sebelum decide(). Default 0 = router asli.
+        self.calibration = CalibrationStore(db)
         self.compactor = ContextCompactor(config.max_context_tokens)
         self.crystallizer = ConfidenceCrystallizer(agent_cfg.role, self.llm, db)
         # ApprovalGate & QuestionGate di-inject dari Web UI agar resolve() mengenai
@@ -149,8 +153,12 @@ class AgentLoop:
             history=self.history,
             user_message=user_message,
         )
+        # Token-first (§1.4): ukur context window terpakai untuk meter budget di UI.
+        context_tokens = self.compactor.estimate_context_tokens(messages)
 
         # 5. Route (soul-aware) + log [#1]
+        # Terapkan offset kalibrasi terbaru sebelum memutuskan (loop tertutup #1).
+        self.router.threshold_offset = await self.calibration.get_offset()
         route = self.router.decide(messages, user_message)
         # Override model dari /settings: pilihan sadar user untuk memaksa 1 model
         # (mis. Gemini) melewati keputusan otomatis. Audit tetap mencatat keputusan
@@ -183,6 +191,8 @@ class AgentLoop:
         await self.auditor.finalize(event_id, turn)
 
         # Ringkasan biaya turn → UI (conversation mengagregasi lintas-giliran).
+        # context_tokens + max → meter budget token-first (§1.4); peringatan saat
+        # mendekati batas dirender frontend dari rasio ini.
         yield AgentEvent(
             type="usage",
             usage={
@@ -191,6 +201,8 @@ class AgentLoop:
                 "cost_usd": turn.cost_usd,
                 "latency_ms": turn.latency_ms,
                 "model": turn.model_used,
+                "context_tokens": context_tokens,
+                "max_context_tokens": self.config.max_context_tokens,
             },
         )
 

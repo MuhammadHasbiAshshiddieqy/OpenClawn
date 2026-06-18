@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCLAWN · Skills</title>
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+    <aside class="sidebar">
+        <div class="brand">
+            <img src="/static/logo.png" alt="OpenCLAWN">
+            <div>
+                <div class="name">Open<b>CLAWN</b></div>
+                <div class="tag">playful · sharp</div>
+            </div>
+        </div>
+        <div>
+            <div class="side-label">Workspace</div>
+            <nav class="nav-links">
+                <a href="/" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v7a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm4 8v2m4-2v2M0 4h16"/></svg>
+                    Chat
+                </a>
+                <a href="/metrics" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="9" width="3" height="6" rx=".5"/><rect x="6.5" y="5" width="3" height="10" rx=".5"/><rect x="12" y="1" width="3" height="14" rx=".5"/></svg>
+                    Metrics
+                </a>
+                <a href="/skills" class="nav-link active">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3-6 3-6-3 6-3z"/><path d="M2 8l6 3 6-3M2 11.5l6 3 6-3"/></svg>
+                    Skills
+                </a>
+                <a href="/settings" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
+                    Settings
+                </a>
+            </nav>
+        </div>
+        <div class="spacer"></div>
+    </aside>
+
+    <main class="main">
+        <div class="topbar">
+            <div>
+                <h1>Skill Decay</h1>
+                <div class="sub">skill memudar eksponensial (base {{ decay_base }}) — Inovasi #2</div>
+            </div>
+        </div>
+
+        <div class="page">
+            <div class="skill-counts">
+                <div class="count-chip active">
+                    <span class="num">{{ counts.active }}</span> active
+                </div>
+                <div class="count-chip draft">
+                    <span class="num">{{ counts.draft }}</span> draft
+                </div>
+                <div class="count-chip archived">
+                    <span class="num">{{ counts.archived }}</span> archived
+                </div>
+                <span class="muted">
+                    Skor di bawah {{ threshold }} ({{ threshold_pct }}%) → diarsipkan; dipakai lagi → revive.
+                </span>
+            </div>
+
+            {% if not skills %}
+            <p class="muted">Belum ada skill terkristalisasi. Skill lahir saat agent menilai solusinya layak disimpan (Inovasi #3).</p>
+            {% else %}
+            <table class="skills-table">
+                <thead>
+                    <tr>
+                        <th>Skill</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Decay (terproyeksi)</th>
+                        <th>Idle</th>
+                        <th>Dipakai</th>
+                        <th>Confidence</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in skills %}
+                    <tr class="{{ 'near-archive' if s.near_archive else '' }} {{ 'is-archived' if s.status == 'archived' else '' }}">
+                        <td><strong>{{ s.skill_name }}</strong></td>
+                        <td><span class="role-dot role-{{ s.role }}"></span>{{ s.role }}</td>
+                        <td><span class="tag status-{{ s.status }}">{{ s.status }}</span></td>
+                        <td>
+                            <div class="decay-track" title="skor {{ s.projected_score }} (ambang arsip {{ threshold }})">
+                                <div class="decay-threshold" style="left: {{ threshold_pct }}%"></div>
+                                <div class="decay-fill {{ 'low' if s.near_archive else '' }}" style="width: {{ s.score_pct }}%"></div>
+                            </div>
+                            <span class="decay-num">{{ s.score_pct }}%</span>
+                        </td>
+                        <td class="muted">{{ s.days_idle }}h</td>
+                        <td>{{ s.use_count }}</td>
+                        <td class="muted">{{ '%.1f'|format(s.confidence or 0) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </div>
+    </main>
+</div>
+</body>
+</html>

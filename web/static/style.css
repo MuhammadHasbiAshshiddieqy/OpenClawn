@@ -618,6 +618,16 @@ body.mode-convo .role-group .role-link.active .dot {
 .send-btn:disabled { opacity: .45; cursor: default; }
 .composer-hint { max-width: 760px; margin: 7px auto 0; font-size: .72rem; color: var(--text-faint); text-align: center; }
 
+/* Token budget meter (§1.4) — context terpakai turn terakhir vs batas */
+.composer-foot { display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap; }
+.composer-foot .composer-hint { margin-top: 7px; }
+.budget-meter { display: inline-flex; align-items: center; gap: 8px; margin-top: 7px; }
+.budget-track { width: 96px; height: 5px; background: var(--bg-2); border-radius: 999px; overflow: hidden; }
+.budget-fill { height: 100%; width: 0; background: var(--grad-claw); border-radius: 999px; transition: width .3s, background .3s; }
+.budget-fill.warn { background: linear-gradient(90deg, #e0a93c, #f0c45a); }
+.budget-fill.crit { background: linear-gradient(90deg, #ec1e4b, #ff6b8a); }
+.budget-label { font-size: .7rem; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
 /* ── Content page (metrics / settings) ─────────────────────────────────── */
 
 .page {
@@ -657,6 +667,68 @@ tr.warn td { background: rgba(236,30,75,.08); }
 .tag { display: inline-block; font-size: .68rem; padding: 2px 9px; border-radius: 999px; background: var(--purple-deep); color: #fff; margin-left: 6px; letter-spacing: .04em; }
 .rec p { margin-top: 6px; margin-bottom: 0; }
 ul { list-style: none; }
+
+/* Calibration loop tertutup #1: offset aktif + apply/revert + riwayat */
+.offset-bar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 14px; margin-bottom: 16px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.offset-pill {
+    font-weight: 700; font-size: .9rem; padding: 3px 12px; border-radius: 999px;
+    background: var(--grad-brand); color: #fff; letter-spacing: .02em;
+}
+.offset-pill.zero { background: var(--border-2); color: var(--text-dim); }
+.inline-form { display: inline-flex; align-items: center; gap: 10px; margin: 0; }
+.apply-form { margin-top: 12px; }
+.btn-primary {
+    background: var(--grad-brand); color: #fff; border: none;
+    border-radius: var(--radius-sm); padding: 9px 18px;
+    cursor: pointer; font-size: .88rem; font-weight: 600;
+    box-shadow: 0 6px 18px -8px rgba(124,58,237,.8);
+    transition: filter .12s, transform .12s;
+}
+.btn-primary:hover { filter: brightness(1.1); transform: translateY(-1px); }
+.btn-ghost {
+    background: transparent; color: var(--text-dim);
+    border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+    padding: 6px 14px; cursor: pointer; font-size: .82rem; font-weight: 500;
+    transition: color .12s, border-color .12s;
+}
+.btn-ghost:hover { color: var(--text); border-color: var(--purple-bright); }
+.tag.active { background: var(--green); }
+tr.active-row td { background: rgba(80,200,120,.07); }
+
+/* Skill decay visualizer (Inovasi #2) */
+.skill-counts { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.count-chip {
+    display: inline-flex; align-items: baseline; gap: 6px;
+    padding: 8px 16px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); background: var(--panel);
+    font-size: .82rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em;
+}
+.count-chip .num { font-size: 1.3rem; font-weight: 800; color: var(--text); }
+.count-chip.active { border-color: var(--green-deep); }
+.count-chip.active .num { color: var(--green); }
+.count-chip.draft { border-color: #4a3c1c; }
+.count-chip.draft .num { color: #f0c45a; }
+.count-chip.archived .num { color: var(--text-faint); }
+.tag.status-active { background: var(--green-deep); }
+.tag.status-draft { background: #8a6d1f; }
+.tag.status-archived { background: var(--border-2); color: var(--text-dim); }
+.skills-table .role-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.skills-table tr.is-archived td { opacity: .55; }
+tr.near-archive td { background: rgba(240,196,90,.06); }
+/* Decay bar: ambang arsip ditandai garis, fill mengecil saat skor turun */
+.decay-track {
+    position: relative; display: inline-block; width: 140px; height: 8px;
+    background: var(--bg-2); border-radius: 999px; overflow: hidden; vertical-align: middle;
+}
+.decay-fill { height: 100%; border-radius: 999px; background: var(--grad-claw); transition: width .3s; }
+.decay-fill.low { background: linear-gradient(90deg, #f0c45a, #ec1e4b); }
+.decay-threshold { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text-faint); z-index: 2; }
+.decay-num { margin-left: 8px; font-size: .8rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
 /* Forms */
 label { display: block; margin-bottom: 8px; font-size: .9rem; }

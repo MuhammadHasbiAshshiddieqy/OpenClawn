@@ -300,7 +300,17 @@ class ConversationOrchestrator:
         """Yield ConversationEvent. Tiap giliran = AgentLoop.run() penuh."""
         state = ConversationState(transcript=[("user", initial_message)])
         # Akumulasi biaya lintas-giliran → ditampilkan di akhir percakapan.
-        totals = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "latency_ms": 0, "turns": 0}
+        # context: PEAK (bukan jumlah) — tiap giliran context window independen,
+        # menjumlahkan tak bermakna; yang penting giliran terberat vs batas.
+        totals = {
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "cost_usd": 0.0,
+            "latency_ms": 0,
+            "turns": 0,
+            "peak_context_tokens": 0,
+            "max_context_tokens": self.config.max_context_tokens,
+        }
 
         while state.turn_index < self.config.max_conversation_turns:
             if await self.control.is_stopped():
@@ -334,6 +344,9 @@ class ConversationOrchestrator:
                     totals["tokens_out"] += ev.usage.get("tokens_out", 0)
                     totals["cost_usd"] += ev.usage.get("cost_usd", 0.0)
                     totals["latency_ms"] += ev.usage.get("latency_ms", 0)
+                    totals["peak_context_tokens"] = max(
+                        totals["peak_context_tokens"], ev.usage.get("context_tokens", 0)
+                    )
                     totals["turns"] += 1
                     continue
                 if ev.type == "token":

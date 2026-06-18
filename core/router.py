@@ -67,12 +67,17 @@ class SmartRouter:
     ]
     URGENCY_KW = ["urgent", "segera", "deadline", "asap", "penting"]
 
-    def __init__(self, role: str, soul_path: str | None = None):
+    def __init__(self, role: str, soul_path: str | None = None, threshold_offset: int = 0):
         self.role = role
         soul = self._load_soul(role, soul_path)
         routing_cfg = soul.get("routing", {})
         self.prefer_local: bool = routing_cfg.get("prefer_local", False)
         self.soul_upgrade_kw: list[str] = routing_cfg.get("upgrade_keywords", [])
+        # Audit #1 (loop tertutup): offset global hasil kalibrasi. Negatif = router
+        # naik tier lebih cepat (perbaiki under-provisioning); positif = bertahan di
+        # tier murah lebih lama (perbaiki over-provisioning). Default 0 = router asli.
+        # Diterapkan di _label() bersama threshold_shift dari prefer_local.
+        self.threshold_offset: int = threshold_offset
 
     def _load_soul(self, role: str, soul_path: str | None) -> dict:
         path = soul_path or f"roles/{role}/soul.toml"
@@ -93,6 +98,9 @@ class SmartRouter:
 
         # prefer_local menaikkan threshold, tapi tidak berlaku saat soul override aktif
         threshold_shift = (1 if self.prefer_local else 0) if not soul_hit else 0
+        # Offset kalibrasi selalu berlaku (bahkan saat soul hit) — ia menyetel
+        # perilaku router secara global berdasar bukti correction-rate, bukan keyword.
+        threshold_shift += self.threshold_offset
 
         complexity = self._label(score, threshold_shift)
         model, provider, cost = self.MODELS[complexity]

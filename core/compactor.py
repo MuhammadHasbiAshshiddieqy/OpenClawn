@@ -33,6 +33,14 @@ class ContextCompactor:
         messages.append({"role": "user", "content": user_message})
         return messages
 
+    def estimate_context_tokens(self, messages: list[dict]) -> int:
+        """Estimasi token total context window yang dikirim ke LLM (prompt-side).
+
+        Token-first (§1.4): dipakai untuk meter budget di UI agar target < max_tokens
+        terukur, bukan ditebak. Heuristik sama dengan trimming agar konsisten.
+        """
+        return sum(_estimate_tokens(m.get("content", "")) for m in messages)
+
     def _build_system(self, soul: str, memory: dict) -> str:
         parts = [soul]
 

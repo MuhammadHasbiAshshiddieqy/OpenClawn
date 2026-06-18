@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
-from core.calibration import RoutingCalibrator
+from core.calibration import CalibrationStore, RoutingCalibrator
 from core.conversation import (
     ConversationControl,
     ConversationOrchestrator,
@@ -125,6 +125,9 @@ async def chat_stream(request: Request):
                 elif event.type == "status":
                     payload = json.dumps({"text": event.text, "detail": event.detail})
                     yield f"event: status\ndata: {payload}\n\n"
+                elif event.type == "usage":
+                    # Ringkasan turn termasuk meter budget token (context vs max, §1.4).
+                    yield f"event: usage\ndata: {json.dumps(event.usage)}\n\n"
         except Exception as exc:  # noqa: BLE001 — laporkan ke UI, jangan diam saat macet
             log.error("chat_stream_failed", session=session_id, error=str(exc))
             msg = json.dumps({"text": str(exc)})
@@ -269,12 +272,94 @@ async def answer(request: Request):
 @app.get("/metrics", response_class=HTMLResponse)
 async def metrics(request: Request):
     report = await RoutingAuditor(db).calibration_report()
-    # Sprint 4: tampilkan rekomendasi tuning (saran saja, tidak auto-apply ke router)
+    # Rekomendasi tuning (saran); apply tetap keputusan manusia via tombol di bawah.
     calibration = RoutingCalibrator().summary(report)
+    store = CalibrationStore(db)
+    calibration["current_offset"] = await store.get_offset()
+    calibration["history"] = await store.history()
     return templates.TemplateResponse(
         request,
         "metrics.html",
         {"report": report, "calibration": calibration},
+    )
+
+
+@app.post("/calibration/apply")
+async def calibration_apply(request: Request):
+    """Terapkan rekomendasi kalibrasi: geser offset threshold router + catat audit.
+
+    Loop tertutup #1: ini satu-satunya jalur yang mengubah perilaku router dari data.
+    Tetap dipicu manusia (bukan auto-apply, §8). delta dibatasi {-1,0,+1} per klik.
+    """
+    form = await request.form()
+    try:
+        delta = int(form.get("delta") or 0)
+    except (ValueError, TypeError):
+        delta = 0
+    delta = max(-1, min(1, delta))  # satu langkah per apply
+    if delta == 0:
+        return RedirectResponse(url="/metrics", status_code=303)
+    reason = (form.get("reason") or "kalibrasi dari /metrics").strip()
+    result = await CalibrationStore(db).apply(delta, reason, source="calibration")
+    log.info("calibration_applied", **result, reason=reason)
+    return RedirectResponse(url="/metrics", status_code=303)
+
+
+@app.post("/calibration/revert")
+async def calibration_revert(request: Request):
+    """Batalkan kalibrasi aktif terakhir, kembalikan offset ke state sebelumnya."""
+    result = await CalibrationStore(db).revert()
+    log.info("calibration_reverted", **result)
+    return RedirectResponse(url="/metrics", status_code=303)
+
+
+@app.get("/skills", response_class=HTMLResponse)
+async def skills_page(request: Request):
+    """Visualisasi Inovasi 2: skill active/draft/archived + skor decay terproyeksi.
+
+    decay_score di DB hanya diperbarui saat decay pass (throttle 1 jam), jadi bisa
+    sedikit stale. Untuk tampilan kita HITUNG skor terproyeksi (read-only) dengan
+    formula yang sama (base ^ hari sejak dipakai) agar kurva mencerminkan keadaan kini.
+    """
+    rows = await db.fetchall(
+        """SELECT role, skill_name, status, confidence, generator_model,
+                  use_count, last_used_at, decay_score, created_at,
+                  julianday('now') - julianday(COALESCE(last_used_at, created_at)) AS days_idle
+           FROM skills
+           ORDER BY status='archived', role, decay_score DESC, skill_name"""
+    )
+    base = CONFIG.skill_decay_base
+    threshold = CONFIG.skill_archive_threshold
+    skills = []
+    counts = {"active": 0, "draft": 0, "archived": 0}
+    for r in rows:
+        days = max(0.0, r["days_idle"] or 0.0)
+        # Proyeksi skor saat ini; arsip tetap pakai skor tersimpan (sudah final).
+        if r["status"] == "active":
+            projected = (r["decay_score"] or 0.0) * (base**days)
+        else:
+            projected = r["decay_score"] or 0.0
+        projected = max(0.0, min(1.0, projected))
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+        skills.append(
+            {
+                **r,
+                "days_idle": round(days, 1),
+                "projected_score": round(projected, 3),
+                "score_pct": round(projected * 100),
+                "near_archive": r["status"] == "active" and projected < threshold * 1.5,
+            }
+        )
+    return templates.TemplateResponse(
+        request,
+        "skills.html",
+        {
+            "skills": skills,
+            "counts": counts,
+            "threshold": threshold,
+            "threshold_pct": round(threshold * 100),
+            "decay_base": base,
+        },
     )
 
 

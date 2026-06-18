@@ -207,6 +207,11 @@ Test untuk `tools/`.
 | `test_file_write_requires_approval` | `FileWriteTool.requires_approval == True` |
 | `test_file_read_no_approval_needed` | `FileReadTool.requires_approval == False` |
 | `test_approval_called_for_destructive_tool` | Tool destruktif memanggil `ApprovalGate.request()` |
+| `test_run_python_argv_enforces_security_flags` | argv **nyata** `run_python` memuat `--network none`, `--read-only`, non-root, `no-new-privileges`; semua mount `:ro` |
+| `test_run_shell_argv_enforces_security_flags` | argv **nyata** `run_shell` menegakkan flag keamanan yang sama + workspace mount read-only |
+| `test_run_python_fails_safe_when_docker_absent` | Docker absen → `SandboxUnavailable`, bukan eksekusi di host (keamanan #1) |
+| `test_run_shell_fails_safe_when_docker_absent` | Sama untuk `run_shell` |
+| `test_base_docker_args_contains_every_required_flag` | `_base_docker_args` (sumber argv tunggal) memuat semua `_REQUIRED_FLAGS` |
 
 ---
 
@@ -221,6 +226,19 @@ Test untuk `core/calibration.py`.
 | `test_small_sample_ignored` | N < min_sample → tidak ada rekomendasi |
 | `test_summary_has_required_keys` | `summary()` punya `total_events`, `has_enough_data`, `recommendations` |
 | `test_no_recommendations_for_healthy_routing` | Routing sehat → list rekomendasi kosong |
+| `test_under_provisioned_suggests_negative_offset` | Under → `offset_delta == -1` |
+| `test_over_provisioned_suggests_positive_offset` | Over → `offset_delta == +1` |
+| `test_summary_net_offset_clamped_to_one_step` | Banyak saran searah → `net_offset_delta` dijepit ke satu langkah |
+| `test_summary_net_offset_zero_when_conflicting` | Saran berlawanan → `net_offset_delta == 0` |
+| `test_offset_defaults_to_zero` | `CalibrationStore.get_offset()` default 0 |
+| `test_apply_shifts_offset_and_logs_audit` | apply geser offset + tulis `app_settings` + baris audit aktif |
+| `test_apply_clamped_to_bounds` | Offset dijepit ke `[OFFSET_MIN, OFFSET_MAX]` |
+| `test_revert_restores_previous_offset` | revert kembalikan offset + baris `source='revert'` |
+| `test_revert_noop_when_no_history` | revert tanpa riwayat → no-op, tak crash |
+| `test_only_one_active_row_after_multiple_applies` | Invarian: tepat satu baris `active=1` |
+| `test_corrupt_offset_value_fails_safe_to_zero` | Nilai korup → `get_offset()` fail-safe ke 0 |
+| `test_router_negative_offset_upgrades_sooner` | Offset negatif → router naik tier ≥ |
+| `test_router_positive_offset_stays_cheaper` | Offset positif → router bertahan tier ≤ |
 
 ---
 
@@ -233,6 +251,9 @@ Test untuk `core/compactor.py`.
 | `test_history_trimmed_when_over_budget` | History lama dipotong jika melebihi token budget |
 | `test_system_prompt_always_included` | System prompt selalu ada di messages[0] |
 | `test_memory_sections_in_system_prompt` | L1/L2/L3/L4 muncul di system prompt jika ada |
+| `test_estimate_context_tokens_sums_all_messages` | `estimate_context_tokens` jumlah token semua message |
+| `test_estimate_context_tokens_empty_and_missing_content` | Pesan kosong/tanpa content → 0, tak crash |
+| `test_estimate_context_tokens_matches_build_output` | Estimasi konsisten dengan hasil `build()` |
 
 ---
 
@@ -248,6 +269,11 @@ Smoke test untuk endpoints Web UI.
 | `test_index_unknown_role_falls_back` | `?role=` tak dikenal → 200 (fallback role pertama) |
 | `test_approve_requires_valid_params` | `POST /approve` tanpa params → `ok=False`, tidak crash |
 | `test_approvals_empty` | `GET /approvals` return list kosong |
+| `test_metrics_shows_active_offset` | `/metrics` menampilkan offset threshold aktif |
+| `test_calibration_apply_then_revert_roundtrip` | Apply -1 lalu revert tercermin di `/metrics` |
+| `test_calibration_apply_zero_delta_is_noop` | `delta=0` → offset tetap 0 |
+| `test_skills_page_renders_empty` | `GET /skills` tanpa skill → 200 + pesan kosong |
+| `test_skills_page_shows_seeded_skill` | Skill di DB muncul di tabel `/skills` |
 
 ---
 
@@ -267,6 +293,7 @@ Test untuk fitur pilih model: `SettingsStore`, provider Gemini, override routing
 | `test_gemini_parses_sse_stream` | `_gemini` mem-parse SSE Google AI Studio → text + usage |
 | `test_override_changes_route_in_agent_loop` | Override aktif → provider/model ke LLM dipaksa sesuai pilihan |
 | `test_no_override_uses_router` | Tanpa override → router tetap memilih (query pendek → lokal) |
+| `test_usage_event_carries_token_budget` | Event `usage` memuat `context_tokens` & `max_context_tokens` (meter budget §1.4) |
 
 ---
 

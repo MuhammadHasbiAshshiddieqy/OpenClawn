@@ -69,6 +69,9 @@ data: "token nalar"
 event: token                           ← potongan isi jawaban
 data: token1
 
+event: usage                           ← ringkasan turn + meter budget token (§1.4)
+data: {"tokens_in":..,"tokens_out":..,"cost_usd":..,"context_tokens":..,"max_context_tokens":28000}
+
 event: error                           ← hanya jika exception (mis. semua provider gagal)
 data: {"text":"Semua provider gagal..."}
 
@@ -76,7 +79,7 @@ event: done                            ← selalu dikirim terakhir (finally), pe
 data: [DONE]
 ```
 
-Label status: `routing` (model dipilih), `thinking` (LLM mulai), `tool` (`detail`=nama tool), `fallback` (`detail`=model), `question` (`detail`=teks pertanyaan `ask_user`). Payload `status`/`error` berupa JSON; `token` dan `thinking` adalah teks MENTAH (JSON-encoded) yang dirender markdown di frontend. Event `thinking` muncul bila model mengeluarkan reasoning (`<think>` lokal, extended-thinking Anthropic, `parts.thought` Gemini) — UI menampilkannya di blok collapsible yang auto-collapse saat token jawaban pertama tiba.
+Label status: `routing` (model dipilih), `thinking` (LLM mulai), `tool` (`detail`=nama tool), `fallback` (`detail`=model), `question` (`detail`=teks pertanyaan `ask_user`). Payload `status`/`error` berupa JSON; `token` dan `thinking` adalah teks MENTAH (JSON-encoded) yang dirender markdown di frontend. Event `thinking` muncul bila model mengeluarkan reasoning (`<think>` lokal, extended-thinking Anthropic, `parts.thought` Gemini) — UI menampilkannya di blok collapsible yang auto-collapse saat token jawaban pertama tiba. Event `usage` (sekali, sebelum `done`) membawa ringkasan turn + `context_tokens`/`max_context_tokens` untuk meter budget token di footer composer; meter menguning di ≥70% dan memerah di ≥90% batas. Di `/converse/stream`, budget muncul di `conversation_end.usage.peak_context_tokens` (PEAK lintas-giliran, bukan jumlah).
 
 `event: done` selalu di-emit di blok `finally`, dan exception apa pun dari `agent.run()` ditangkap → `event: error` + di-log (`chat_stream_failed`). Jadi stream tidak pernah berakhir diam-diam tanpa penanda.
 
@@ -195,13 +198,44 @@ Template: `web/templates/metrics.html`
 
 Menjalankan:
 1. `RoutingAuditor(db).calibration_report()` — data dari DB
-2. `RoutingCalibrator().summary(report)` — rekomendasi tuning
+2. `RoutingCalibrator().summary(report)` — rekomendasi tuning + `net_offset_delta`
+3. `CalibrationStore(db).get_offset()` + `.history()` — offset aktif & riwayat
 
 Context yang dikirim:
 - `report` — list data per complexity label (total, corrections, correction_rate, avg_cost)
-- `calibration` — dict `{total_events, has_enough_data, recommendations}`
+- `calibration` — dict `{total_events, has_enough_data, net_offset_delta, recommendations, current_offset, history}`
 
 > **Demo tanpa traffic:** dashboard ini kosong sampai ada `routing_events`. Untuk mengisinya dengan data **sintetis** (demo saja, bukan untuk tuning), jalankan `python scripts/seed_routing.py` — lihat [scripts.md](scripts.md).
+
+---
+
+#### `POST /calibration/apply`
+
+**Terapkan rekomendasi kalibrasi — loop tertutup Inovasi 1.** Form: `delta` (dijepit ke `{-1,0,+1}`), `reason`.
+
+Memanggil `CalibrationStore.apply(delta, reason, source="calibration")`: menggeser offset threshold router (disimpan di `app_settings`, dibaca `SmartRouter` tiap turn) dan mencatat baris audit ke `calibration_log`. Redirect ke `/metrics`. **Dipicu manusia** (tombol), bukan auto-apply.
+
+#### `POST /calibration/revert`
+
+Membatalkan kalibrasi aktif terakhir via `CalibrationStore.revert()` — mengembalikan offset ke state sebelumnya, mencatat baris `source='revert'`. Redirect ke `/metrics`.
+
+---
+
+#### `GET /skills`
+
+**Visualisasi skill decay (Inovasi 2).**
+
+Template: `web/templates/skills.html`
+
+Membaca seluruh `skills` (semua role) langsung dari DB (read-only). Untuk setiap skill aktif, **memproyeksikan** skor decay terkini (`decay_score * base^hari_idle`) karena decay pass di-throttle 1 jam sehingga nilai tersimpan bisa stale. Skill arsip memakai skor tersimpan (final).
+
+Context yang dikirim:
+- `skills` — list dict per skill: `role`, `skill_name`, `status`, `confidence`, `use_count`, `days_idle`, `projected_score`, `score_pct`, `near_archive`
+- `counts` — `{active, draft, archived}`
+- `threshold`, `threshold_pct` — ambang arsip (dari `CONFIG.skill_archive_threshold`)
+- `decay_base` — `CONFIG.skill_decay_base`
+
+Bar decay tiap baris menandai garis ambang arsip; fill berubah warna (kuning→merah) saat skill mendekati arsip.
 
 ---
 
@@ -251,6 +285,13 @@ Template dashboard `/metrics`. Menampilkan:
 - Bagian **Tuning Recommendations** (dari `RoutingCalibrator`):
   - Badge untuk "cukup data" vs "belum cukup data"
   - Daftar rekomendasi: label, issue (under/over-provisioned), sample size, saran teks
+  - Offset threshold aktif + tombol **Apply**/**Revert** (loop tertutup) + tabel riwayat kalibrasi
+
+### `skills.html`
+
+Template dashboard `/skills`. Menampilkan:
+- Count chip active/draft/archived
+- Tabel per skill: nama, role (role-dot), status, bar decay terproyeksi dengan garis ambang arsip, hari idle, use_count, confidence
 
 ### `settings.html`
 
@@ -282,4 +323,6 @@ uvicorn web.main:app --port 8000 --workers 1
 
 Buka:
 - `http://localhost:8000` — chat interface
-- `http://localhost:8000/metrics` — routing calibration dashboard
+- `http://localhost:8000/metrics` — routing calibration dashboard (+ apply/revert kalibrasi)
+- `http://localhost:8000/skills` — skill decay dashboard
+- `http://localhost:8000/settings` — override model

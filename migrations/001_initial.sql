@@ -79,3 +79,18 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ===================== CALIBRATION LOG [#1 self-calibration] =====================
+-- Jejak audit setiap kali threshold router digeser dari rekomendasi kalibrasi.
+-- Menutup loop Inovasi 1: audit → rekomendasi → APPLY (tercatat di sini) → revert.
+-- Tiap baris menyimpan offset sebelum/sesudah + alasan + apakah masih aktif (untuk revert).
+CREATE TABLE IF NOT EXISTS calibration_log (
+    id INTEGER PRIMARY KEY,
+    old_offset INTEGER NOT NULL,            -- threshold offset sebelum apply
+    new_offset INTEGER NOT NULL,            -- threshold offset sesudah apply
+    reason TEXT,                            -- ringkasan rekomendasi yang memicu (label/issue)
+    source TEXT DEFAULT 'manual',           -- 'calibration' (dari saran) | 'revert' | 'manual'
+    active INTEGER DEFAULT 1,               -- 1 = ini state aktif terakhir; 0 = sudah di-revert/digantikan
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_calibration_active ON calibration_log(active);

@@ -30,6 +30,10 @@
                     <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="9" width="3" height="6" rx=".5"/><rect x="6.5" y="5" width="3" height="10" rx=".5"/><rect x="12" y="1" width="3" height="14" rx=".5"/></svg>
                     Metrics
                 </a>
+                <a href="/skills" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3-6 3-6-3 6-3z"/><path d="M2 8l6 3 6-3M2 11.5l6 3 6-3"/></svg>
+                    Skills
+                </a>
                 <a href="/settings" class="nav-link">
                     <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
                     Settings
@@ -76,6 +80,24 @@
 
             <section>
                 <h2>Tuning Recommendations</h2>
+
+                <div class="offset-bar">
+                    <span class="muted">Offset threshold aktif:</span>
+                    <span class="offset-pill {{ 'zero' if calibration.current_offset == 0 else '' }}">
+                        {{ '%+d'|format(calibration.current_offset) }}
+                    </span>
+                    <span class="muted">
+                        {% if calibration.current_offset < 0 %}router naik tier lebih cepat
+                        {% elif calibration.current_offset > 0 %}router bertahan tier murah lebih lama
+                        {% else %}perilaku router asli (belum dikalibrasi){% endif %}
+                    </span>
+                    {% if calibration.current_offset != 0 %}
+                    <form method="post" action="/calibration/revert" class="inline-form">
+                        <button type="submit" class="btn-ghost">Revert</button>
+                    </form>
+                    {% endif %}
+                </div>
+
                 {% if not calibration.has_enough_data %}
                 <p class="muted">
                     Data audit belum cukup ({{ calibration.total_events }} events).
@@ -94,11 +116,44 @@
                     </li>
                     {% endfor %}
                 </ul>
-                <p class="muted">
-                    Ini saran saja — threshold router tidak diubah otomatis.
-                </p>
+                {% if calibration.net_offset_delta != 0 %}
+                <form method="post" action="/calibration/apply" class="inline-form apply-form">
+                    <input type="hidden" name="delta" value="{{ calibration.net_offset_delta }}">
+                    <input type="hidden" name="reason"
+                           value="{{ calibration.recommendations[0].label }}/{{ calibration.recommendations[0].issue }}">
+                    <button type="submit" class="btn-primary">
+                        Terapkan saran ({{ '%+d'|format(calibration.net_offset_delta) }} ke offset)
+                    </button>
+                    <span class="muted">Mengubah perilaku router — tercatat di riwayat & bisa di-revert.</span>
+                </form>
+                {% else %}
+                <p class="muted">Saran saling meniadakan; tidak ada arah geser tunggal yang jelas.</p>
+                {% endif %}
                 {% endif %}
             </section>
+
+            {% if calibration.history %}
+            <section>
+                <h2>Riwayat Kalibrasi</h2>
+                <table>
+                    <thead>
+                        <tr><th>Waktu</th><th>Dari</th><th>Ke</th><th>Sumber</th><th>Alasan</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        {% for h in calibration.history %}
+                        <tr class="{{ 'active-row' if h.active else '' }}">
+                            <td class="muted">{{ h.created_at }}</td>
+                            <td>{{ '%+d'|format(h.old_offset) }}</td>
+                            <td>{{ '%+d'|format(h.new_offset) }}</td>
+                            <td><span class="tag">{{ h.source }}</span></td>
+                            <td class="muted">{{ h.reason }}</td>
+                            <td>{% if h.active %}<span class="tag active">aktif</span>{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </section>
+            {% endif %}
         </div>
     </main>
 </div>

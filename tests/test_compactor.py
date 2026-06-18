@@ -153,3 +153,32 @@ def test_history_capped_at_20_turns():
     all_text = " ".join(m["content"] for m in messages)
     assert "msg-0" not in all_text
     assert "msg-29" in all_text
+
+
+# ── estimate_context_tokens (token budget meter §1.4) ─────────────────────────
+
+
+def test_estimate_context_tokens_sums_all_messages():
+    """Estimasi context = jumlah token semua message (heuristik ~4 char/token)."""
+    c = ContextCompactor(max_tokens=1000)
+    messages = [
+        {"role": "system", "content": "a" * 400},  # 100 token
+        {"role": "user", "content": "b" * 40},  # 10 token
+    ]
+    assert c.estimate_context_tokens(messages) == 110
+
+
+def test_estimate_context_tokens_empty_and_missing_content():
+    """Pesan kosong / tanpa 'content' tidak crash, dihitung 0."""
+    c = ContextCompactor(max_tokens=1000)
+    assert c.estimate_context_tokens([]) == 0
+    assert c.estimate_context_tokens([{"role": "user"}]) == 0
+
+
+def test_estimate_context_tokens_matches_build_output():
+    """Estimasi konsisten dengan hasil build() — meter mencerminkan prompt nyata."""
+    c = ContextCompactor(max_tokens=10_000)
+    messages = c.build(soul="soul cukup panjang", memory={}, history=[], user_message="halo dunia")
+    est = c.estimate_context_tokens(messages)
+    assert est > 0
+    assert est <= 10_000
