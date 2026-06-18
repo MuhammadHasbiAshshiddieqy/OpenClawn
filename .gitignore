@@ -14,8 +14,8 @@ build/
 venv/
 env/
 
-# Database (runtime data)
-data/
+# Database (runtime data) — anchored ke root agar tidak menelan roles/data/
+/data/
 
 # Environment secrets
 .env

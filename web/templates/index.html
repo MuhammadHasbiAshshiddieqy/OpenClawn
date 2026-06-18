@@ -14,7 +14,7 @@
 </head>
 <body>
 <div class="app">
-    {% set roles_meta = {'pm': ['Product', 'breakdown & prioritas'], 'qa': ['Quality', 'review & test'], 'dev': ['Developer', 'implement & fix']} %}
+    {# roles_meta dikirim dari web/main.py (ROLES_META) — single source of truth. #}
     <aside class="sidebar">
         <div class="brand">
             <img src="/static/logo.png" alt="OpenCLAWN">
@@ -121,17 +121,19 @@
             </div>
 
             <!-- Konfigurasi percakapan: muncul hanya saat mode non-single.
-                 Chip peserta (PM/Dev/QA) bisa dicentang. Untuk orchestrator, peserta
-                 pertama yang aktif menjadi lead (ditandai bintang). Untuk debate, ada
-                 pemilih jumlah ronde. -->
+                 Chip peserta bisa dicentang. Default aktif = conversation_default_participants
+                 (inti: pm/dev/qa); role lain (data, security) opt-in. Untuk
+                 orchestrator, peserta aktif pertama menjadi lead (ditandai bintang). -->
             <div id="convo-config" class="convo-config" hidden>
                 <div class="convo-row">
                     <span class="convo-row-label" id="participants-label">Peserta</span>
                     <div id="participants" class="participants">
+                        {% set chip_labels = {'pm': 'PM', 'qa': 'QA', 'dev': 'DEV', 'data': 'DATA', 'security': 'SEC'} %}
                         {% for r in available_roles %}
-                        <button type="button" class="role-chip active" data-role="{{ r }}">
+                        <button type="button" class="role-chip {{ 'active' if r in default_participants else '' }}" data-role="{{ r }}"
+                                title="{{ roles_meta.get(r, [r])[0] }}">
                             <span class="lead-star" title="Lead">★</span>
-                            <span class="chip-name">{{ r.upper() }}</span>
+                            <span class="chip-name">{{ chip_labels.get(r, r.upper()) }}</span>
                         </button>
                         {% endfor %}
                     </div>
@@ -345,12 +347,18 @@
 
     syncModeUI();
 
-    // Metadata role: label singkat + deskripsi untuk header bubble
-    const ROLE_META = {
-        pm:  { label: 'PM',  desc: 'Product Manager' },
-        dev: { label: 'Dev', desc: 'Developer' },
-        qa:  { label: 'QA',  desc: 'Quality Assurance' },
-    };
+    // Metadata role untuk header bubble. Label pendek dipetakan di sini; deskripsi
+    // diambil dari roles_meta backend (single source of truth). Role baru otomatis
+    // dapat header — label fallback = role uppercase.
+    const ROLE_LABEL = { pm: 'PM', dev: 'Dev', qa: 'QA', data: 'Data', security: 'Sec' };
+    const ROLES_META_BE = {{ roles_meta|tojson }};
+    const ROLE_META = {};
+    Object.keys(ROLES_META_BE).forEach(r => {
+        ROLE_META[r] = {
+            label: ROLE_LABEL[r] || r.toUpperCase(),
+            desc: (ROLES_META_BE[r] && ROLES_META_BE[r][0]) || 'Agent',
+        };
+    });
 
     function userBubble(message) {
         const el = document.createElement('div');

@@ -1,6 +1,7 @@
 import json
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -30,6 +31,28 @@ approval_gate = ApprovalGate(db, CONFIG)
 # mencapai loop yang sedang berjalan di /converse/stream (pola sama ApprovalGate._pending).
 _conversations: dict[str, ConversationControl] = {}
 
+# Urutan tampil role yang sudah dikenal; role lain (folder soul.toml baru) muncul
+# setelahnya secara alfabetis. Daftar role di-scan dari folder roles/ agar menambah
+# role = cukup membuat folder soul.toml, tanpa menyentuh web layer.
+_ROLE_ORDER = ["pm", "dev", "qa", "data", "security"]
+# Metadata tampilan: [judul, deskripsi singkat] untuk topbar & sidebar.
+ROLES_META = {
+    "pm": ["Product", "breakdown & prioritas"],
+    "qa": ["Quality", "review & test"],
+    "dev": ["Developer", "implement & fix"],
+    "data": ["Data", "analisis, statistik & insight"],
+    "security": ["Security & Privacy", "audit keamanan & privasi (read-only)"],
+}
+
+
+def available_roles() -> list[str]:
+    """Daftar role dari folder roles/ yang punya soul.toml, urutan stabil."""
+    roles_dir = Path("roles")
+    found = {p.parent.name for p in roles_dir.glob("*/soul.toml")}
+    known = [r for r in _ROLE_ORDER if r in found]
+    extra = sorted(found - set(known))
+    return known + extra
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -49,12 +72,18 @@ async def index(request: Request, role: str = "pm"):
     # Tampilkan model aktif di sidebar: override eksplisit, atau "Auto (router)".
     override = await SettingsStore(db).get_model_override()
     active_model = f"{override[0]} / {override[1]}" if override else None
+    roles = available_roles()
+    # Fallback aman bila ?role= menunjuk role yang tak ada.
+    if role not in roles:
+        role = roles[0] if roles else "pm"
     return templates.TemplateResponse(
         request,
         "index.html",
         {
             "role": role,
-            "available_roles": ["pm", "qa", "dev"],
+            "available_roles": roles,
+            "roles_meta": ROLES_META,
+            "default_participants": list(CONFIG.conversation_default_participants),
             "session_id": str(uuid.uuid4()),
             "active_model": active_model,
         },

@@ -13,6 +13,10 @@
     --green-deep:    #1f9d4d;
     --red:           #ec1e4b;   /* "hidung badut" — aksen pop */
     --red-soft:      #ff4d6d;
+    --cyan:          #2dd4bf;   /* data analyst — biru-hijau */
+    --cyan-soft:     #5eead4;
+    --amber:         #f0c45a;   /* privacy & security — kuning waspada */
+    --amber-soft:    #f6d77e;
 
     /* Surfaces (charcoal kebiruan, bukan hitam pekat) */
     --bg:        #0d0b14;
@@ -333,10 +337,18 @@ body.mode-convo .role-group .role-link.active .dot {
 .msg.assistant.role-qa .role-dot    { background: var(--red-soft); box-shadow: 0 0 6px var(--red); }
 .msg.assistant.role-qa .msg-header  { background: rgba(236,30,75,.1); }
 
+.msg.assistant.role-data .msg-header { color: var(--cyan-soft); border-bottom-color: rgba(45,212,191,.2); background: rgba(45,212,191,.1); }
+.msg.assistant.role-data .role-dot   { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+
+.msg.assistant.role-security .msg-header { color: var(--amber-soft); border-bottom-color: rgba(240,196,90,.2); background: rgba(240,196,90,.1); }
+.msg.assistant.role-security .role-dot   { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+
 /* Warna border kiri per role */
 .msg.assistant.role-pm  { border-left: 3px solid var(--purple-bright); }
 .msg.assistant.role-dev { border-left: 3px solid var(--green); }
 .msg.assistant.role-qa  { border-left: 3px solid var(--red-soft); }
+.msg.assistant.role-data     { border-left: 3px solid var(--cyan); }
+.msg.assistant.role-security { border-left: 3px solid var(--amber); }
 
 /* ── Markdown di dalam msg-body ── */
 .msg.md .msg-body > *:first-child { margin-top: 0; }
@@ -419,6 +431,8 @@ body.mode-convo .role-group .role-link.active .dot {
 .role-chip.active[data-role="pm"]  { border-color: var(--purple-bright); }
 .role-chip.active[data-role="dev"] { border-color: var(--green); }
 .role-chip.active[data-role="qa"]  { border-color: var(--red-soft); }
+.role-chip.active[data-role="data"]     { border-color: var(--cyan); }
+.role-chip.active[data-role="security"] { border-color: var(--amber); }
 .role-chip .lead-star {
     display: none;          /* di-toggle via JS hanya untuk lead orchestrator */
     color: #f0c45a; font-size: .85rem; line-height: 1;

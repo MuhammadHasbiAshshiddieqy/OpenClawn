@@ -1,12 +1,22 @@
 """Tests untuk Inovasi 4: Role Output Contracts + RoleNegotiator."""
 
 import json
+import tomllib
+from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock
+from pydantic import ValidationError
 from infra.config import AppConfig
 from infra.database import DatabaseManager
 from core.agent_loop import AgentEvent
-from roles.contracts import PMOutput, QAOutput, DevOutput, CONTRACT_REGISTRY
+from roles.contracts import (
+    PMOutput,
+    QAOutput,
+    DevOutput,
+    DataOutput,
+    SecurityOutput,
+    CONTRACT_REGISTRY,
+)
 from roles.registry import RoleNegotiator
 
 
@@ -60,11 +70,90 @@ def test_dev_output_requires_approach():
         DevOutput()  # approach wajib
 
 
+def test_data_output_valid():
+    """DataOutput minimal lolos; confidence default 'medium'."""
+    out = DataOutput(summary="Penjualan naik 12% QoQ")
+    assert out.confidence == "medium"
+    assert out.findings == []
+
+
+def test_data_invalid_confidence():
+    """confidence di luar (low|medium|high) ditolak."""
+    with pytest.raises(ValidationError):
+        DataOutput(summary="x", confidence="very-high")
+
+
+def test_security_output_valid_and_risk_levels():
+    """SecurityOutput lolos; risk_level menerima 'critical' (beda dari PM 'high')."""
+    out = SecurityOutput(summary="2 secret ter-hardcode", pii_detected=True, risk_level="critical")
+    assert out.pii_detected is True
+    assert out.risk_level == "critical"
+
+
+def test_security_invalid_risk_level():
+    """risk_level di luar set yang diizinkan ditolak."""
+    with pytest.raises(ValidationError):
+        SecurityOutput(summary="x", risk_level="catastrophic")
+
+
 def test_contract_registry_has_all_roles():
     """CONTRACT_REGISTRY harus punya semua role yang didefinisikan."""
-    assert "pm" in CONTRACT_REGISTRY
-    assert "qa" in CONTRACT_REGISTRY
-    assert "dev" in CONTRACT_REGISTRY
+    for role in ("pm", "qa", "dev", "data", "security"):
+        assert role in CONTRACT_REGISTRY
+
+
+# ── Soul loadability + konsistensi soul ↔ contract ──────────────────────────
+
+
+def _role_dirs() -> list[Path]:
+    return sorted(p.parent for p in Path("roles").glob("*/soul.toml"))
+
+
+def test_all_souls_loadable_and_well_formed():
+    """Setiap soul.toml bisa di-parse & punya field wajib (meta, system_prompt, tools)."""
+    dirs = _role_dirs()
+    assert dirs, "tidak ada soul.toml ditemukan"
+    for d in dirs:
+        with open(d / "soul.toml", "rb") as f:
+            soul = tomllib.load(f)
+        assert soul["meta"]["role"] == d.name, f"meta.role tidak cocok folder: {d.name}"
+        assert soul["system_prompt"]["content"].strip(), f"system_prompt kosong: {d.name}"
+        assert isinstance(soul["tools"]["allowed"], list) and soul["tools"]["allowed"]
+
+
+def test_soul_output_type_matches_registry():
+    """output_type di soul harus menunjuk contract yang ada untuk role itu."""
+    for d in _role_dirs():
+        with open(d / "soul.toml", "rb") as f:
+            soul = tomllib.load(f)
+        declared = soul.get("contract", {}).get("output_type")
+        if not declared:
+            continue
+        contract = CONTRACT_REGISTRY.get(d.name)
+        assert contract is not None, f"role {d.name} punya output_type tapi tak ada di registry"
+        assert contract.__name__ == declared, (
+            f"soul {d.name} output_type={declared} != {contract.__name__}"
+        )
+
+
+def test_security_role_is_read_only():
+    """Role security tidak boleh punya tool yang menulis/eksekusi/network (advisory only)."""
+    with open("roles/security/soul.toml", "rb") as f:
+        soul = tomllib.load(f)
+    allowed = set(soul["tools"]["allowed"])
+    forbidden = {
+        "file_write",
+        "file_edit",
+        "file_append",
+        "apply_patch",
+        "code_run",
+        "shell_run",
+        "http_request",
+        "web_fetch",
+        "web_search",
+    }
+    leaked = allowed & forbidden
+    assert not leaked, f"role security seharusnya read-only, tapi punya: {leaked}"
 
 
 # ── RoleNegotiator integration tests ────────────────────────────────────────

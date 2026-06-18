@@ -46,6 +46,21 @@ def test_index_renders(client):
     assert resp.status_code == 200
 
 
+def test_index_lists_new_roles(client):
+    """Role baru (data, security) muncul di sidebar + chip peserta."""
+    html = client.get("/").text
+    assert 'data-role="data"' in html
+    assert 'data-role="security"' in html
+    assert "/?role=data" in html
+    assert "/?role=security" in html
+
+
+def test_index_unknown_role_falls_back(client):
+    """?role= tak dikenal tidak crash; fallback ke role pertama."""
+    resp = client.get("/?role=ghost")
+    assert resp.status_code == 200
+
+
 def test_approve_requires_valid_params(client):
     """/approve tanpa approval_id valid harus return ok=False, tidak crash."""
     resp = client.post("/approve", data={"decision": "approve"})

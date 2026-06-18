@@ -82,16 +82,24 @@ Test untuk `core/crystallizer.py` (Inovasi 3).
 
 ### `tests/test_contracts.py`
 
-Test untuk `roles/contracts.py` dan `roles/registry.py` (Inovasi 4).
+Test untuk `roles/contracts.py` dan `roles/registry.py` (Inovasi 4), plus loadability semua soul.
 
 | Test | Yang Diverifikasi |
 |---|---|
-| `test_valid_pm_output_passes` | PMOutput dengan data valid lolos validasi |
-| `test_invalid_priority_fails` | Priority bukan `low/medium/high` → ValidationError |
-| `test_valid_qa_output_passes` | QAOutput valid |
-| `test_valid_dev_output_passes` | DevOutput valid |
-| `test_handoff_invalid_output_no_crash` | Output tidak valid → `validation_ok=False`, tidak crash |
-| `test_handoff_logged_to_db` | Handoff selalu disimpan ke DB (valid maupun tidak) |
+| `test_pm_output_valid` | PMOutput dengan data valid lolos validasi |
+| `test_pm_output_invalid_priority` | Priority bukan `low/medium/high` → ValidationError |
+| `test_qa_output_valid` | QAOutput valid |
+| `test_dev_output_requires_approach` | DevOutput tanpa `approach` → ValidationError |
+| `test_data_output_valid` | DataOutput minimal lolos; `confidence` default `medium` |
+| `test_data_invalid_confidence` | `confidence` di luar set → ValidationError |
+| `test_security_output_valid_and_risk_levels` | SecurityOutput lolos; `risk_level` menerima `critical` |
+| `test_security_invalid_risk_level` | `risk_level` di luar set → ValidationError |
+| `test_contract_registry_has_all_roles` | Registry punya pm/qa/dev/data/security |
+| `test_all_souls_loadable_and_well_formed` | Tiap `soul.toml` bisa di-parse + field wajib ada |
+| `test_soul_output_type_matches_registry` | `output_type` soul cocok dengan contract di registry |
+| `test_security_role_is_read_only` | Soul security tak punya tool tulis/eksekusi/network |
+| `test_valid_output_passes_validation` | Output JSON valid → `validation_ok=1`, tersimpan di DB |
+| `test_invalid_output_does_not_crash` | Output tidak valid → `validation_ok=0`, tidak crash |
 | `test_unknown_role_returns_error` | Role tidak ada di registry → error dict |
 
 ---
@@ -234,10 +242,12 @@ Smoke test untuk endpoints Web UI.
 
 | Test | Yang Diverifikasi |
 |---|---|
-| `test_index_returns_200` | `GET /` return 200 |
-| `test_metrics_returns_200` | `GET /metrics` return 200 |
-| `test_approve_invalid_params` | `POST /approve` tanpa params → error JSON |
-| `test_approvals_returns_list` | `GET /approvals` return `{"pending": [...]}` |
+| `test_metrics_renders_empty` | `GET /metrics` render tanpa data (tidak crash) |
+| `test_index_renders` | `GET /` return 200 |
+| `test_index_lists_new_roles` | Sidebar + chip memuat `data` & `security` |
+| `test_index_unknown_role_falls_back` | `?role=` tak dikenal → 200 (fallback role pertama) |
+| `test_approve_requires_valid_params` | `POST /approve` tanpa params → `ok=False`, tidak crash |
+| `test_approvals_empty` | `GET /approvals` return list kosong |
 
 ---
 

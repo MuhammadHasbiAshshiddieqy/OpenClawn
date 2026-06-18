@@ -30,13 +30,15 @@ Dipanggil oleh FastAPI saat startup dan shutdown:
 **Halaman chat utama.**
 
 Query params:
-- `role` (default: `"pm"`) — role agent yang dipakai
+- `role` (default: `"pm"`) — role agent yang dipakai (single mode). Bila tidak dikenal → fallback ke role pertama.
 
 Template: `web/templates/index.html`
 
 Context yang dikirim ke template:
 - `role` — role aktif
-- `available_roles` — `["pm", "qa", "dev"]`
+- `available_roles` — di-scan dinamis via `available_roles()` dari folder `roles/*/soul.toml` (urutan stabil: `_ROLE_ORDER` dulu, lalu sisanya alfabetis). Saat ini: `pm, dev, qa, data, security`.
+- `roles_meta` — `ROLES_META`: map role → `[judul, deskripsi]` untuk sidebar/topbar/header bubble.
+- `default_participants` — `CONFIG.conversation_default_participants` (chip peserta yang aktif secara default; role lain opt-in).
 - `session_id` — UUID baru tiap halaman dimuat
 
 ---
