@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
 from core.calibration import CalibrationStore, RoutingCalibrator
+from core.tool_audit import ToolAudit
 from core.conversation import (
     ConversationControl,
     ConversationOrchestrator,
@@ -277,10 +278,11 @@ async def metrics(request: Request):
     store = CalibrationStore(db)
     calibration["current_offset"] = await store.get_offset()
     calibration["history"] = await store.history()
+    tool_stats = await ToolAudit(db).summary()
     return templates.TemplateResponse(
         request,
         "metrics.html",
-        {"report": report, "calibration": calibration},
+        {"report": report, "calibration": calibration, "tool_stats": tool_stats},
     )
 
 

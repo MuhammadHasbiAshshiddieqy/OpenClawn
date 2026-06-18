@@ -11,6 +11,7 @@ from infra.settings import SettingsStore
 from core.router import SmartRouter
 from core.audit import RoutingAuditor
 from core.calibration import CalibrationStore
+from core.tool_audit import ToolAudit
 from core.compactor import ContextCompactor
 from core.crystallizer import ConfidenceCrystallizer
 from core.llm_client import LLMClient
@@ -84,6 +85,26 @@ def _format_tool_params(tool_name: str, params: dict) -> str:
     return tool_name
 
 
+def _validate_tool_input(tool, input_data: dict) -> str | None:
+    """Validasi ringan input vs `input_schema` tool: required fields ada & tipe dasar cocok.
+
+    Mengembalikan pesan error (untuk dikirim balik ke model agar memperbaiki) atau None
+    bila valid. Sengaja minimal — bukan validator JSON-Schema penuh; cukup menangkap
+    kesalahan umum model lokal (field hilang/null) tanpa dependency baru.
+    """
+    try:
+        schema = tool.schema().get("input_schema", {})
+    except Exception:  # noqa: BLE001 — schema rusak tak boleh menjatuhkan eksekusi
+        return None
+    if not isinstance(input_data, dict):
+        return f"Input untuk '{tool.name}' harus objek, bukan {type(input_data).__name__}"
+    required = schema.get("required", [])
+    missing = [f for f in required if input_data.get(f) in (None, "")]
+    if missing:
+        return f"Tool '{tool.name}' butuh field: {', '.join(missing)}"
+    return None
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -105,6 +126,8 @@ class AgentLoop:
         # Loop tertutup #1: offset threshold hasil kalibrasi dibaca dari DB tiap turn
         # (async), lalu di-set ke router sebelum decide(). Default 0 = router asli.
         self.calibration = CalibrationStore(db)
+        # Telemetri tool: dicatat di _execute_tool (titik eksekusi terpusat).
+        self.tool_audit = ToolAudit(db)
         self.compactor = ContextCompactor(config.max_context_tokens)
         self.crystallizer = ConfidenceCrystallizer(agent_cfg.role, self.llm, db)
         # ApprovalGate & QuestionGate di-inject dari Web UI agar resolve() mengenai
@@ -319,12 +342,61 @@ class AgentLoop:
             answer = await self.question_gate.ask(self.cfg.session_id, question)
             return {"answer": answer}
 
+        # Validasi input vs schema SEBELUM approval/eksekusi: model lokal sering
+        # kirim argumen salah bentuk. Pesan jelas balik ke model agar ia memperbaiki,
+        # bukan menunggu approval lalu gagal. (Tidak menjalankan tool → tanpa telemetri.)
+        schema_err = _validate_tool_input(tool, input_data)
+        if schema_err:
+            return {"error": schema_err}
+
         if tool.requires_approval:
             approved = await self.approval.request(self.cfg.session_id, name, input_data)
             if not approved:
                 return {"error": f"Tool '{name}' ditolak oleh user"}
 
-        return await tool.execute(input_data, vault=self.vault, db=self.db)
+        # Jaring pengaman §1.3: timeout + tangkap SEMUA exception → error dict yang
+        # anggun + telemetri. Satu tool yang menggantung/melempar tidak menjatuhkan turn.
+        started = time.monotonic()
+        outcome = "ok"
+        try:
+            result = await asyncio.wait_for(
+                tool.execute(input_data, vault=self.vault, db=self.db),
+                timeout=self.config.tool_timeout_sec,
+            )
+            result = self._truncate_tool_output(result)
+        except asyncio.TimeoutError:
+            outcome = "timeout"
+            log.warning("tool_timeout", tool=name, session=self.cfg.session_id)
+            result = {
+                "error": f"Tool '{name}' melebihi batas waktu {self.config.tool_timeout_sec}s"
+            }
+        except Exception as exc:  # noqa: BLE001 — tool pihak ketiga, kegagalan harus anggun
+            outcome = "error"
+            log.error("tool_failed", tool=name, error=str(exc), session=self.cfg.session_id)
+            result = {"error": f"Tool '{name}' gagal: {exc}"}
+        finally:
+            latency_ms = int((time.monotonic() - started) * 1000)
+            await self.tool_audit.record(
+                self.cfg.session_id, self.cfg.role, name, outcome, latency_ms
+            )
+        return result
+
+    def _truncate_tool_output(self, result: dict) -> dict:
+        """Potong field teks panjang ke tool_max_output (token-first §1.4) secara seragam.
+
+        Tiap tool sebelumnya memotong sendiri dengan batas berbeda; ini jaring akhir
+        agar tidak ada satu tool pun yang membanjiri context window.
+        """
+        if not isinstance(result, dict):
+            return result
+        limit = self.config.tool_max_output
+        out: dict = {}
+        for k, v in result.items():
+            if isinstance(v, str) and len(v) > limit:
+                out[k] = v[:limit] + f"\n…[dipotong, {len(v) - limit} char lagi]"
+            else:
+                out[k] = v
+        return out
 
     def _tool_allowed(self, name: str) -> bool:
         return name in self._soul.get("tools", {}).get("allowed", [])

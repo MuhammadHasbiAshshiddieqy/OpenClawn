@@ -33,6 +33,10 @@ class AppConfig:
     workspace_root: str = "."
     # Batas hasil tool agar tidak membanjiri context (token-first §1.4).
     tool_max_output: int = 10_000
+    # Timeout keras per eksekusi tool (§1.3 kegagalan anggun): tool yang menggantung
+    # (network, DB lock) tidak boleh membekukan turn. code_run/shell_run punya timeout
+    # sandbox sendiri 30s, jadi batas ini sedikit di atasnya agar tidak memotong sandbox.
+    tool_timeout_sec: int = 40
     # Multi-agent conversation: batasi total giliran agar tidak loop tak berujung
     # & token blowout (pola sama max_tool_hops). Ronde default untuk debate.
     max_conversation_turns: int = 12

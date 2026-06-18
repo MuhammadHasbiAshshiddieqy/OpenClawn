@@ -94,3 +94,18 @@ CREATE TABLE IF NOT EXISTS calibration_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_calibration_active ON calibration_log(active);
+
+-- ===================== TOOL INVOCATIONS [telemetri tooling] =====================
+-- Audit penggunaan tool: tool mana dipakai, role apa, hasil (ok/error/timeout),
+-- latency. Setara Inovasi 1 untuk tools — menjawab "tool mana yang berguna".
+-- Dicatat di titik eksekusi terpusat (_execute_tool), bukan per-tool.
+CREATE TABLE IF NOT EXISTS tool_invocations (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    outcome TEXT NOT NULL,                  -- ok | error | timeout
+    latency_ms INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tool_invocations ON tool_invocations(tool_name, outcome);

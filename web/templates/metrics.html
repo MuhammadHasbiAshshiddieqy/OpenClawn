@@ -154,6 +154,31 @@
                 </table>
             </section>
             {% endif %}
+
+            <section>
+                <h2>Penggunaan Tool</h2>
+                {% if not tool_stats %}
+                <p class="muted">Belum ada tool dipanggil. Statistik muncul setelah agent memakai tool.</p>
+                {% else %}
+                <table>
+                    <thead>
+                        <tr><th>Tool</th><th>Dipakai</th><th>Error</th><th>Timeout</th><th>Fail Rate</th><th>Avg Latency</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for t in tool_stats %}
+                        <tr class="{{ 'warn' if t.fail_rate and t.fail_rate > 20 else '' }}">
+                            <td><strong>{{ t.tool_name }}</strong></td>
+                            <td>{{ t.total }}</td>
+                            <td>{{ t.errors }}</td>
+                            <td>{{ t.timeouts }}</td>
+                            <td>{{ t.fail_rate }}%</td>
+                            <td class="muted">{{ t.avg_latency_ms }}ms</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+            </section>
         </div>
     </main>
 </div>
