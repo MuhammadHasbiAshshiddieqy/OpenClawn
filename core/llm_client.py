@@ -270,9 +270,9 @@ class LLMClient:
                 "POST", f"{self.config.ollama_base}/api/chat", json=payload
             ) as resp:
                 resp.raise_for_status()
-                # Buffer teks dari stream — model lokal (GGUF) sering mengeluarkan
-                # tool call sebagai plain text token di content, bukan di field
-                # message.tool_calls. Kita kumpulkan dulu, lalu parse di akhir.
+                # Streaming teks + akumulasi untuk deteksi plaintext tool call.
+                # Teks DIKIRIM real-time agar browser tidak timeout; buffer
+                # disimpan untuk post-scan tool call di akhir stream.
                 text_buf: list[str] = []
                 native_tool_calls: list[dict] = []
                 usage_data: dict = {}
@@ -284,6 +284,8 @@ class LLMClient:
                     msg = data.get("message", {})
                     if msg.get("content"):
                         text_buf.append(msg["content"])
+                        # Kirim real-time — cegah "server tidak merespon"
+                        yield LLMChunk(type="text", text=msg["content"])
                     for tc in msg.get("tool_calls", []):
                         native_tool_calls.append({
                             "name": tc["function"]["name"],
@@ -295,27 +297,21 @@ class LLMClient:
                             "output_tokens": data.get("eval_count", 0),
                         }
 
-                # Post-processing: deteksi tool call plain-text di konten teks
+                # Post-processing: deteksi tool call plain-text di akumulasi teks.
+                # Tool call dari model GGUF (Gemma, Qwen, dsb.) muncul sebagai
+                # token teks di content. Kita scan di akhir stream — teks mentah
+                # (termasuk token <|tool_call|>) sudah terlanjur dikirim ke user,
+                # tapi tool akan tetap tereksekusi dan hasilnya muncul berikutnya.
                 raw_text = "".join(text_buf)
-                cleaned_text, parsed_calls = LLMClient.parse_plaintext_tool_calls(raw_text)
+                _, parsed_calls = LLMClient.parse_plaintext_tool_calls(raw_text)
 
-                # Prioritas: native tool_calls (Ollama API) > parsed plaintext
                 all_calls = native_tool_calls + parsed_calls
-
-                if all_calls:
-                    # Ada tool call → yield teks bersih (tanpa token tool call)
-                    if cleaned_text:
-                        yield LLMChunk(type="text", text=cleaned_text)
-                    for tc in all_calls:
-                        yield LLMChunk(
-                            type="tool_call",
-                            tool_name=tc["name"],
-                            tool_input=tc.get("input", {}),
-                        )
-                else:
-                    # Tidak ada tool call → yield teks mentah apa adanya
-                    if raw_text:
-                        yield LLMChunk(type="text", text=raw_text)
+                for tc in all_calls:
+                    yield LLMChunk(
+                        type="tool_call",
+                        tool_name=tc["name"],
+                        tool_input=tc.get("input", {}),
+                    )
 
                 if usage_data:
                     yield LLMChunk(type="usage", usage=usage_data)
