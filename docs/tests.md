@@ -77,6 +77,8 @@ Test untuk `core/crystallizer.py` (Inovasi 3).
 | `test_should_attempt_requires_min_tool_calls` | `should_attempt()` False jika tool call < 3 |
 | `test_parse_failure_falls_safe` | JSON parse gagal → confidence 1, draft |
 | `test_crystallize_duplicate_is_graceful` | Insert duplikat tidak crash, return `"duplicate"` |
+| `test_crystallization_logged_with_decision` | Percobaan tercatat di `crystallization_log` (status/confidence/model) |
+| `test_crystallization_log_records_draft` | Draft juga tercatat (yang menarik untuk ditinjau) |
 
 ---
 
@@ -126,6 +128,8 @@ Test untuk `core/conversation.py` (multi-agent conversation). Seam = fake `agent
 | `test_make_strategy_debate_uses_rounds` | Debate meneruskan jumlah ronde dari UI |
 | `test_make_strategy_orchestrator_lead_is_first_participant` | Lead = `participants[0]` (bukan harus PM), worker = sisanya |
 | `test_make_strategy_orchestrator_default_pm_lead` | Tanpa `participants` → default config, PM jadi lead |
+| `test_conversation_persisted_on_completion` | Run selesai → baris di `conversations` dengan transkrip & metadata benar |
+| `test_conversation_persisted_once_per_run` | Tepat satu baris arsip per run (persist hanya di `conversation_end`) |
 | `test_make_strategy_unknown_pattern_raises` | Pattern tak dikenal → `ValueError` |
 | `test_orchestrator_non_pm_lead_runs` | End-to-end: lead `dev` bicara lebih dulu |
 
@@ -198,7 +202,7 @@ Test untuk `tools/`.
 
 | Test | Yang Diverifikasi |
 |---|---|
-| `test_registry_has_all_20_tools` | Semua 20 tool terdaftar di registry |
+| `test_registry_has_all_25_tools` | Semua 25 tool terdaftar di registry |
 | `test_file_read_returns_content` | `FileReadTool` baca file yang ada |
 | `test_file_read_not_found` | File tidak ada → error dict (tidak crash) |
 | `test_file_write_creates_file` | `FileWriteTool` tulis konten |
@@ -230,6 +234,30 @@ Test untuk `tools/`.
 | `test_doc_write_xlsx_rows` | xlsx dari `{headers,rows}` → spreadsheet baris benar |
 | `test_doc_write_pptx_slides` | pptx dari `{title,slides}` → presentasi multi-slide |
 | `test_doc_write_rejects_path_outside_workspace` | Path di luar workspace ditolak (keamanan #1) |
+
+---
+
+### `tests/test_tools_batch3.py`
+
+Test tool batch 3: git (sandbox), `todo_write` (DB), `pdf_write` (reportlab).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_git_tools_are_read_only` | git_status/diff/log `requires_approval=False` |
+| `test_git_status_runs_in_sandbox_not_host` | git_status lewat `DockerSandbox.run_shell` (`git -C /work …`), bukan host |
+| `test_git_log_count_clamped` | `count` dijepit ke ≤ 50 |
+| `test_git_diff_path_is_quoted` | `path` di-`shlex.quote` → cegah injeksi opsi/perintah |
+| `test_git_status_fails_safe_without_docker` | Docker absen → error anggun, bukan eksekusi host |
+| `test_git_status_reports_non_repo` | Workspace bukan repo git → pesan jelas |
+| `test_todo_write_persists_list` | `todo_write` simpan daftar per sesi dengan status |
+| `test_todo_write_replaces_previous_snapshot` | Panggilan kedua mengganti daftar (snapshot) |
+| `test_todo_write_rejects_bad_status` | Status tak valid → error, tidak menulis |
+| `test_todo_write_requires_session` | Tanpa `_session_id` → error |
+| `test_todo_write_no_approval` | `todo_write.requires_approval=False` (tabel internal) |
+| `test_pdf_write_requires_approval` | `pdf_write.requires_approval=True` |
+| `test_pdf_write_produces_pdf` | Menghasilkan PDF nyata (header `%PDF`) |
+| `test_pdf_write_rejects_outside_workspace` | Path di luar workspace ditolak |
+| `test_pdf_write_rejects_bad_content` | content bukan objek → error |
 
 ---
 
@@ -292,6 +320,9 @@ Smoke test untuk endpoints Web UI.
 | `test_calibration_apply_zero_delta_is_noop` | `delta=0` → offset tetap 0 |
 | `test_skills_page_renders_empty` | `GET /skills` tanpa skill → 200 + pesan kosong |
 | `test_skills_page_shows_seeded_skill` | Skill di DB muncul di tabel `/skills` |
+| `test_skills_page_shows_crystallization_attempt` | Percobaan kristalisasi tampil di `/skills` |
+| `test_conversations_page_renders_empty` | `/conversations` tanpa arsip → 200 + pesan kosong |
+| `test_conversations_page_shows_archived_run` | Percakapan tersimpan tampil dengan pattern/peserta/transkrip |
 
 ---
 
@@ -354,13 +385,18 @@ Test untuk `ThinkTagSplitter` + parsing reasoning per provider (`LLMChunk(type="
 
 ### `tests/test_logging.py`
 
-Test untuk `infra/logging.py` (structlog JSON).
+Test untuk `infra/logging.py` (structlog JSON + secret-scrubbing).
 
 | Test | Yang Diverifikasi |
 |---|---|
 | `test_setup_logging_idempotent` | `setup_logging()` aman dipanggil berkali-kali |
 | `test_log_is_callable_logger` | `log` punya method level standar (debug/info/warning/error) |
 | `test_setup_logging_renders_json` | Output log = JSON satu baris dengan level + event + timestamp |
+| `test_scrub_redacts_sensitive_key_names` | Field `api_key`/`token`/`secret`/`password` di-redact penuh |
+| `test_scrub_redacts_secret_patterns_in_values` | Nilai berpola secret (sk-/bearer/gh token) di-redact |
+| `test_scrub_leaves_normal_values` | Teks biasa tak diubah (tanpa false-positive) |
+| `test_scrub_fail_soft_on_bad_input` | Input aneh tak meledak (logging tak boleh gagal karena scrub) |
+| `test_setup_logging_scrubs_in_pipeline` | End-to-end: secret tak muncul di output JSON |
 
 ---
 

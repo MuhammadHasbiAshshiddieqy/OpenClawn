@@ -10,6 +10,7 @@
   </p>
 
   <p>
+    <img src="https://github.com/MuhammadHasbiAshshiddieqy/OpenClawn/actions/workflows/ci.yml/badge.svg" alt="CI">
     <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python 3.12+">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
     <img src="https://img.shields.io/badge/LLM-Ollama%20%2B%20Gemini%20%2B%20Claude-purple" alt="Hybrid LLM">
@@ -247,7 +248,7 @@ flowchart TD
 
 ### Tools & Security
 
-All 20 tools are **workspace-bounded** — every file path is resolved with `Path.resolve()`
+All 25 tools are **workspace-bounded** — every file path is resolved with `Path.resolve()`
 and rejected if it escapes the workspace root (defeats `../` and symlink escape). Tools that
 mutate state or run code require explicit approval.
 
@@ -406,8 +407,8 @@ openclawn/
 ├── infra/          # config · database (WAL, POWER()) · logging · env · workspace
 ├── memory/         # layers (L1–L4) · skill_decay · search (FTS5)
 ├── roles/          # pm/qa/dev soul.toml · contracts (Pydantic) · registry
-├── tools/          # 20 tools: file_ops · read_many · search · shell · code · web
-│                   # document (pdf_read · doc_write) · data · interaction (workspace-bounded)
+├── tools/          # 25 tools: file_ops · read_many · search · shell · code · web · git
+│                   # document (pdf_read · doc_write · pdf_write) · data · todo · interaction
 ├── security/       # vault · shield (NFKD) · approval (HITL gate)
 ├── web/            # FastAPI app · HTMX templates · SSE streaming
 ├── migrations/     # 001_initial.sql
@@ -437,7 +438,7 @@ Detailed reference for every module, class, and function:
 | `memory/` | [docs/memory.md](docs/memory.md) — L1–L4 layers, skill decay, FTS5 search |
 | `roles/` | [docs/roles.md](docs/roles.md) — contracts, role registry, soul.toml format |
 | `security/` | [docs/security.md](docs/security.md) — vault, shield, approval gate HITL |
-| `tools/` | [docs/tools.md](docs/tools.md) — 20 tools, permission matrix, Docker sandbox |
+| `tools/` | [docs/tools.md](docs/tools.md) — 25 tools, permission matrix, Docker sandbox |
 | `web/` | [docs/web.md](docs/web.md) — FastAPI endpoints, SSE streaming |
 | Database | [docs/database.md](docs/database.md) — full schema + example queries |
 | Tests | [docs/tests.md](docs/tests.md) — test index + patterns |

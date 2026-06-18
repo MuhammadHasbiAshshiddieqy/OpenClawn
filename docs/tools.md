@@ -39,6 +39,11 @@ TOOL_REGISTRY = {
     "grep":         GrepTool(),
     "pdf_read":     PdfReadTool(),
     "doc_write":    DocWriteTool(),
+    "pdf_write":    PdfWriteTool(),
+    # git (read-only, via sandbox)
+    "git_status":   GitStatusTool(),
+    "git_diff":     GitDiffTool(),
+    "git_log":      GitLogTool(),
     # eksekusi (sandboxed)
     "shell_run":    ShellRunTool(),
     "code_run":     CodeRunTool(),
@@ -50,8 +55,9 @@ TOOL_REGISTRY = {
     "db_query":     DbQueryTool(),
     "memory_search": MemorySearchTool(),
     "json_query":   JsonQueryTool(),
-    # interaksi
+    # interaksi & manajemen
     "ask_user":     AskUserTool(),
+    "todo_write":   TodoWriteTool(),
 }
 ```
 
@@ -149,6 +155,32 @@ Tulis dokumen terstruktur ke workspace dalam format `docx`/`pptx`/`xlsx`/`md` (p
   - `xlsx` → `{sheet?, headers?:[], rows:[[..],[..]]}`
 - Output sukses: `{"path": "...", "format": "...", "ok": true}`
 - Output error: `{"error": "..."}` jika format tak dikenal, struktur content salah, path di luar workspace, atau library hilang
+
+### `PdfWriteTool`
+
+Tulis dokumen **PDF** ke workspace via `reportlab` (murni-Python). **Destruktif** → butuh approval. `reportlab` di-import lazy.
+
+- `requires_approval = True`
+- Input: `{"path": "....pdf", "content": {"title"?, "sections":[{"heading"?, "body"?, "bullets"?:[]}]}}` (bentuk sama `doc_write` docx)
+- Output sukses: `{"path": "...", "format": "pdf", "ok": true}`
+- Output error: `{"error": "..."}` jika content bukan objek, path di luar workspace, atau `reportlab` hilang
+
+---
+
+## `tools/git.py`
+
+Tiga tool git **read-only** (`requires_approval = False`). Keamanan #1: dijalankan DI DALAM `DockerSandbox` (workspace read-only, `--network none`, non-root) lewat `run_shell` — **tidak ada eksekusi di host**. Command konstan (`git -C /work …`); argumen user (`path`/`count`) dibatasi/di-`shlex.quote` untuk cegah injeksi opsi git arbitrer. Docker absen → error anggun.
+
+### `GitStatusTool` — `git_status`
+- Input: `{}` — Output: status porcelain + branch (`git status --porcelain=v1 --branch`)
+
+### `GitDiffTool` — `git_diff`
+- Input: `{"path"?: "...", "staged"?: bool, "full"?: bool}` — default `--stat`; `full=true` diff penuh; `staged=true` perubahan ter-stage; `path` membatasi ke satu file
+- Output: stdout diff
+
+### `GitLogTool` — `git_log`
+- Input: `{"count"?: <1..50, default 15>}` — Output: `hash subjek (author, waktu-relatif)` per baris
+- Output error (ketiganya): `{"error": "..."}` jika Docker absen atau workspace bukan repo git
 
 ---
 
@@ -249,6 +281,20 @@ Tool untuk bertanya klarifikasi ke user. **Interaktif** — eksekusi nyata ditan
 - Input: `{"question": "..."}`
 - Output: `{"answer": "<jawaban user>"}` (atau penanda timeout bila user tak menjawab dalam batas waktu — fail-soft, agent lanjut dengan asumsi)
 - `execute()` di tool ini hanya fallback non-interaktif (mis. test langsung di luar agent loop); jalur utama lewat `QuestionGate`.
+
+---
+
+## `tools/todo.py`
+
+### `TodoWriteTool` — `todo_write`
+
+Agent mengelola daftar langkah multi-step yang terlihat user. Tiap panggilan **mengganti** seluruh daftar sesi (snapshot, pola sama harness). Menulis ke tabel internal `agent_todos` (bukan filesystem) → **tanpa approval**.
+
+- `requires_approval = False`
+- Input: `{"todos": [{"content": "...", "status": "pending|in_progress|completed"}, ...]}` (maks 30 item)
+- `session_id` disuntik `AgentLoop` sebagai `_session_id` (model tak mengarang sesi)
+- Output sukses: `{"ok": true, "total": N, "counts": {pending, in_progress, completed}}`
+- Output error: `{"error": "..."}` jika `todos` bukan list/kosong, status tak valid, atau konteks sesi/DB hilang
 
 ---
 
@@ -362,6 +408,10 @@ List isi direktori dalam workspace. Read-only — **tidak butuh approval**.
 | `grep` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 | `pdf_read` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 | `doc_write` | ✅ | ❌ | ✅ | ✅ | ❌ | **Ya** |
+| `pdf_write` | ✅ | ❌ | ✅ | ✅ | ❌ | **Ya** |
+| `git_status` | ❌ | ✅ | ✅ | ❌ | ✅ | Tidak |
+| `git_diff` | ❌ | ✅ | ✅ | ❌ | ✅ | Tidak |
+| `git_log` | ❌ | ✅ | ✅ | ❌ | ✅ | Tidak |
 | `shell_run` | ❌ | ✅ | ✅ | ❌ | ❌ | **Ya (selalu)** |
 | `code_run` | ❌ | ✅ | ✅ | ✅ | ❌ | **Ya (selalu)** |
 | `web_fetch` | ✅ | ❌ | ✅ | ✅ | ❌ | Tidak |
@@ -371,6 +421,7 @@ List isi direktori dalam workspace. Read-only — **tidak butuh approval**.
 | `memory_search` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 | `json_query` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 | `ask_user` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
+| `todo_write` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 
 Permission dikontrol via `soul.toml[tools][allowed]` tiap role — bukan hardcoded di kode tool. Semua tool filesystem dibatasi ke `workspace_root` (lihat catatan di `TOOL_REGISTRY`). `security` read-only murni (tanpa write/exec/network); `data` boleh tulis dokumen & jalankan kode tapi tidak `shell_run`/`http_request`.
 

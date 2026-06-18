@@ -133,3 +133,55 @@ def test_skills_page_shows_seeded_skill(client, tmp_path, monkeypatch):
     html = client.get("/skills").text
     assert "parse_csv" in html
     assert "status-active" in html
+
+
+def test_skills_page_shows_crystallization_attempt(client):
+    """Percobaan kristalisasi (Inovasi 3) tampil di /skills dengan keputusan evaluator."""
+    import os
+    import sqlite3
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    conn.execute(
+        """INSERT INTO crystallization_log
+           (role, skill_name, generator_model, evaluator_model, confidence,
+            critical_gaps, status, reasoning)
+           VALUES ('dev','build_api','claude-sonnet-4-6','claude-sonnet-4-6',5,0,'active','solid')"""
+    )
+    conn.commit()
+    conn.close()
+
+    html = client.get("/skills").text
+    assert "Kristalisasi" in html
+    assert "build_api" in html
+    assert "solid" in html
+
+
+def test_conversations_page_renders_empty(client):
+    """/conversations tanpa arsip → 200 + pesan kosong."""
+    resp = client.get("/conversations")
+    assert resp.status_code == 200
+    assert "Conversations" in resp.text
+    assert "Belum ada percakapan" in resp.text
+
+
+def test_conversations_page_shows_archived_run(client):
+    """Percakapan tersimpan tampil dengan pattern, peserta, dan transkrip."""
+    import json
+    import os
+    import sqlite3
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    conn.execute(
+        """INSERT INTO conversations (session_id, pattern, participants, initial_message,
+               transcript_json, turns, end_reason, cost_usd)
+           VALUES ('s1','debate','pm,dev','adu argumen',?,2,'strategy_done',0.0)""",
+        (json.dumps([["user", "adu argumen"], ["pm", "setuju"], ["dev", "tidak"]]),),
+    )
+    conn.commit()
+    conn.close()
+
+    html = client.get("/conversations").text
+    assert "debate" in html
+    assert "pm,dev" in html
+    assert "adu argumen" in html
+    assert "setuju" in html

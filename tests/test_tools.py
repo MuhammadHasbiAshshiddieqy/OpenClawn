@@ -18,8 +18,8 @@ def dataclasses_replace(obj, **changes):
 # ── TOOL_REGISTRY ─────────────────────────────────────────────────────────────
 
 
-def test_registry_has_all_20_tools():
-    """Semua 20 tool harus terdaftar di TOOL_REGISTRY."""
+def test_registry_has_all_25_tools():
+    """Semua 25 tool harus terdaftar di TOOL_REGISTRY."""
     expected = {
         "file_read",
         "read_many",
@@ -32,6 +32,10 @@ def test_registry_has_all_20_tools():
         "grep",
         "pdf_read",
         "doc_write",
+        "pdf_write",
+        "git_status",
+        "git_diff",
+        "git_log",
         "shell_run",
         "code_run",
         "web_fetch",
@@ -41,6 +45,7 @@ def test_registry_has_all_20_tools():
         "memory_search",
         "json_query",
         "ask_user",
+        "todo_write",
     }
     assert set(TOOL_REGISTRY.keys()) == expected
 

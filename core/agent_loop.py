@@ -349,6 +349,11 @@ class AgentLoop:
         if schema_err:
             return {"error": schema_err}
 
+        # todo_write per-sesi: suntik session_id (tool tak menerima konteks sesi via
+        # signature execute; model tak perlu — & tak boleh — mengarang session_id).
+        if name == "todo_write":
+            input_data = {**input_data, "_session_id": self.cfg.session_id}
+
         if tool.requires_approval:
             approved = await self.approval.request(self.cfg.session_id, name, input_data)
             if not approved:

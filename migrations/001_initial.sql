@@ -109,3 +109,53 @@ CREATE TABLE IF NOT EXISTS tool_invocations (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_tool_invocations ON tool_invocations(tool_name, outcome);
+
+-- ===================== CRYSTALLIZATION LOG [#3 observability] =====================
+-- Jejak SETIAP percobaan kristalisasi (Inovasi 3), termasuk yang jadi draft/duplicate.
+-- Tabel skills hanya menyimpan hasil yang tersimpan; ini membuat KEPUTUSAN evaluator
+-- (confidence/gaps/active-vs-draft + model generator vs evaluator) kasat mata di /skills.
+CREATE TABLE IF NOT EXISTS crystallization_log (
+    id INTEGER PRIMARY KEY,
+    role TEXT NOT NULL,
+    skill_name TEXT NOT NULL,
+    generator_model TEXT,
+    evaluator_model TEXT,
+    confidence INTEGER,                     -- 1..5 dari self-evaluation
+    critical_gaps INTEGER,                  -- 1 = ada gap kritis
+    status TEXT NOT NULL,                   -- active | draft | duplicate
+    reasoning TEXT,                         -- satu kalimat alasan evaluator
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_crystallization_role ON crystallization_log(role, status);
+
+-- ===================== CONVERSATIONS [multi-agent persistence] =====================
+-- Simpan transkrip percakapan multi-agent (pipeline/debate/orchestrator) agar bisa
+-- ditinjau ulang. Ephemeral sebelumnya (in-memory) — hilang saat refresh. Satu baris
+-- per run; transcript disimpan sebagai JSON list [[role, content], ...].
+CREATE TABLE IF NOT EXISTS conversations (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    pattern TEXT NOT NULL,                  -- pipeline | debate | orchestrator
+    participants TEXT,                      -- CSV peserta (lead-first utk orchestrator)
+    initial_message TEXT,
+    transcript_json TEXT NOT NULL,          -- JSON [[role, content], ...]
+    turns INTEGER DEFAULT 0,
+    end_reason TEXT,                        -- strategy_done | max_turns | stopped
+    cost_usd REAL DEFAULT 0.0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_session ON conversations(session_id);
+
+-- ===================== AGENT TODOS [tool todo_write] =====================
+-- Daftar langkah multi-step yang dikelola agent lewat tool todo_write, per sesi.
+-- Satu baris = satu item; tiap panggilan todo_write MENGGANTI seluruh daftar sesi
+-- (snapshot, pola sama harness). UI menampilkan progres agar user lihat rencana agent.
+CREATE TABLE IF NOT EXISTS agent_todos (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    position INTEGER NOT NULL,               -- urutan dalam daftar
+    content TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | in_progress | completed
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_todos_session ON agent_todos(session_id, position);

@@ -1,7 +1,7 @@
-"""Tool dokumen: pdf_read (baca) + doc_write (tulis docx/pptx/xlsx/md).
+"""Tool dokumen: pdf_read (baca) + doc_write (docx/pptx/xlsx/md) + pdf_write (PDF).
 
 Semua library murni-Python tanpa dependency sistem (pypdf, python-docx, python-pptx,
-openpyxl) — pengecualian dependency yang disetujui owner, lihat CLAUDE.md §7.
+openpyxl, reportlab) — pengecualian dependency yang disetujui owner, lihat CLAUDE.md §7.
 """
 
 from pypdf import PdfReader
@@ -224,5 +224,77 @@ class DocWriteTool(Tool):
                     },
                 },
                 "required": ["path", "format", "content"],
+            },
+        }
+
+
+class PdfWriteTool(Tool):
+    """Tulis PDF terstruktur ke workspace via reportlab (murni-Python).
+
+    Destruktif (menulis file) → requires_approval=True. reportlab di-import lazy
+    agar dependency hilang gagal anggun (§1.3). content = {title?, sections:[{heading?,
+    body?, bullets?:[]}]} — sama bentuk dengan doc_write docx untuk konsistensi.
+    """
+
+    name = "pdf_write"
+    requires_approval = True
+
+    async def execute(self, input_data: dict, vault, db=None) -> dict:
+        path = (input_data.get("path") or "").strip()
+        content = input_data.get("content")
+        if not path:
+            return {"error": "path wajib diisi"}
+        if not isinstance(content, dict):
+            return {"error": "content harus objek {title, sections}"}
+        try:
+            safe = resolve_in_workspace(path, CONFIG.workspace_root)
+        except WorkspaceViolation as e:
+            return {"error": str(e)}
+
+        try:
+            self._render(str(safe), content)
+        except ImportError as e:
+            return {"error": f"reportlab tidak terpasang: {e}"}
+        except Exception as e:  # noqa: BLE001 — penulisan PDF harus gagal anggun
+            return {"error": f"Gagal menulis PDF: {e}"}
+        return {"path": path, "format": "pdf", "ok": True}
+
+    def _render(self, out_path: str, content: dict) -> None:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.platypus import ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer
+
+        styles = getSampleStyleSheet()
+        flow = []
+        if content.get("title"):
+            flow.append(Paragraph(str(content["title"]), styles["Title"]))
+            flow.append(Spacer(1, 12))
+        for sec in content.get("sections", []):
+            if sec.get("heading"):
+                flow.append(Paragraph(str(sec["heading"]), styles["Heading2"]))
+            if sec.get("body"):
+                flow.append(Paragraph(str(sec["body"]), styles["BodyText"]))
+            bullets = sec.get("bullets", [])
+            if bullets:
+                items = [ListItem(Paragraph(str(b), styles["BodyText"])) for b in bullets]
+                flow.append(ListFlowable(items, bulletType="bullet"))
+            flow.append(Spacer(1, 8))
+        SimpleDocTemplate(out_path, pagesize=A4).build(flow)
+
+    def schema(self) -> dict:
+        return {
+            "name": "pdf_write",
+            "description": (
+                "Tulis dokumen PDF ke workspace dari struktur {title?, sections:[{heading?, "
+                "body?, bullets?:[]}]}. Untuk Word pakai doc_write (format docx). "
+                "Butuh approval (menulis file)."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path .pdf relatif ke workspace."},
+                    "content": {"description": "Struktur {title, sections} (lihat description)."},
+                },
+                "required": ["path", "content"],
             },
         }

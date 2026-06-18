@@ -180,6 +180,7 @@ async def converse_stream(request: Request):
         session_id=session_id,
         config=CONFIG,
         control=control,
+        pattern=pattern,
     )
 
     async def generate():
@@ -352,6 +353,12 @@ async def skills_page(request: Request):
                 "near_archive": r["status"] == "active" and projected < threshold * 1.5,
             }
         )
+    # Inovasi 3 observability: percobaan kristalisasi terakhir (keputusan evaluator).
+    crystallization = await db.fetchall(
+        """SELECT role, skill_name, generator_model, evaluator_model,
+                  confidence, critical_gaps, status, reasoning, created_at
+           FROM crystallization_log ORDER BY id DESC LIMIT 20"""
+    )
     return templates.TemplateResponse(
         request,
         "skills.html",
@@ -361,7 +368,31 @@ async def skills_page(request: Request):
             "threshold": threshold,
             "threshold_pct": round(threshold * 100),
             "decay_base": base,
+            "crystallization": crystallization,
+            "confidence_threshold": CONFIG.confidence_threshold,
         },
+    )
+
+
+@app.get("/conversations", response_class=HTMLResponse)
+async def conversations_page(request: Request):
+    """Arsip percakapan multi-agent (pipeline/debate/orchestrator) untuk ditinjau ulang."""
+    rows = await db.fetchall(
+        """SELECT id, pattern, participants, initial_message, transcript_json,
+                  turns, end_reason, cost_usd, created_at
+           FROM conversations ORDER BY id DESC LIMIT 50"""
+    )
+    convos = []
+    for r in rows:
+        try:
+            transcript = json.loads(r["transcript_json"])
+        except (json.JSONDecodeError, TypeError):
+            transcript = []
+        convos.append({**r, "transcript": transcript})
+    return templates.TemplateResponse(
+        request,
+        "conversations.html",
+        {"conversations": convos},
     )
 
 

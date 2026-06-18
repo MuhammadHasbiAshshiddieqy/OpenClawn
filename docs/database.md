@@ -225,6 +225,65 @@ Audit setiap eksekusi tool, dicatat terpusat di `AgentLoop._execute_tool` lewat 
 
 ---
 
+### `crystallization_log` — Jejak Kristalisasi (Inovasi 3 observability)
+
+Setiap percobaan kristalisasi (termasuk yang jadi `draft`/`duplicate`) dicatat oleh `ConfidenceCrystallizer._log_attempt`. Tabel `skills` hanya menyimpan hasil tersimpan; ini membuat **keputusan evaluator** kasat mata di `/skills`.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `role` | TEXT | Role agent |
+| `skill_name` | TEXT | Nama skill (slug task) |
+| `generator_model` | TEXT | Model yang menghasilkan solusi |
+| `evaluator_model` | TEXT | Model evaluator (minimal setara generator) |
+| `confidence` | INTEGER | 1..5 dari self-evaluation |
+| `critical_gaps` | INTEGER | 1 = ada gap kritis |
+| `status` | TEXT | `active` \| `draft` \| `duplicate` |
+| `reasoning` | TEXT | Satu kalimat alasan evaluator |
+| `created_at` | TIMESTAMP | — |
+
+**Index:** `idx_crystallization_role` pada `(role, status)`. Penulisan fail-soft.
+
+---
+
+### `conversations` — Arsip Percakapan Multi-Agent
+
+Transkrip percakapan multi-agent (pipeline/debate/orchestrator) disimpan oleh `ConversationOrchestrator._persist` di setiap `conversation_end`, agar bisa ditinjau ulang di `/conversations` (sebelumnya ephemeral).
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `session_id` | TEXT | Sesi percakapan |
+| `pattern` | TEXT | `pipeline` \| `debate` \| `orchestrator` |
+| `participants` | TEXT | CSV peserta (lead-first untuk orchestrator) |
+| `initial_message` | TEXT | Pesan pembuka |
+| `transcript_json` | TEXT | JSON `[[role, content], ...]` |
+| `turns` | INTEGER | Jumlah giliran agent |
+| `end_reason` | TEXT | `strategy_done` \| `max_turns` \| `stopped` |
+| `cost_usd` | REAL | Total biaya lintas-giliran |
+| `created_at` | TIMESTAMP | — |
+
+**Index:** `idx_conversations_session` pada `(session_id)`. Satu baris per run (persist hanya di `conversation_end`). Penulisan fail-soft.
+
+---
+
+### `agent_todos` — Rencana Langkah Agent (tool `todo_write`)
+
+Daftar langkah multi-step yang dikelola agent lewat tool `todo_write`, per sesi. Tiap panggilan **mengganti** seluruh daftar sesi (snapshot). Membuat rencana kerja agent terlihat user.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `session_id` | TEXT | Sesi pemilik daftar |
+| `position` | INTEGER | Urutan item dalam daftar |
+| `content` | TEXT | Isi langkah |
+| `status` | TEXT | `pending` \| `in_progress` \| `completed` |
+| `updated_at` | TIMESTAMP | — |
+
+**Index:** `idx_agent_todos_session` pada `(session_id, position)`. `session_id` disuntik AgentLoop sebagai `_session_id` (model tak mengarang sesi).
+
+---
+
 ## Query Penting
 
 ```sql
