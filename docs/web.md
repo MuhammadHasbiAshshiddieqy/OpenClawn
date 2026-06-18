@@ -92,7 +92,12 @@ Plus **watchdog** 20 detik: bila tak ada frame masuk dalam jendela itu → statu
 
 Form data: `message`, `pattern` (`pipeline`|`debate`|`orchestrator`), `participants` (CSV opsional), `rounds` (debate), `session_id`.
 
-Membangun `TurnStrategy` via `make_strategy`, `ConversationControl(disconnect_check=request.is_disconnected)`, mendaftarkannya di `_conversations[session_id]` (registry modul-level, pola sama `ApprovalGate._pending`), lalu stream SSE. `finally`: deregister.
+**Semantik urutan `participants`** (penting — UI mengirim chip sesuai urutan ini):
+- `pipeline`: urutan = urutan handoff (mis. `dev,qa` → dev lalu qa).
+- `orchestrator`: **elemen pertama = lead**, sisanya = workers. Lead tidak harus `pm` — UI menandai chip lead dengan ★ dan memindahkannya ke depan. Tanpa `participants`, default `config.conversation_default_participants` dipakai (lead = `pm`).
+- `debate`: urutan giliran round-robin; `rounds` menentukan jumlah siklus.
+
+Membangun `TurnStrategy` via `make_strategy` (`participants[0]` jadi lead untuk orchestrator), `ConversationControl(disconnect_check=request.is_disconnected)`, mendaftarkannya di `_conversations[session_id]` (registry modul-level, pola sama `ApprovalGate._pending`), lalu stream SSE. `finally`: deregister.
 
 Frame SSE (tambahan dari `/chat/stream`):
 ```

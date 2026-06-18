@@ -109,12 +109,41 @@
                     <span>Mode</span>
                     <select id="mode">
                         <option value="single">Single — 1 agent</option>
-                        <option value="pipeline">Pipeline — PM → Dev → QA</option>
+                        <option value="pipeline">Pipeline — handoff berurutan</option>
                         <option value="debate">Debate — diskusi N ronde</option>
                         <option value="orchestrator">Orchestrator — lead delegasi</option>
                     </select>
                 </label>
                 <span id="convo-hint" class="convo-hint" hidden>Agent akan saling mengobrol otomatis</span>
+            </div>
+
+            <!-- Konfigurasi percakapan: muncul hanya saat mode non-single.
+                 Chip peserta (PM/Dev/QA) bisa dicentang. Untuk orchestrator, peserta
+                 pertama yang aktif menjadi lead (ditandai bintang). Untuk debate, ada
+                 pemilih jumlah ronde. -->
+            <div id="convo-config" class="convo-config" hidden>
+                <div class="convo-row">
+                    <span class="convo-row-label" id="participants-label">Peserta</span>
+                    <div id="participants" class="participants">
+                        {% for r in available_roles %}
+                        <button type="button" class="role-chip active" data-role="{{ r }}">
+                            <span class="lead-star" title="Lead">★</span>
+                            <span class="chip-name">{{ r.upper() }}</span>
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="convo-row" id="rounds-row" hidden>
+                    <span class="convo-row-label">Ronde</span>
+                    <div class="rounds-pick">
+                        <button type="button" class="round-btn" data-delta="-1" title="Kurangi">−</button>
+                        <span id="rounds-val">2</span>
+                        <button type="button" class="round-btn" data-delta="1" title="Tambah">+</button>
+                    </div>
+                </div>
+                <div class="convo-row" id="lead-hint-row" hidden>
+                    <span class="lead-hint">Klik chip untuk menetapkannya sebagai <b>lead</b> (★)</span>
+                </div>
             </div>
             <form id="chat-form" class="composer">
                 <input type="hidden" name="role" value="{{ role }}">
@@ -205,9 +234,92 @@
     const convoHint = document.getElementById('convo-hint');
     let activeConvo = null;   // AbortController saat conversation berjalan (untuk STOP + interject)
 
-    modeSelect.addEventListener('change', function() {
-        convoHint.hidden = (modeSelect.value === 'single');
+    // ── Konfigurasi peserta percakapan ───────────────────────────────────────
+    const convoConfig = document.getElementById('convo-config');
+    const participantsBox = document.getElementById('participants');
+    const participantsLabel = document.getElementById('participants-label');
+    const roundsRow = document.getElementById('rounds-row');
+    const leadHintRow = document.getElementById('lead-hint-row');
+    const roundsVal = document.getElementById('rounds-val');
+    const chips = Array.from(participantsBox.querySelectorAll('.role-chip'));
+    let rounds = 2;
+
+    // Daftar role aktif MENGIKUTI urutan DOM chip. Untuk orchestrator, chip pertama
+    // yang aktif = lead (backend memakai participants[0] sebagai lead).
+    function activeRoles() {
+        return chips.filter(c => c.classList.contains('active')).map(c => c.dataset.role);
+    }
+    // Lead = role aktif pertama dalam urutan DOM saat ini.
+    function leadRole() {
+        const a = activeRoles();
+        return a.length ? a[0] : null;
+    }
+
+    // Render ulang penanda ★ lead (hanya relevan untuk orchestrator).
+    function refreshLeadMarker() {
+        const isOrch = modeSelect.value === 'orchestrator';
+        const lead = leadRole();
+        chips.forEach(c => {
+            const star = c.querySelector('.lead-star');
+            star.style.display = (isOrch && c.dataset.role === lead && c.classList.contains('active'))
+                ? 'inline' : 'none';
+        });
+    }
+
+    // Tampilkan/sembunyikan config sesuai mode + sesuaikan label & baris ronde.
+    function syncModeUI() {
+        const mode = modeSelect.value;
+        const isConvo = mode !== 'single';
+        convoHint.hidden = !isConvo;
+        convoConfig.hidden = !isConvo;
+        roundsRow.hidden = (mode !== 'debate');
+        leadHintRow.hidden = (mode !== 'orchestrator');
+        participantsLabel.textContent =
+            mode === 'pipeline' ? 'Urutan' :
+            mode === 'orchestrator' ? 'Lead + Workers' : 'Peserta';
+        refreshLeadMarker();
+    }
+
+    modeSelect.addEventListener('change', syncModeUI);
+
+    // Klik chip: di orchestrator, klik chip aktif → jadikan lead (pindah ke depan).
+    // Klik chip non-aktif → aktifkan. Toggle nonaktif via klik kedua bila sudah lead.
+    chips.forEach(chip => {
+        chip.addEventListener('click', () => {
+            const mode = modeSelect.value;
+            const isActive = chip.classList.contains('active');
+
+            if (mode === 'orchestrator') {
+                if (!isActive) {
+                    chip.classList.add('active');
+                } else if (chip.dataset.role === leadRole()) {
+                    // Sudah lead & diklik lagi → nonaktifkan (kecuali ini satu-satunya).
+                    if (activeRoles().length > 1) chip.classList.remove('active');
+                } else {
+                    // Aktif tapi bukan lead → jadikan lead: pindahkan ke awal kontainer.
+                    participantsBox.insertBefore(chip, participantsBox.firstChild);
+                }
+            } else {
+                // pipeline / debate: toggle biasa.
+                chip.classList.toggle('active');
+            }
+            // Sinkronkan urutan array `chips` dengan urutan DOM (penting utk lead/pipeline).
+            chips.sort((a, b) =>
+                Array.prototype.indexOf.call(participantsBox.children, a) -
+                Array.prototype.indexOf.call(participantsBox.children, b));
+            refreshLeadMarker();
+        });
     });
+
+    // Pemilih ronde (debate).
+    document.querySelectorAll('.round-btn').forEach(b => {
+        b.addEventListener('click', () => {
+            rounds = Math.min(5, Math.max(1, rounds + parseInt(b.dataset.delta, 10)));
+            roundsVal.textContent = rounds;
+        });
+    });
+
+    syncModeUI();
 
     // Metadata role: label singkat + deskripsi untuk header bubble
     const ROLE_META = {
@@ -309,7 +421,14 @@
     async function runConversation(message, pattern) {
         userBubble(message);
         showStatus('<span class="status-tag route">Start</span> Memulai percakapan…');
-        const body = new URLSearchParams({ message, pattern, session_id: form.session_id.value });
+        // Kirim peserta (urutan = lead dulu untuk orchestrator, urutan pipeline untuk pipeline)
+        // + ronde (hanya dipakai backend untuk debate). Backend abaikan yang tak relevan.
+        const body = new URLSearchParams({
+            message, pattern,
+            session_id: form.session_id.value,
+            participants: activeRoles().join(','),
+            rounds: String(rounds),
+        });
 
         const controller = new AbortController();
         activeConvo = controller;
@@ -387,11 +506,11 @@
     async function sendMessage() {
         const message = textarea.value.trim();
         if (!message) return;
-        if (emptyState) emptyState.remove();
-        textarea.value = ''; autoGrow();
 
         // INTERJECT: bila percakapan sedang aktif, sela alih-alih memulai baru.
         if (activeConvo) {
+            if (emptyState) emptyState.remove();
+            textarea.value = ''; autoGrow();
             userBubble(message);
             const body = new URLSearchParams({ session_id: form.session_id.value, message });
             fetch('/converse/interject', { method: 'POST', body }).catch(() => {});
@@ -400,6 +519,26 @@
         }
 
         const mode = modeSelect.value;
+
+        // Validasi peserta untuk mode percakapan (pesan belum dikonsumsi bila gagal).
+        if (mode !== 'single') {
+            const n = activeRoles().length;
+            if (mode === 'debate' && n < 2) {
+                showStatus('<span class="status-tag stop">Err</span> Debate butuh minimal 2 peserta', 'error');
+                return;
+            }
+            if (mode === 'orchestrator' && n < 2) {
+                showStatus('<span class="status-tag stop">Err</span> Orchestrator butuh lead + minimal 1 worker', 'error');
+                return;
+            }
+            if (mode === 'pipeline' && n < 1) {
+                showStatus('<span class="status-tag stop">Err</span> Pipeline butuh minimal 1 peserta', 'error');
+                return;
+            }
+        }
+
+        if (emptyState) emptyState.remove();
+        textarea.value = ''; autoGrow();
         sendBtn.disabled = true;
         chatBox.scrollTop = chatBox.scrollHeight;
         try {

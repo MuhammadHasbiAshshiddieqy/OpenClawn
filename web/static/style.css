@@ -356,6 +356,65 @@ code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .85em;
 .convo-hint { font-size: .74rem; color: var(--green); }
 .convo-hint[hidden] { display: none; }
 
+/* Konfigurasi percakapan (peserta + ronde) di atas composer */
+.convo-config {
+    max-width: 760px; margin: 0 auto 8px;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 10px 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.convo-config[hidden] { display: none; }
+.convo-row { display: flex; align-items: center; gap: 10px; }
+.convo-row[hidden] { display: none; }
+.convo-row-label {
+    font-size: .68rem; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--text-faint); min-width: 84px; flex: none;
+}
+
+/* Chip peserta — toggle PM/Dev/QA */
+.participants { display: flex; gap: 8px; flex-wrap: wrap; }
+.role-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 13px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-2);
+    color: var(--text-faint);
+    font-family: inherit; font-size: .8rem; font-weight: 600;
+    cursor: pointer; transition: all .14s;
+    opacity: .55;
+}
+.role-chip:hover { color: var(--text-dim); border-color: var(--purple-bright); }
+.role-chip.active { opacity: 1; color: var(--text); background: var(--panel-2); }
+/* Warna aksen chip aktif per role (selaras header bubble) */
+.role-chip.active[data-role="pm"]  { border-color: var(--purple-bright); }
+.role-chip.active[data-role="dev"] { border-color: var(--green); }
+.role-chip.active[data-role="qa"]  { border-color: var(--red-soft); }
+.role-chip .lead-star {
+    display: none;          /* di-toggle via JS hanya untuk lead orchestrator */
+    color: #f0c45a; font-size: .85rem; line-height: 1;
+}
+.role-chip .chip-name { letter-spacing: .04em; }
+
+/* Pemilih ronde */
+.rounds-pick {
+    display: inline-flex; align-items: center; gap: 12px;
+    background: var(--bg-2); border: 1px solid var(--border-2);
+    border-radius: 999px; padding: 3px 6px;
+}
+.rounds-pick #rounds-val { min-width: 16px; text-align: center; font-weight: 700; font-size: .9rem; }
+.round-btn {
+    width: 24px; height: 24px; border: none; border-radius: 50%;
+    background: var(--panel-2); color: var(--text); cursor: pointer;
+    font-size: 1rem; line-height: 1; display: grid; place-items: center;
+    transition: background .12s;
+}
+.round-btn:hover { background: var(--purple-deep); }
+.lead-hint { font-size: .72rem; color: var(--text-faint); }
+.lead-hint b { color: #f0c45a; }
+
 .stop-btn {
     flex: none; width: 40px; height: 40px;
     border: none; border-radius: 12px;

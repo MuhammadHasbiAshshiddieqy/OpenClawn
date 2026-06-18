@@ -113,6 +113,13 @@ Test untuk `core/conversation.py` (multi-agent conversation). Seam = fake `agent
 | `test_pipeline_contract_valid` | Output JSON valid → `validation_ok=1` di `role_handoffs` |
 | `test_pipeline_contract_degrades_on_garbage` | Output sampah → `validation_ok=0` TAPI pipeline lanjut |
 | `test_control_interjection_queue` | Antrian interjection FIFO, kosong diabaikan |
+| `test_state_dataclass_defaults` | `ConversationState` default: `turn_index=0`, `last_output=None` |
+| `test_make_strategy_pipeline_preserves_order` | Pipeline memakai urutan `participants` apa adanya |
+| `test_make_strategy_debate_uses_rounds` | Debate meneruskan jumlah ronde dari UI |
+| `test_make_strategy_orchestrator_lead_is_first_participant` | Lead = `participants[0]` (bukan harus PM), worker = sisanya |
+| `test_make_strategy_orchestrator_default_pm_lead` | Tanpa `participants` → default config, PM jadi lead |
+| `test_make_strategy_unknown_pattern_raises` | Pattern tak dikenal → `ValueError` |
+| `test_orchestrator_non_pm_lead_runs` | End-to-end: lead `dev` bicara lebih dulu |
 
 ---
 

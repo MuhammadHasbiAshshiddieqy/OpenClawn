@@ -13,6 +13,7 @@ from core.conversation import (
     DebateStrategy,
     OrchestratorStrategy,
     PipelineStrategy,
+    make_strategy,
 )
 from infra.config import AppConfig
 from infra.database import DatabaseManager
@@ -273,3 +274,60 @@ def test_control_interjection_queue():
 async def test_state_dataclass_defaults():
     s = ConversationState(transcript=[("user", "x")])
     assert s.turn_index == 0 and s.last_output is None
+
+
+# ── make_strategy: participants & lead fleksibel dari UI ──────────────────────
+
+
+def test_make_strategy_pipeline_preserves_order():
+    """Pipeline memakai urutan participants apa adanya (urutan handoff)."""
+    s = make_strategy("pipeline", ["dev", "qa"], 0)
+    assert isinstance(s, PipelineStrategy)
+    assert s.participants == ["dev", "qa"]
+
+
+def test_make_strategy_debate_uses_rounds():
+    """Debate meneruskan jumlah ronde dari UI."""
+    s = make_strategy("debate", ["pm", "qa"], 3)
+    assert isinstance(s, DebateStrategy)
+    assert s.rounds == 3 and s.participants == ["pm", "qa"]
+
+
+def test_make_strategy_orchestrator_lead_is_first_participant():
+    """Lead = participant pertama → bukan harus PM. Worker = sisanya."""
+    s = make_strategy("orchestrator", ["dev", "pm", "qa"], 0)
+    assert isinstance(s, OrchestratorStrategy)
+    assert s.lead == "dev"
+    assert s.workers == ["pm", "qa"]
+    assert s.participants == ["dev", "pm", "qa"]
+
+
+def test_make_strategy_orchestrator_default_pm_lead():
+    """Tanpa participants → default config; PM tetap lead default."""
+    s = make_strategy("orchestrator", None, 0)
+    assert isinstance(s, OrchestratorStrategy)
+    assert s.lead == "pm"  # default config.conversation_default_participants[0]
+
+
+def test_make_strategy_unknown_pattern_raises():
+    with pytest.raises(ValueError):
+        make_strategy("nonsense", ["pm"], 0)
+
+
+async def test_orchestrator_non_pm_lead_runs(db):
+    """End-to-end: orchestrator dengan lead 'dev' menjalankan dev lebih dulu."""
+    calls: list = []
+
+    def factory(role: str):
+        # Lead (dev) langsung selesai agar percakapan singkat & deterministik.
+        reply = '{"done": true}' if role == "dev" else "ok"
+        return FakeAgent(role, reply, calls)
+
+    orch = ConversationOrchestrator(
+        strategy=make_strategy("orchestrator", ["dev", "pm", "qa"], 0),
+        db=db,
+        agent_factory=factory,
+        session_id="s-leaddev",
+    )
+    await _collect(orch, "kerjakan sesuatu")
+    assert calls[0][0] == "dev"  # lead (dev) bicara pertama
