@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCLAWN · Conversations</title>
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+    <aside class="sidebar">
+        <div class="brand">
+            <img src="/static/logo.png" alt="OpenCLAWN">
+            <div>
+                <div class="name">Open<b>CLAWN</b></div>
+                <div class="tag">playful · sharp</div>
+            </div>
+        </div>
+        <div>
+            <div class="side-label">Workspace</div>
+            <nav class="nav-links">
+                <a href="/" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v7a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm4 8v2m4-2v2M0 4h16"/></svg>
+                    Chat
+                </a>
+                <a href="/metrics" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="9" width="3" height="6" rx=".5"/><rect x="6.5" y="5" width="3" height="10" rx=".5"/><rect x="12" y="1" width="3" height="14" rx=".5"/></svg>
+                    Metrics
+                </a>
+                <a href="/skills" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3-6 3-6-3 6-3z"/><path d="M2 8l6 3 6-3M2 11.5l6 3 6-3"/></svg>
+                    Skills
+                </a>
+                <a href="/conversations" class="nav-link active">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 3h12v8H6l-3 3V3z"/></svg>
+                    Conversations
+                </a>
+                <a href="/settings" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
+                    Settings
+                </a>
+            </nav>
+        </div>
+        <div class="spacer"></div>
+    </aside>
+
+    <main class="main">
+        <div class="topbar">
+            <div>
+                <h1>Conversations</h1>
+                <div class="sub">arsip percakapan multi-agent — pipeline · debate · orchestrator</div>
+            </div>
+        </div>
+
+        <div class="page">
+            {% if not conversations %}
+            <p class="muted">Belum ada percakapan tersimpan. Mulai mode Pipeline/Debate/Orchestrator di Chat.</p>
+            {% else %}
+            {% for c in conversations %}
+            <details class="convo-archive">
+                <summary>
+                    <span class="tag">{{ c.pattern }}</span>
+                    <span class="convo-parts">{{ c.participants }}</span>
+                    <span class="muted">· {{ c.turns }} giliran · {{ c.end_reason }}
+                        {% if c.cost_usd and c.cost_usd > 0 %}· ${{ '%.4f'|format(c.cost_usd) }}{% endif %}
+                        · {{ c.created_at }}</span>
+                </summary>
+                <div class="convo-archive-body">
+                    {% for role, content in c.transcript %}
+                    <div class="archive-msg {{ 'archive-user' if role == 'user' else 'role-' + role }}">
+                        <div class="archive-role">{{ role|upper }}</div>
+                        <div class="archive-text">{{ content }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </details>
+            {% endfor %}
+            {% endif %}
+        </div>
+    </main>
+</div>
+</body>
+</html>

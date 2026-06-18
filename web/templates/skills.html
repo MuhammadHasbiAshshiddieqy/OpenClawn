@@ -34,6 +34,10 @@
                     <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3-6 3-6-3 6-3z"/><path d="M2 8l6 3 6-3M2 11.5l6 3 6-3"/></svg>
                     Skills
                 </a>
+                <a href="/conversations" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 3h12v8H6l-3 3V3z"/></svg>
+                    Conversations
+                </a>
                 <a href="/settings" class="nav-link">
                     <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
                     Settings
@@ -98,6 +102,35 @@
                         <td class="muted">{{ s.days_idle }}h</td>
                         <td>{{ s.use_count }}</td>
                         <td class="muted">{{ '%.1f'|format(s.confidence or 0) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+
+            <h2 style="margin-top:30px">Kristalisasi (Inovasi #3)</h2>
+            <p class="muted">
+                Agent menilai kualitas solusinya sebelum menyimpan sebagai skill. Confidence ≥
+                {{ confidence_threshold }}/5 <b>dan</b> tanpa gap kritis → <b>active</b>; selain itu →
+                <b>draft</b> (tak masuk auto-context). Evaluator minimal setara generator.
+            </p>
+            {% if not crystallization %}
+            <p class="muted">Belum ada percobaan kristalisasi. Muncul setelah agent menyelesaikan tugas multi-tool.</p>
+            {% else %}
+            <table>
+                <thead>
+                    <tr><th>Skill</th><th>Role</th><th>Status</th><th>Confidence</th><th>Gap kritis</th><th>Generator → Evaluator</th><th>Alasan</th></tr>
+                </thead>
+                <tbody>
+                    {% for c in crystallization %}
+                    <tr>
+                        <td><strong>{{ c.skill_name }}</strong></td>
+                        <td><span class="role-dot role-{{ c.role }}"></span>{{ c.role }}</td>
+                        <td><span class="tag status-{{ c.status }}">{{ c.status }}</span></td>
+                        <td>{{ c.confidence }}/5</td>
+                        <td>{{ 'ya' if c.critical_gaps else '—' }}</td>
+                        <td class="muted">{{ c.generator_model }} → {{ c.evaluator_model }}</td>
+                        <td class="muted">{{ c.reasoning }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>

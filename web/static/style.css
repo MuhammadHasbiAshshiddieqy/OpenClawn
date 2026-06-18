@@ -717,6 +717,24 @@ tr.active-row td { background: rgba(80,200,120,.07); }
 .tag.status-active { background: var(--green-deep); }
 .tag.status-draft { background: #8a6d1f; }
 .tag.status-archived { background: var(--border-2); color: var(--text-dim); }
+.tag.status-duplicate { background: var(--border-2); color: var(--text-faint); }
+
+/* Arsip percakapan multi-agent (/conversations) */
+.convo-archive {
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    margin-bottom: 12px; background: var(--panel); overflow: hidden;
+}
+.convo-archive summary {
+    padding: 12px 16px; cursor: pointer; display: flex; align-items: center;
+    gap: 10px; flex-wrap: wrap; font-size: .88rem;
+}
+.convo-archive summary:hover { background: var(--panel-2); }
+.convo-parts { font-weight: 600; color: var(--text); letter-spacing: .03em; }
+.convo-archive-body { padding: 8px 16px 16px; border-top: 1px solid var(--border); }
+.archive-msg { padding: 10px 12px; border-radius: var(--radius-sm); margin: 8px 0; border-left: 3px solid var(--border-2); }
+.archive-msg.archive-user { border-left-color: var(--purple-bright); background: var(--panel-2); }
+.archive-role { font-size: .68rem; font-weight: 700; letter-spacing: .06em; color: var(--text-dim); margin-bottom: 4px; }
+.archive-text { font-size: .9rem; white-space: pre-wrap; color: var(--text); }
 .skills-table .role-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .skills-table tr.is-archived td { opacity: .55; }
 tr.near-archive td { background: rgba(240,196,90,.06); }

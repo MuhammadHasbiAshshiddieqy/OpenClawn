@@ -35,10 +35,13 @@ Kontrol STOP + INTERJECT, web-agnostic. `stop()`, `add_interjection(text)`, `pop
 | `OrchestratorStrategy(lead, workers)` | Lead delegasi dinamis via directive JSON (`{"delegate_to","task"}`/`{"done":true}`). Setelah worker → balik ke lead. | Lead `done`, atau **fallback** alur tetap (lead→workers→lead) bila directive tak terbaca |
 
 ### Kelas: `ConversationOrchestrator`
-`__init__(strategy, db, agent_factory, session_id, config=CONFIG, control=None)`.
+`__init__(strategy, db, agent_factory, session_id, config=CONFIG, control=None, pattern="")`. `pattern` dipakai saat persistensi (label arsip).
 
 **`run(initial_message) → AsyncGenerator[ConversationEvent, None]`** *(async)*
-Loop sampai `max_conversation_turns`/strategy selesai/STOP. Per giliran: cek stop → `next_speaker` → rakit input (+interjection) → emit `turn` → jalankan `agent_factory(role).run()` (re-wrap token/status, cek stop tiap event) → bila `wants_contract` validasi + tulis `role_handoffs` (**gagal → tetap lanjut dgn teks mentah**, keputusan degrade-graceful).
+Loop sampai `max_conversation_turns`/strategy selesai/STOP. Per giliran: cek stop → `next_speaker` → rakit input (+interjection) → emit `turn` → jalankan `agent_factory(role).run()` (re-wrap token/status, cek stop tiap event) → bila `wants_contract` validasi + tulis `role_handoffs` (**gagal → tetap lanjut dgn teks mentah**, keputusan degrade-graceful). Di setiap `conversation_end` memanggil `_persist`.
+
+**`_persist(initial_message, state, end_reason, totals)`** *(async, private)*
+Simpan transkrip ke tabel `conversations` (pattern, participants, transcript JSON, turns, end_reason, cost). Fail-soft — arsip bukan jalur kritis. Satu baris per run.
 
 ### Fungsi: `make_strategy(pattern, participants, rounds, config) → TurnStrategy`
 Bangun strategy dari parameter request (`pipeline`/`debate`/`orchestrator`); default participants dari config.
@@ -358,8 +361,12 @@ Proses crystallization lengkap:
 2. Jalankan self-evaluation via LLM
 3. Tentukan status: `"active"` jika confidence ≥ 4 dan tidak ada critical gaps, `"draft"` jika tidak
 4. Simpan ke tabel `skills`
+5. Catat percobaan ke `crystallization_log` via `_log_attempt` (observability Inovasi 3)
 
 Return dict dengan `skill_name`, `status`, `evaluator`, `confidence`, `critical_gaps`, `reasoning`.
+
+**`_log_attempt(skill_name, generator_model, evaluator_model, status, ev)`** *(async, private)*  
+Catat satu percobaan kristalisasi (termasuk `draft`/`duplicate`) ke `crystallization_log` agar keputusan evaluator kasat mata di `/skills`. Fail-soft.
 
 **`_self_evaluate(task, solution, provider, model) → dict`** *(async, private)*  
 Prompt evaluator model untuk menilai solusi dalam format JSON ketat: `{confidence, critical_gaps, reasoning}`.

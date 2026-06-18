@@ -237,7 +237,19 @@ Context yang dikirim:
 - `threshold`, `threshold_pct` — ambang arsip (dari `CONFIG.skill_archive_threshold`)
 - `decay_base` — `CONFIG.skill_decay_base`
 
-Bar decay tiap baris menandai garis ambang arsip; fill berubah warna (kuning→merah) saat skill mendekati arsip.
+Bar decay tiap baris menandai garis ambang arsip; fill berubah warna (kuning→merah) saat skill mendekati arsip. Halaman ini juga menampilkan **percobaan kristalisasi** (`crystallization_log`): status active/draft/duplicate, confidence, gap kritis, generator→evaluator, alasan (observability Inovasi 3).
+
+---
+
+#### `GET /conversations`
+
+**Arsip percakapan multi-agent.**
+
+Template: `web/templates/conversations.html`
+
+Membaca 50 percakapan terakhir dari tabel `conversations` (diisi `ConversationOrchestrator._persist`). Tiap entri `<details>` menampilkan pattern, peserta, jumlah giliran, alasan akhir, biaya, dan transkrip penuh `[[role, content], ...]`. Read-only.
+
+Context: `conversations` — list dict `{pattern, participants, initial_message, transcript, turns, end_reason, cost_usd, created_at}`.
 
 ---
 
@@ -295,6 +307,11 @@ Template dashboard `/metrics`. Menampilkan:
 Template dashboard `/skills`. Menampilkan:
 - Count chip active/draft/archived
 - Tabel per skill: nama, role (role-dot), status, bar decay terproyeksi dengan garis ambang arsip, hari idle, use_count, confidence
+- Tabel **Kristalisasi** (Inovasi 3): percobaan terakhir — status, confidence, gap kritis, generator→evaluator, alasan
+
+### `conversations.html`
+
+Template arsip `/conversations`. Daftar `<details>` per run: pattern + peserta + ringkasan (giliran/alasan/biaya/waktu) di summary, transkrip penuh (bubble per role, user dibedakan) di body.
 
 ### `settings.html`
 
@@ -327,5 +344,6 @@ uvicorn web.main:app --port 8000 --workers 1
 Buka:
 - `http://localhost:8000` — chat interface
 - `http://localhost:8000/metrics` — routing calibration dashboard (+ apply/revert kalibrasi)
-- `http://localhost:8000/skills` — skill decay dashboard
+- `http://localhost:8000/skills` — skill decay + kristalisasi dashboard
+- `http://localhost:8000/conversations` — arsip percakapan multi-agent
 - `http://localhost:8000/settings` — override model

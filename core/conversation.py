@@ -288,6 +288,7 @@ class ConversationOrchestrator:
         session_id: str,
         config: AppConfig = CONFIG,
         control: ConversationControl | None = None,
+        pattern: str = "",
     ):
         self.strategy = strategy
         self.db = db
@@ -295,6 +296,8 @@ class ConversationOrchestrator:
         self.session_id = session_id
         self.config = config
         self.control = control or ConversationControl()
+        # Untuk persistensi: pattern label + peserta (strategy memegang participants).
+        self.pattern = pattern
 
     async def run(self, initial_message: str):
         """Yield ConversationEvent. Tiap giliran = AgentLoop.run() penuh."""
@@ -314,11 +317,13 @@ class ConversationOrchestrator:
 
         while state.turn_index < self.config.max_conversation_turns:
             if await self.control.is_stopped():
+                await self._persist(initial_message, state, "stopped", totals)
                 yield ConversationEvent("conversation_end", detail="stopped", usage=totals)
                 return
 
             role = self.strategy.next_speaker(state)
             if role is None:
+                await self._persist(initial_message, state, "strategy_done", totals)
                 yield ConversationEvent("conversation_end", detail="strategy_done", usage=totals)
                 return
 
@@ -356,6 +361,8 @@ class ConversationOrchestrator:
                 )
 
             if stopped_mid:
+                state.transcript.append((role, collected))  # simpan sebagian yang sempat terkumpul
+                await self._persist(initial_message, state, "stopped", totals)
                 yield ConversationEvent(
                     "conversation_end", role=role, detail="stopped", turn_index=ti, usage=totals
                 )
@@ -371,7 +378,34 @@ class ConversationOrchestrator:
             state.turn_index += 1
             state.round_index = state.turn_index // max(1, len(self.strategy.participants))
 
+        await self._persist(initial_message, state, "max_turns", totals)
         yield ConversationEvent("conversation_end", detail="max_turns", usage=totals)
+
+    async def _persist(
+        self, initial_message: str, state: ConversationState, end_reason: str, totals: dict
+    ) -> None:
+        """Simpan transkrip percakapan ke tabel conversations (fail-soft).
+
+        Persistensi adalah arsip, bukan jalur kritis — kegagalan tulis hanya di-log.
+        """
+        try:
+            await self.db.execute(
+                """INSERT INTO conversations (session_id, pattern, participants,
+                       initial_message, transcript_json, turns, end_reason, cost_usd)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (
+                    self.session_id,
+                    self.pattern or "",
+                    ",".join(self.strategy.participants),
+                    initial_message[:2000],
+                    json.dumps(state.transcript, ensure_ascii=False),
+                    totals.get("turns", 0),
+                    end_reason,
+                    totals.get("cost_usd", 0.0),
+                ),
+            )
+        except Exception as e:  # noqa: BLE001 — arsip gagal jangan jatuhkan percakapan
+            log.error("conversation_persist_failed", session=self.session_id, error=str(e))
 
     async def _record_handoff(self, role: str, task_input: str, raw: str) -> dict:
         """Validasi output role vs contract, tulis ke role_handoffs. Gagal → teks mentah."""

@@ -73,6 +73,8 @@ class ConfidenceCrystallizer:
                     generator_model,
                 ),
             )
+            # Inovasi 3 observability: catat keputusan evaluator agar kasat mata di /skills.
+            await self._log_attempt(skill_name, generator_model, eval_model, status, evaluation)
             return {
                 "skill_name": skill_name,
                 "status": status,
@@ -83,7 +85,34 @@ class ConfidenceCrystallizer:
             # Umumnya UNIQUE constraint (skill sudah ada) → anggap duplicate.
             # Log agar error DB lain tidak hilang diam-diam (CLAUDE.md §6).
             log.warning("crystallize_insert_failed", skill_name=skill_name, error=str(e))
+            await self._log_attempt(
+                skill_name, generator_model, eval_model, "duplicate", evaluation
+            )
             return {"skill_name": skill_name, "status": "duplicate"}
+
+    async def _log_attempt(
+        self, skill_name: str, generator_model: str, evaluator_model: str, status: str, ev: dict
+    ) -> None:
+        """Catat satu percobaan kristalisasi ke crystallization_log (fail-soft)."""
+        try:
+            await self.db.execute(
+                """INSERT INTO crystallization_log
+                   (role, skill_name, generator_model, evaluator_model,
+                    confidence, critical_gaps, status, reasoning)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (
+                    self.role,
+                    skill_name,
+                    generator_model,
+                    evaluator_model,
+                    ev.get("confidence"),
+                    int(bool(ev.get("critical_gaps"))),
+                    status,
+                    ev.get("reasoning", ""),
+                ),
+            )
+        except Exception as e:  # noqa: BLE001 — observability tak boleh ganggu turn
+            log.warning("crystallization_log_failed", skill_name=skill_name, error=str(e))
 
     async def _self_evaluate(self, task: str, solution: str, provider: str, model: str) -> dict:
         prompt = (

@@ -331,3 +331,45 @@ async def test_orchestrator_non_pm_lead_runs(db):
     )
     await _collect(orch, "kerjakan sesuatu")
     assert calls[0][0] == "dev"  # lead (dev) bicara pertama
+
+
+# ── Persistensi percakapan (arsip multi-agent) ────────────────────────────────
+
+
+async def test_conversation_persisted_on_completion(db):
+    """Percakapan selesai → satu baris tersimpan di conversations dengan transkrip."""
+    calls: list = []
+    orch = ConversationOrchestrator(
+        strategy=PipelineStrategy(["pm", "dev", "qa"]),
+        db=db,
+        agent_factory=make_factory({"pm": "rencana", "dev": "kode", "qa": "lulus"}, calls),
+        session_id="s-persist",
+        pattern="pipeline",
+    )
+    await _collect(orch, "bangun fitur X")
+
+    row = await db.fetchone("SELECT * FROM conversations WHERE session_id='s-persist'")
+    assert row is not None
+    assert row["pattern"] == "pipeline"
+    assert row["participants"] == "pm,dev,qa"
+    assert row["end_reason"] == "strategy_done"
+    transcript = json.loads(row["transcript_json"])
+    # transcript: [user, pm, dev, qa]
+    assert transcript[0] == ["user", "bangun fitur X"]
+    spoken = [t[0] for t in transcript]
+    assert spoken == ["user", "pm", "dev", "qa"]
+
+
+async def test_conversation_persisted_once_per_run(db):
+    """Tepat satu baris arsip per run (persist hanya di conversation_end)."""
+    calls: list = []
+    orch = ConversationOrchestrator(
+        strategy=PipelineStrategy(["pm"]),
+        db=db,
+        agent_factory=make_factory({}, calls),
+        session_id="s-once",
+        pattern="pipeline",
+    )
+    await _collect(orch, "halo")
+    rows = await db.fetchall("SELECT id FROM conversations WHERE session_id='s-once'")
+    assert len(rows) == 1

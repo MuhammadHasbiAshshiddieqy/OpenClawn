@@ -124,3 +124,40 @@ def test_slug_generates_valid_name():
     c = ConfidenceCrystallizer(role="pm", llm=None, db=None)
     assert c._slug("buat fitur login user") == "buat-fitur-login-user"
     assert c._slug("") == "unnamed-skill"
+
+
+# ── observability: crystallization_log (Inovasi 3 kasat mata) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_crystallization_logged_with_decision(db):
+    """Setiap percobaan dicatat ke crystallization_log: status, confidence, model."""
+    llm = _mock_llm(confidence=5, critical_gaps=False)
+    c = ConfidenceCrystallizer(role="dev", llm=llm, db=db)
+    await c.crystallize(
+        task="buat parser csv",
+        solution="pakai modul csv",
+        history=[],
+        generator_model="claude-sonnet-4-6",
+    )
+    row = await db.fetchone("SELECT * FROM crystallization_log WHERE role='dev'")
+    assert row is not None
+    assert row["status"] == "active"
+    assert row["confidence"] == 5
+    assert row["critical_gaps"] == 0
+    assert row["generator_model"] == "claude-sonnet-4-6"
+    # evaluator minimal setara generator (sonnet → sonnet)
+    assert row["evaluator_model"] == "claude-sonnet-4-6"
+
+
+@pytest.mark.asyncio
+async def test_crystallization_log_records_draft(db):
+    """Draft (confidence rendah) juga tercatat — itu justru yang menarik untuk ditinjau."""
+    llm = _mock_llm(confidence=2, critical_gaps=False)
+    c = ConfidenceCrystallizer(role="qa", llm=llm, db=db)
+    await c.crystallize(
+        task="evaluasi tes", solution="belum lengkap", history=[], generator_model="gemma4:e4b"
+    )
+    row = await db.fetchone("SELECT status, confidence FROM crystallization_log WHERE role='qa'")
+    assert row["status"] == "draft"
+    assert row["confidence"] == 2
