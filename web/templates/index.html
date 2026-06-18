@@ -42,9 +42,18 @@
         <div>
             <div class="side-label">Workspace</div>
             <nav class="nav-links">
-                <a href="/" class="nav-link active"><span class="ico">💬</span> Chat</a>
-                <a href="/metrics" class="nav-link"><span class="ico">📊</span> Metrics</a>
-                <a href="/settings" class="nav-link"><span class="ico">⚙️</span> Settings</a>
+                <a href="/" class="nav-link active">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v7a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm4 8v2m4-2v2M0 4h16"/></svg>
+                    Chat
+                </a>
+                <a href="/metrics" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="9" width="3" height="6" rx=".5"/><rect x="6.5" y="5" width="3" height="10" rx=".5"/><rect x="12" y="1" width="3" height="14" rx=".5"/></svg>
+                    Metrics
+                </a>
+                <a href="/settings" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
+                    Settings
+                </a>
             </nav>
         </div>
 
@@ -72,12 +81,21 @@
             <div id="chat-box" class="chat-box">
                 <div id="empty" class="empty">
                     <img src="/static/logo.png" alt="">
-                    <h2>Halo, saya <span class="accent">CLAWN</span> 🤹</h2>
+                    <h2>Halo, saya <span class="accent">CLAWN</span></h2>
                     <p>Agent AI yang lincah sekaligus tajam — punya 18 tool untuk menjelajah kode, mencari di web, dan mengeksekusi tugas dengan aman.</p>
                     <div class="suggest">
-                        <button data-q="Apa isi folder ini? Gunakan list_dir lalu jelaskan strukturnya.">📂 Jelajahi folder</button>
-                        <button data-q="Cari semua fungsi async di codebase dengan grep.">🔎 Cari di kode</button>
-                        <button data-q="Ringkas apa itu OpenCLAWN dalam 3 poin.">✨ Perkenalan</button>
+                        <button data-q="Apa isi folder ini? Gunakan list_dir lalu jelaskan strukturnya.">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 4.5C1 3.67 1.67 3 2.5 3H6l1.5 1.5H13.5c.83 0 1.5.67 1.5 1.5v6c0 .83-.67 1.5-1.5 1.5h-11C1.67 13.5 1 12.83 1 12V4.5z"/></svg>
+                            Jelajahi folder
+                        </button>
+                        <button data-q="Cari semua fungsi async di codebase dengan grep.">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6.5" cy="6.5" r="4"/><path d="M10.5 10.5l3.5 3.5"/></svg>
+                            Cari di kode
+                        </button>
+                        <button data-q="Ringkas apa itu OpenCLAWN dalam 3 poin.">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1l1.8 3.6L14 5.3l-3 2.9.7 4.1L8 10.1l-3.7 2.2.7-4.1L2 5.3l4.2-.7z"/></svg>
+                            Perkenalan
+                        </button>
                     </div>
                 </div>
             </div>
@@ -90,10 +108,10 @@
                 <label class="mode-pick">
                     <span>Mode</span>
                     <select id="mode">
-                        <option value="single">💬 Single — 1 agent</option>
-                        <option value="pipeline">🔗 Pipeline — PM→Dev→QA</option>
-                        <option value="debate">⚔️ Debate — diskusi N ronde</option>
-                        <option value="orchestrator">🎯 Orchestrator — lead delegasi</option>
+                        <option value="single">Single — 1 agent</option>
+                        <option value="pipeline">Pipeline — PM → Dev → QA</option>
+                        <option value="debate">Debate — diskusi N ronde</option>
+                        <option value="orchestrator">Orchestrator — lead delegasi</option>
                     </select>
                 </label>
                 <span id="convo-hint" class="convo-hint" hidden>Agent akan saling mengobrol otomatis</span>
@@ -102,8 +120,12 @@
                 <input type="hidden" name="role" value="{{ role }}">
                 <input type="hidden" name="session_id" value="{{ session_id }}">
                 <textarea name="message" placeholder="Tanya apa saja ke CLAWN…" rows="1" autofocus></textarea>
-                <button type="submit" class="send-btn" title="Kirim (Enter)">➤</button>
-                <button type="button" id="stop-btn" class="stop-btn" title="Hentikan" hidden>■</button>
+                <button type="submit" class="send-btn" title="Kirim (Enter)">
+                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h12M11 5l5 5-5 5"/></svg>
+                </button>
+                <button type="button" id="stop-btn" class="stop-btn" title="Hentikan" hidden>
+                    <svg viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>
+                </button>
             </form>
             <div class="composer-hint">Enter untuk kirim · Shift+Enter baris baru</div>
         </div>
@@ -141,12 +163,12 @@
     // Label status manusiawi dari event backend.
     function statusLabel(text, detail) {
         switch (text) {
-            case 'routing':      return '🧭 Memilih model… (' + detail + ')';
-            case 'thinking':     return '💭 Berpikir…';
-            case 'tool':         return '🔧 ' + detail;
-            case 'fallback':     return '↩️ Fallback ke ' + detail;
-            case 'loop_stopped': return '⛔ Loop dihentikan: ' + detail + ' dipanggil berulang';
-            default:             return '⏳ ' + (detail ? text + ' ' + detail : text);
+            case 'routing':      return '<span class="status-tag route">Route</span> Memilih model… (' + detail + ')';
+            case 'thinking':     return '<span class="status-tag think">Think</span> Berpikir…';
+            case 'tool':         return '<span class="status-tag tool">Tool</span> ' + detail;
+            case 'fallback':     return '<span class="status-tag fall">Fallback</span> ke ' + detail;
+            case 'loop_stopped': return '<span class="status-tag stop">Halt</span> Loop dihentikan: ' + detail + ' dipanggil berulang';
+            default:             return '<span class="status-tag">Info</span> ' + (detail ? text + ' ' + detail : text);
         }
     }
 
@@ -187,23 +209,45 @@
         convoHint.hidden = (modeSelect.value === 'single');
     });
 
+    // Metadata role: label singkat + deskripsi untuk header bubble
+    const ROLE_META = {
+        pm:  { label: 'PM',  desc: 'Product Manager' },
+        dev: { label: 'Dev', desc: 'Developer' },
+        qa:  { label: 'QA',  desc: 'Quality Assurance' },
+    };
+
     function userBubble(message) {
         const el = document.createElement('div');
         el.className = 'msg user';
-        el.innerHTML = escapeHtml(message);
+        el.textContent = message;
         chatBox.appendChild(el);
+        chatBox.scrollTop = chatBox.scrollHeight;
     }
+
+    // Buat bubble agent dengan header strip berlabel role dan body untuk konten.
+    // Mengembalikan elemen body (tempat innerHTML ditulis saat token masuk).
     function newAssistantBubble(role) {
-        const el = document.createElement('div');
-        el.className = 'msg assistant md' + (role ? ' role-' + role : '');
+        const wrap = document.createElement('div');
+        wrap.className = 'msg assistant md' + (role ? ' role-' + role + ' has-role' : '');
+
         if (role) {
-            const label = document.createElement('div');
-            label.className = 'msg-role';
-            label.textContent = role.toUpperCase();
-            chatBox.appendChild(label);
+            const meta = ROLE_META[role] || { label: role.toUpperCase(), desc: 'Agent' };
+            const header = document.createElement('div');
+            header.className = 'msg-header';
+            header.innerHTML =
+                '<span class="role-dot"></span>' +
+                '<span class="role-name">' + meta.label + '</span>' +
+                '<span class="role-desc">— ' + meta.desc + '</span>';
+            wrap.appendChild(header);
         }
-        chatBox.appendChild(el);
-        return el;
+
+        const body = document.createElement('div');
+        body.className = 'msg-body';
+        wrap.appendChild(body);
+
+        chatBox.appendChild(wrap);
+        chatBox.scrollTop = chatBox.scrollHeight;
+        return body;  // caller menulis ke body, bukan ke wrap
     }
 
     // Tangani satu status event → status-line efemeral atau action chip persisten.
@@ -220,41 +264,43 @@
     // ── Mode SINGLE: 1 agent (endpoint /chat/stream) ──────────────────────────
     async function runSingle(message) {
         userBubble(message);
-        showStatus('💭 Mengirim…');
-        const body = new URLSearchParams({ message, role: form.role.value, session_id: form.session_id.value });
+        showStatus('<span class="status-tag think">Wait</span> Mengirim…');
+        const params = new URLSearchParams({ message, role: form.role.value, session_id: form.session_id.value });
 
-        const assistantEl = newAssistantBubble('');
+        // newAssistantBubble mengembalikan body-div; wrapEl = parentElement (bubble utuh)
+        const bodyEl = newAssistantBubble('');
+        const wrapEl = bodyEl.parentElement;
         let raw = '';
         let watchdog;
-        const arm = () => { clearTimeout(watchdog); watchdog = setTimeout(() => showStatus('⚠️ Server tidak merespons…', 'warn'), STALL_MS); };
+        const arm = () => { clearTimeout(watchdog); watchdog = setTimeout(() => showStatus('<span class="status-tag stop">Warn</span> Server tidak merespons…', 'warn'), STALL_MS); };
 
         try {
             arm();
-            const resp = await fetch('/chat/stream', { method: 'POST', body });
-            if (!resp.ok || !resp.body) { showStatus('❌ Error HTTP ' + resp.status, 'error'); assistantEl.remove(); return; }
+            const resp = await fetch('/chat/stream', { method: 'POST', body: params });
+            if (!resp.ok || !resp.body) { showStatus('Error HTTP ' + resp.status, 'error'); wrapEl.remove(); return; }
             await readSSE(resp, (evType, data) => {
                 arm();
                 if (evType === 'token') {
                     let piece = data; try { piece = JSON.parse(data); } catch (_) {}
-                    raw += piece; assistantEl.innerHTML = renderMarkdown(raw); showStatus('💬 Menulis jawaban…');
+                    raw += piece; bodyEl.innerHTML = renderMarkdown(raw); showStatus('<span class="status-tag think">Gen</span> Menulis jawaban…');
                 } else if (evType === 'status') {
-                    try { handleStatus(JSON.parse(data), assistantEl); } catch (_) {}
+                    try { handleStatus(JSON.parse(data), wrapEl); } catch (_) {}
                 } else if (evType === 'error') {
                     let txt = data; try { txt = JSON.parse(data).text; } catch (_) {}
-                    appendAction('❌ ' + escapeHtml(txt), 'error', assistantEl); showStatus('❌ ' + escapeHtml(txt), 'error');
+                    appendAction('<span class="status-tag stop">Err</span> ' + escapeHtml(txt), 'error', wrapEl); showStatus(escapeHtml(txt), 'error');
                 }
             });
             clearTimeout(watchdog);
-            if (!assistantEl.innerHTML.trim()) {
-                assistantEl.remove();
+            if (!bodyEl.innerHTML.trim()) {
+                wrapEl.remove();
                 if (statusLine.className.indexOf('error') === -1)
-                    appendAction('⚠️ Tidak ada jawaban (semua model gagal/kosong)', 'error', null);
+                    appendAction('<span class="status-tag stop">Err</span> Tidak ada jawaban (semua model gagal/kosong)', 'error', null);
             }
             if (statusLine.className.indexOf('error') === -1) hideStatus();
         } catch (err) {
             clearTimeout(watchdog);
-            appendAction('❌ Koneksi terputus', 'error', assistantEl);
-            if (!assistantEl.innerHTML.trim()) assistantEl.remove();
+            appendAction('<span class="status-tag stop">Err</span> Koneksi terputus', 'error', wrapEl);
+            if (!bodyEl.innerHTML.trim()) wrapEl.remove();
             hideStatus();
         }
     }
@@ -262,7 +308,7 @@
     // ── Mode CONVERSATION: banyak agent (endpoint /converse/stream) ───────────
     async function runConversation(message, pattern) {
         userBubble(message);
-        showStatus('🤝 Memulai percakapan…');
+        showStatus('<span class="status-tag route">Start</span> Memulai percakapan…');
         const body = new URLSearchParams({ message, pattern, session_id: form.session_id.value });
 
         const controller = new AbortController();
@@ -270,34 +316,41 @@
         stopBtn.hidden = false;
         sendBtn.hidden = true;
 
-        let currentEl = null, currentRaw = '';
+        let currentBody = null, currentWrap = null, currentRaw = '';
         try {
             const resp = await fetch('/converse/stream', { method: 'POST', body, signal: controller.signal });
-            if (!resp.ok || !resp.body) { showStatus('❌ Error HTTP ' + resp.status, 'error'); return; }
+            if (!resp.ok || !resp.body) { showStatus('Error HTTP ' + resp.status, 'error'); return; }
             await readSSE(resp, (evType, data) => {
                 let d = {}; try { d = JSON.parse(data); } catch (_) {}
                 if (evType === 'turn') {
-                    currentEl = newAssistantBubble(d.role); currentRaw = '';
-                    showStatus('💬 ' + (d.label || d.role) + ' sedang menjawab…');
+                    currentBody = newAssistantBubble(d.role);
+                    currentWrap = currentBody.parentElement;
+                    currentRaw = '';
+                    showStatus('<span class="status-tag think">Gen</span> ' + (d.label || d.role).toUpperCase() + ' sedang menjawab…');
                 } else if (evType === 'token') {
-                    if (!currentEl) currentEl = newAssistantBubble(d.role);
-                    currentRaw += (d.text || ''); currentEl.innerHTML = renderMarkdown(currentRaw);
+                    if (!currentBody) { currentBody = newAssistantBubble(d.role); currentWrap = currentBody.parentElement; }
+                    currentRaw += (d.text || ''); currentBody.innerHTML = renderMarkdown(currentRaw);
                 } else if (evType === 'status') {
-                    handleStatus(d, currentEl);
+                    handleStatus(d, currentWrap);
                 } else if (evType === 'conversation_end') {
-                    const reasons = { stopped: '⛔ Percakapan dihentikan', max_turns: '⏹️ Batas giliran tercapai', strategy_done: '✅ Percakapan selesai' };
-                    appendAction(reasons[d.reason] || ('Selesai: ' + d.reason), d.reason === 'stopped' ? 'error' : '', null);
+                    const map = {
+                        stopped:       ['stop',  'Percakapan dihentikan'],
+                        max_turns:     ['fall',  'Batas giliran tercapai'],
+                        strategy_done: ['route', 'Percakapan selesai'],
+                    };
+                    const [cls, label] = map[d.reason] || ['', 'Selesai: ' + d.reason];
+                    appendAction('<span class="status-tag ' + cls + '">' + label + '</span>', d.reason === 'stopped' ? 'error' : '', null);
                 } else if (evType === 'error') {
-                    appendAction('❌ ' + escapeHtml(d.text || data), 'error', null);
+                    appendAction('<span class="status-tag stop">Err</span> ' + escapeHtml(d.text || data), 'error', null);
                 }
                 chatBox.scrollTop = chatBox.scrollHeight;
             });
             hideStatus();
         } catch (err) {
             if (err.name === 'AbortError') {
-                appendAction('⛔ Percakapan dihentikan', 'error', null);
+                appendAction('<span class="status-tag stop">Halt</span> Percakapan dihentikan', 'error', null);
             } else {
-                appendAction('❌ Koneksi terputus', 'error', null);
+                appendAction('<span class="status-tag stop">Err</span> Koneksi terputus', 'error', null);
             }
             hideStatus();
         } finally {
@@ -342,7 +395,7 @@
             userBubble(message);
             const body = new URLSearchParams({ session_id: form.session_id.value, message });
             fetch('/converse/interject', { method: 'POST', body }).catch(() => {});
-            showStatus('✋ Menyela — akan diperhitungkan giliran berikutnya…');
+            showStatus('<span class="status-tag fall">Sela</span> Menyela — akan diperhitungkan giliran berikutnya…');
             return;
         }
 
