@@ -24,8 +24,11 @@
             </div>
         </div>
 
-        <div>
-            <div class="side-label">Roles</div>
+        <div class="role-group" id="role-group">
+            <div class="side-label">
+                Roles
+                <span class="role-group-note">single-agent</span>
+            </div>
             <div class="roles">
                 {% for r in available_roles %}
                 <a href="/?role={{ r }}" class="role-link {{ 'active' if r == role else '' }}">
@@ -71,10 +74,10 @@
     <main class="main">
         <div class="topbar">
             <div>
-                <h1>{{ roles_meta.get(role, ['Agent',''])[0] }} Agent</h1>
-                <div class="sub">{{ roles_meta.get(role, ['',''])[1] }}</div>
+                <h1 id="topbar-title">{{ roles_meta.get(role, ['Agent',''])[0] }} Agent</h1>
+                <div class="sub" id="topbar-sub">{{ roles_meta.get(role, ['',''])[1] }}</div>
             </div>
-            <span class="role-pill">{{ role.upper() }}</span>
+            <span class="role-pill" id="role-pill">{{ role.upper() }}</span>
         </div>
 
         <div class="chat-scroll">
@@ -244,6 +247,18 @@
     const chips = Array.from(participantsBox.querySelectorAll('.role-chip'));
     let rounds = 2;
 
+    // Topbar: berganti antara konteks single-role dan label mode multi-agent.
+    const topbarTitle = document.getElementById('topbar-title');
+    const topbarSub = document.getElementById('topbar-sub');
+    const rolePill = document.getElementById('role-pill');
+    const SINGLE_ROLE = {{ role|tojson }};
+    const SINGLE_TITLE = [{{ roles_meta.get(role, ['Agent',''])[0]|tojson }}, {{ roles_meta.get(role, ['',''])[1]|tojson }}];
+    const MODE_TITLE = {
+        pipeline:     ['Pipeline', 'handoff berurutan antar role'],
+        debate:       ['Debate', 'diskusi multi-peran beberapa ronde'],
+        orchestrator: ['Orchestrator', 'lead mendelegasikan ke worker'],
+    };
+
     // Daftar role aktif MENGIKUTI urutan DOM chip. Untuk orchestrator, chip pertama
     // yang aktif = lead (backend memakai participants[0] sebagai lead).
     function activeRoles() {
@@ -277,6 +292,15 @@
         participantsLabel.textContent =
             mode === 'pipeline' ? 'Urutan' :
             mode === 'orchestrator' ? 'Lead + Workers' : 'Peserta';
+        // Single-agent memakai sidebar "Roles" + role-pill di topbar; multi-agent
+        // memakai chip peserta sendiri. Tandai <body> agar CSS meredupkan/menonaktifkan
+        // pemilih role single dan topbar menampilkan label mode, bukan satu role.
+        document.body.classList.toggle('mode-convo', isConvo);
+        if (topbarTitle) {
+            topbarTitle.textContent = isConvo ? MODE_TITLE[mode][0] : (SINGLE_TITLE[0] + ' Agent');
+            topbarSub.textContent   = isConvo ? MODE_TITLE[mode][1] : SINGLE_TITLE[1];
+            rolePill.textContent    = isConvo ? mode.toUpperCase() : SINGLE_ROLE.toUpperCase();
+        }
         refreshLeadMarker();
     }
 

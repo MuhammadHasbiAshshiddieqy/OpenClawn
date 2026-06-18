@@ -138,6 +138,33 @@ code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .85em;
 .role-link .meta { display: flex; flex-direction: column; line-height: 1.15; }
 .role-link .meta small { font-size: .68rem; opacity: .7; }
 
+/* Catatan kecil di header "Roles" — menegaskan ini khusus single-agent */
+.side-label .role-group-note {
+    font-size: .58rem; letter-spacing: .08em;
+    color: var(--text-faint); opacity: .7;
+    background: var(--panel-2); border: 1px solid var(--border);
+    padding: 1px 6px; border-radius: 999px; margin-left: 6px;
+}
+
+/* Mode multi-agent: pemilih role single jadi tidak relevan → redupkan & matikan
+   interaksinya (peserta dipilih lewat chip di composer). Tetap terlihat sebagai
+   konteks, tapi jelas non-aktif. */
+body.mode-convo .role-group {
+    opacity: .4;
+    pointer-events: none;
+    filter: grayscale(.4);
+    transition: opacity .15s, filter .15s;
+}
+body.mode-convo .role-group .role-link.active {
+    background: var(--panel-2);
+    color: var(--text-dim);
+    border-color: var(--border);
+    box-shadow: none;
+}
+body.mode-convo .role-group .role-link.active .dot {
+    background: var(--text-faint); box-shadow: none;
+}
+
 .nav-links { display: flex; flex-direction: column; gap: 4px; }
 .nav-link {
     display: flex; align-items: center; gap: 10px;
