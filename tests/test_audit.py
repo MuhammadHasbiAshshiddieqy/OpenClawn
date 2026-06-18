@@ -142,9 +142,7 @@ async def test_correction_detected_english(auditor, db):
 
     await auditor.check_correction("no, that's wrong, try again", "s5en")
 
-    row = await db.fetchone(
-        "SELECT had_correction FROM routing_events WHERE id=?", (event_id,)
-    )
+    row = await db.fetchone("SELECT had_correction FROM routing_events WHERE id=?", (event_id,))
     assert row["had_correction"] == 1
 
 

@@ -1,0 +1,41 @@
+name: CI
+
+# Jaga 4 inovasi inti + keamanan dari regresi: lint & test otomatis tiap
+# push/PR ke main. Test self-contained (LLM/Docker/Ollama selalu di-mock,
+# CLAUDE.md §5), jadi tidak butuh layanan eksternal di runner.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Batalkan run lama bila ada push baru di ref yang sama (hemat menit CI).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Pytest
+        run: pytest -q

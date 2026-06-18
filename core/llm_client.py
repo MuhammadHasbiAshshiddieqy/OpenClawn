@@ -15,25 +15,17 @@ from infra.logging import log
 # Regex di bawah menangkap tiap format dari keluarga model yang berbeda.
 
 # Gemma 4: <|tool_call>call:NAME{args}<tool_call|>
-_RE_GEMMA_TC = re.compile(
-    r"<\|tool_call>\s*call:\s*(\w+)\s*(\{.*?\})\s*<tool_call\|>", re.DOTALL
-)
+_RE_GEMMA_TC = re.compile(r"<\|tool_call>\s*call:\s*(\w+)\s*(\{.*?\})\s*<tool_call\|>", re.DOTALL)
 
 # Qwen 2.5 / 3: <tool_call>\n{"name": "NAME", "arguments": {...}}\n</tool_call>
-_RE_QWEN_TC = re.compile(
-    r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL
-)
+_RE_QWEN_TC = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
 # Llama 3.1 / 3.2: <|python_tag|>{"name": "NAME", "parameters": {...}}
 # Greedy sampai akhir string — tool call selalu di ujung respons Llama3.
-_RE_LLAMA3_TC = re.compile(
-    r"<\|python_tag\|>\s*(\{.*\})\s*$", re.DOTALL
-)
+_RE_LLAMA3_TC = re.compile(r"<\|python_tag\|>\s*(\{.*\})\s*$", re.DOTALL)
 
 # Mistral / Mixtral: [TOOL_CALLS] [{"name": "NAME", "arguments": {...}}, ...]
-_RE_MISTRAL_TC = re.compile(
-    r"\[TOOL_CALLS\]\s*(\[.*?\])", re.DOTALL
-)
+_RE_MISTRAL_TC = re.compile(r"\[TOOL_CALLS\]\s*(\[.*?\])", re.DOTALL)
 
 # DeepSeek: <｜tool▁calls▁begin｜>...<｜tool▁call▁begin｜>{...}<｜tool▁call▁end｜>
 _RE_DEEPSEEK_TC = re.compile(
@@ -46,19 +38,17 @@ _RE_FUNCTIONARY_TC = re.compile(
 )
 
 # Generic <tool_code>NAME</tool_code> atau <tool_code>NAME\n{args}</tool_code>
-_RE_TOOL_CODE_TC = re.compile(
-    r"<tool_code>\s*(\w+)\s*(\{.*?\})?\s*</tool_code>", re.DOTALL
-)
+_RE_TOOL_CODE_TC = re.compile(r"<tool_code>\s*(\w+)\s*(\{.*?\})?\s*</tool_code>", re.DOTALL)
 
 # Pola untuk mendeteksi SEMUA prefix tool call (untuk strip dari output teks)
 _RE_TOOL_STRIP = re.compile(
-    r"(<\|tool_call>.*?(?:<tool_call\|>|$))"          # Gemma
-    r"|(<tool_call>.*?(?:</tool_call>|$))"             # Qwen
-    r"|(<\|python_tag\|>.*?(?:\n|$))"                  # Llama3
-    r"|(\[TOOL_CALLS\].*?(?:\]|$))"                    # Mistral
+    r"(<\|tool_call>.*?(?:<tool_call\|>|$))"  # Gemma
+    r"|(<tool_call>.*?(?:</tool_call>|$))"  # Qwen
+    r"|(<\|python_tag\|>.*?(?:\n|$))"  # Llama3
+    r"|(\[TOOL_CALLS\].*?(?:\]|$))"  # Mistral
     r"|(<｜tool▁call▁begin｜>.*?(?:<｜tool▁call▁end｜>|$))"  # DeepSeek
-    r"|(<\|from\|>assistant.*?(?:<\|stop\|>|$))"       # Functionary
-    r"|(<tool_code>.*?(?:</tool_code>|$))",            # Generic
+    r"|(<\|from\|>assistant.*?(?:<\|stop\|>|$))"  # Functionary
+    r"|(<tool_code>.*?(?:</tool_code>|$))",  # Generic
     re.DOTALL,
 )
 
@@ -362,10 +352,12 @@ class LLMClient:
                                 text_buf.append(piece)
                             yield LLMChunk(type=kind, text=piece)
                     for tc in msg.get("tool_calls", []):
-                        native_tool_calls.append({
-                            "name": tc["function"]["name"],
-                            "input": tc["function"]["arguments"],
-                        })
+                        native_tool_calls.append(
+                            {
+                                "name": tc["function"]["name"],
+                                "input": tc["function"]["arguments"],
+                            }
+                        )
                     if data.get("done") and data.get("prompt_eval_count"):
                         usage_data = {
                             "input_tokens": data.get("prompt_eval_count", 0),
