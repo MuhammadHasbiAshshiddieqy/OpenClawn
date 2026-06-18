@@ -299,7 +299,7 @@ def test_sandbox_cmd_has_security_flags():
 async def test_approval_called_for_destructive_tool():
     """Tool requires_approval=True memicu HITL: request() dicatat & menunggu keputusan.
 
-    Sprint 3: approval interaktif (bukan auto-approve). Di sini kita simulasikan
+    Approval interaktif (bukan auto-approve). Di sini kita simulasikan
     user menekan 'approve' lewat resolve(). Coverage HITL lengkap di test_security.py.
     """
     import asyncio

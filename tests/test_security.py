@@ -1,4 +1,4 @@
-"""Tests untuk Security Layer — Shield, Vault, ApprovalGate (HITL). Sprint 3."""
+"""Tests untuk Security Layer — Shield, Vault, ApprovalGate (HITL)."""
 
 import asyncio
 import pytest

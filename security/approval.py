@@ -23,7 +23,7 @@ class ApprovalGate:
     """
     Human-in-the-loop approval untuk tool destruktif (mis. code_run).
 
-    Sprint 3: interaktif. `request()` membuat Future dan menunggu user
+    Interaktif: `request()` membuat Future dan menunggu user
     menekan approve/reject di Web UI (via `resolve()`). Jika user tidak
     merespons dalam approval_timeout_sec → fail-safe DENY (keamanan dulu,
     CLAUDE.md §1.1). Tool destruktif tidak pernah jalan tanpa persetujuan
