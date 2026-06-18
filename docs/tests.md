@@ -198,7 +198,7 @@ Test untuk `tools/`.
 
 | Test | Yang Diverifikasi |
 |---|---|
-| `test_registry_has_all_7_tools` | Semua 7 tool (5 asli + `shell_run` + `list_dir`) terdaftar di registry |
+| `test_registry_has_all_20_tools` | Semua 20 tool terdaftar di registry |
 | `test_file_read_returns_content` | `FileReadTool` baca file yang ada |
 | `test_file_read_not_found` | File tidak ada → error dict (tidak crash) |
 | `test_file_write_creates_file` | `FileWriteTool` tulis konten |
@@ -212,6 +212,24 @@ Test untuk `tools/`.
 | `test_run_python_fails_safe_when_docker_absent` | Docker absen → `SandboxUnavailable`, bukan eksekusi di host (keamanan #1) |
 | `test_run_shell_fails_safe_when_docker_absent` | Sama untuk `run_shell` |
 | `test_base_docker_args_contains_every_required_flag` | `_base_docker_args` (sumber argv tunggal) memuat semua `_REQUIRED_FLAGS` |
+| `test_tool_exception_returns_error_not_crash` | Tool melempar exception → error dict anggun (§1.3), turn tak mati |
+| `test_tool_timeout_returns_error` | Tool menggantung > `tool_timeout_sec` → error timeout |
+| `test_tool_output_truncated_uniformly` | Output panjang dipotong ke `tool_max_output` apa pun tool-nya |
+| `test_tool_missing_required_field_rejected_before_execute` | Field required hilang → error jelas, tool TIDAK dieksekusi |
+| `test_tool_invocation_recorded_in_telemetry` | Eksekusi tercatat di `tool_invocations` (outcome=ok, latency) |
+| `test_tool_failure_recorded_as_error_outcome` | Tool gagal → telemetri `outcome='error'` |
+| `test_tool_audit_summary_aggregates` | `ToolAudit.summary()` agregasi total/errors/fail_rate per tool |
+| `test_read_many_reads_multiple_files` | `read_many` baca beberapa file workspace-safe sekaligus |
+| `test_read_many_per_file_error_does_not_fail_others` | Satu file gagal → error per-file, lain tetap terbaca |
+| `test_read_many_requires_list` | `paths` bukan list → error |
+| `test_read_many_caps_batch_size` | > `MAX_FILES_PER_BATCH` → dipotong, `skipped` dilaporkan |
+| `test_doc_write_requires_approval` | `doc_write.requires_approval == True` |
+| `test_doc_write_rejects_unknown_format` | Format tak dikenal → error |
+| `test_doc_write_markdown_string` | md dari string → file teks tertulis |
+| `test_doc_write_docx_structured` | docx dari `{title,sections}` → .docx valid dibuka kembali |
+| `test_doc_write_xlsx_rows` | xlsx dari `{headers,rows}` → spreadsheet baris benar |
+| `test_doc_write_pptx_slides` | pptx dari `{title,slides}` → presentasi multi-slide |
+| `test_doc_write_rejects_path_outside_workspace` | Path di luar workspace ditolak (keamanan #1) |
 
 ---
 

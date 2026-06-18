@@ -200,10 +200,12 @@ Menjalankan:
 1. `RoutingAuditor(db).calibration_report()` — data dari DB
 2. `RoutingCalibrator().summary(report)` — rekomendasi tuning + `net_offset_delta`
 3. `CalibrationStore(db).get_offset()` + `.history()` — offset aktif & riwayat
+4. `ToolAudit(db).summary()` — statistik penggunaan tool
 
 Context yang dikirim:
 - `report` — list data per complexity label (total, corrections, correction_rate, avg_cost)
 - `calibration` — dict `{total_events, has_enough_data, net_offset_delta, recommendations, current_offset, history}`
+- `tool_stats` — list per tool `{tool_name, total, errors, timeouts, fail_rate, avg_latency_ms}`
 
 > **Demo tanpa traffic:** dashboard ini kosong sampai ada `routing_events`. Untuk mengisinya dengan data **sintetis** (demo saja, bukan untuk tuning), jalankan `python scripts/seed_routing.py` — lihat [scripts.md](scripts.md).
 
@@ -286,6 +288,7 @@ Template dashboard `/metrics`. Menampilkan:
   - Badge untuk "cukup data" vs "belum cukup data"
   - Daftar rekomendasi: label, issue (under/over-provisioned), sample size, saran teks
   - Offset threshold aktif + tombol **Apply**/**Revert** (loop tertutup) + tabel riwayat kalibrasi
+- Bagian **Penggunaan Tool** (`tool_stats`): tabel per tool — dipakai, error, timeout, fail rate, avg latency
 
 ### `skills.html`
 

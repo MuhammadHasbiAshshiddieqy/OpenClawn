@@ -29,6 +29,7 @@ Registry global semua tool yang tersedia:
 TOOL_REGISTRY = {
     # filesystem (workspace-bounded)
     "file_read":    FileReadTool(),
+    "read_many":    ReadManyTool(),
     "file_write":   FileWriteTool(),
     "file_edit":    FileEditTool(),
     "file_append":  FileAppendTool(),
@@ -37,6 +38,7 @@ TOOL_REGISTRY = {
     "glob":         GlobTool(),
     "grep":         GrepTool(),
     "pdf_read":     PdfReadTool(),
+    "doc_write":    DocWriteTool(),
     # eksekusi (sandboxed)
     "shell_run":    ShellRunTool(),
     "code_run":     CodeRunTool(),
@@ -54,6 +56,8 @@ TOOL_REGISTRY = {
 ```
 
 `AgentLoop` mengakses registry ini untuk lookup dan schema generation. Tool menerima `execute(input_data, vault, db=None)` — `db` (DatabaseManager) hanya dipakai `db_query`/`memory_search`, tool lain mengabaikannya.
+
+> **Jaring pengaman eksekusi (§1.3).** `AgentLoop._execute_tool` membungkus setiap `tool.execute()` dengan: (1) validasi input vs `input_schema` (required fields) — error jelas balik ke model bila salah bentuk, tool tidak dijalankan; (2) `asyncio.wait_for` timeout `CONFIG.tool_timeout_sec` (default 40s); (3) try/except yang mengubah exception apa pun menjadi `{"error": ...}` anggun + di-log; (4) pemotongan output seragam ke `CONFIG.tool_max_output`. Satu tool yang menggantung/melempar TIDAK menjatuhkan turn. Setiap eksekusi dicatat ke telemetri (`tool_invocations`) lewat `ToolAudit` — lihat [core.md](core.md) & [database.md](database.md).
 
 > **Workspace sandbox (keamanan #1).** Semua tool filesystem (`file_read`, `file_write`,
 > `file_edit`, `file_append`, `apply_patch`, `list_dir`, `glob`, `grep`, `pdf_read`) dibatasi ke `CONFIG.workspace_root` lewat
@@ -73,6 +77,15 @@ Baca isi file dari filesystem.
 - Input: `{"path": "..."}` — path file yang dibaca
 - Output sukses: `{"content": "..."}` — isi file (maks 10.000 karakter)
 - Output error: `{"error": "..."}` — pesan error jika file tidak ditemukan atau permission denied
+
+### `ReadManyTool`
+
+Baca beberapa file teks dalam **satu** panggilan — hemat tool hop & token vs `file_read` berulang. Read-only.
+
+- `requires_approval = False`
+- Input: `{"paths": ["a.py", "b.py", ...]}` (maks `MAX_FILES_PER_BATCH`=10 per panggilan)
+- Output: `{"files": [{"path","content","truncated"} | {"path","error"}], "count": N, "skipped": M}`
+- Tiap path divalidasi workspace-safe terpisah; satu file gagal **tidak** menggagalkan yang lain (error per-file). Tiap file dipotong ke `PER_FILE_BUDGET` (4.000 char) agar context ringkas.
 
 ### `FileWriteTool`
 
@@ -122,6 +135,20 @@ Ekstrak teks dari PDF dalam workspace (pakai `pypdf`). Read-only, tanpa approval
 - Input: `{"path": "...", "page": <opsional, 1-indexed>}`
 - Output: `{"pages": N, "text": "...", "truncated": bool}`
 - Output error: `{"error": "..."}` jika file tidak ada / di luar workspace / gagal parse
+
+### `DocWriteTool`
+
+Tulis dokumen terstruktur ke workspace dalam format `docx`/`pptx`/`xlsx`/`md` (pakai `python-docx`, `python-pptx`, `openpyxl` — semua murni-Python). **Destruktif** (menulis file) → butuh approval. Library di-import lazy di dalam `execute` agar dependency hilang gagal anggun.
+
+- `requires_approval = True`
+- Input: `{"path": "...", "format": "docx|pptx|xlsx|md", "content": <sesuai format>}`
+- Bentuk `content` per format:
+  - `md` → string langsung, atau `{title, sections:[{heading, body}]}`
+  - `docx` → `{title?, sections:[{heading?, body?, bullets?:[]}]}`
+  - `pptx` → `{title?, slides:[{title, bullets:[]}]}`
+  - `xlsx` → `{sheet?, headers?:[], rows:[[..],[..]]}`
+- Output sukses: `{"path": "...", "format": "...", "ok": true}`
+- Output error: `{"error": "..."}` jika format tak dikenal, struktur content salah, path di luar workspace, atau library hilang
 
 ---
 
@@ -322,28 +349,30 @@ List isi direktori dalam workspace. Read-only — **tidak butuh approval**.
 
 ## Tool Permission Matrix
 
-| Tool | PM | QA | Dev | Butuh Approval |
-|---|---|---|---|---|
-| `file_read` | ✅ | ✅ | ✅ | Tidak |
-| `file_write` | ✅ | ✅ | ✅ | **Ya** |
-| `file_edit` | ❌ | ❌ | ✅ | **Ya** |
-| `file_append` | ❌ | ❌ | ✅ | **Ya** |
-| `apply_patch` | ❌ | ❌ | ✅ | **Ya** |
-| `list_dir` | ✅ | ✅ | ✅ | Tidak |
-| `glob` | ✅ | ✅ | ✅ | Tidak |
-| `grep` | ✅ | ✅ | ✅ | Tidak |
-| `pdf_read` | ✅ | ✅ | ✅ | Tidak |
-| `shell_run` | ❌ | ✅ | ✅ | **Ya (selalu)** |
-| `code_run` | ❌ | ✅ | ✅ | **Ya (selalu)** |
-| `web_fetch` | ✅ | ❌ | ✅ | Tidak |
-| `web_search` | ✅ | ❌ | ✅ | Tidak |
-| `http_request` | ❌ | ❌ | ✅ | **Ya** |
-| `db_query` | ❌ | ✅ | ✅ | **Ya** |
-| `memory_search` | ✅ | ✅ | ✅ | Tidak |
-| `json_query` | ✅ | ✅ | ✅ | Tidak |
-| `ask_user` | ✅ | ✅ | ✅ | Tidak |
+| Tool | PM | QA | Dev | Data | Sec | Butuh Approval |
+|---|---|---|---|---|---|---|
+| `file_read` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
+| `read_many` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
+| `file_write` | ✅ | ✅ | ✅ | ❌ | ❌ | **Ya** |
+| `file_edit` | ❌ | ❌ | ✅ | ❌ | ❌ | **Ya** |
+| `file_append` | ❌ | ❌ | ✅ | ❌ | ❌ | **Ya** |
+| `apply_patch` | ❌ | ❌ | ✅ | ❌ | ❌ | **Ya** |
+| `list_dir` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
+| `glob` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
+| `grep` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
+| `pdf_read` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
+| `doc_write` | ✅ | ❌ | ✅ | ✅ | ❌ | **Ya** |
+| `shell_run` | ❌ | ✅ | ✅ | ❌ | ❌ | **Ya (selalu)** |
+| `code_run` | ❌ | ✅ | ✅ | ✅ | ❌ | **Ya (selalu)** |
+| `web_fetch` | ✅ | ❌ | ✅ | ✅ | ❌ | Tidak |
+| `web_search` | ✅ | ❌ | ✅ | ✅ | ❌ | Tidak |
+| `http_request` | ❌ | ❌ | ✅ | ❌ | ❌ | **Ya** |
+| `db_query` | ❌ | ✅ | ✅ | ✅ | ✅ | **Ya** |
+| `memory_search` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
+| `json_query` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
+| `ask_user` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 
-Permission dikontrol via `soul.toml[tools][allowed]` tiap role — bukan hardcoded di kode tool. Semua tool filesystem dibatasi ke `workspace_root` (lihat catatan di `TOOL_REGISTRY`).
+Permission dikontrol via `soul.toml[tools][allowed]` tiap role — bukan hardcoded di kode tool. Semua tool filesystem dibatasi ke `workspace_root` (lihat catatan di `TOOL_REGISTRY`). `security` read-only murni (tanpa write/exec/network); `data` boleh tulis dokumen & jalankan kode tapi tidak `shell_run`/`http_request`.
 
 ---
 

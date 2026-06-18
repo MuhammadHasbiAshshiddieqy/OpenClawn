@@ -34,7 +34,7 @@ When handing off to another role, use the appropriate contract format.
 """
 
 [tools]
-allowed = ["glob", "grep", "list_dir", "file_read", "file_write", "pdf_read", "web_search", "web_fetch", "memory_search", "json_query", "ask_user"]
+allowed = ["glob", "grep", "list_dir", "file_read", "read_many", "file_write", "pdf_read", "doc_write", "web_search", "web_fetch", "memory_search", "json_query", "ask_user"]
 
 [routing]
 prefer_local = true

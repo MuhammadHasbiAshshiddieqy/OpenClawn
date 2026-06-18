@@ -1,5 +1,6 @@
 """Tests untuk Tools + Sandbox — Sprint 2."""
 
+import dataclasses
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from tools.file_ops import FileReadTool, FileWriteTool
@@ -9,13 +10,19 @@ from tools.code import CodeRunTool
 from tools import TOOL_REGISTRY
 
 
+def dataclasses_replace(obj, **changes):
+    """Alias ringkas untuk dataclasses.replace (AppConfig frozen → buat salinan)."""
+    return dataclasses.replace(obj, **changes)
+
+
 # ── TOOL_REGISTRY ─────────────────────────────────────────────────────────────
 
 
-def test_registry_has_all_18_tools():
-    """Semua 18 tool harus terdaftar di TOOL_REGISTRY."""
+def test_registry_has_all_20_tools():
+    """Semua 20 tool harus terdaftar di TOOL_REGISTRY."""
     expected = {
         "file_read",
+        "read_many",
         "file_write",
         "file_edit",
         "file_append",
@@ -24,6 +31,7 @@ def test_registry_has_all_18_tools():
         "glob",
         "grep",
         "pdf_read",
+        "doc_write",
         "shell_run",
         "code_run",
         "web_fetch",
@@ -443,3 +451,293 @@ async def test_approval_log_contains_tool_input():
     assert parsed["path"] == "/tmp/test.py"
 
     await db.close()
+
+
+# ── Jaring pengaman eksekusi tool + validasi + telemetri (_execute_tool) ──────
+
+
+async def _agent_with_db():
+    """AgentLoop role 'dev' (mengizinkan banyak tool) + DB :memory: siap pakai."""
+    from core.agent_loop import AgentLoop, AgentConfig
+    from infra.config import AppConfig
+    from infra.database import DatabaseManager
+
+    cfg = AppConfig(db_path=":memory:", tool_timeout_sec=1)
+    db = DatabaseManager(cfg)
+    with open("migrations/001_initial.sql") as f:
+        conn = await db.conn()
+        await conn.executescript(f.read())
+        await conn.commit()
+    agent = AgentLoop(AgentConfig(role="dev", session_id="s-tool"), db=db, config=cfg)
+    return agent, db
+
+
+@pytest.mark.asyncio
+async def test_tool_exception_returns_error_not_crash():
+    """Tool yang melempar exception → error dict anggun (§1.3), turn tidak mati."""
+    agent, db = await _agent_with_db()
+    tool = TOOL_REGISTRY["grep"]
+    with patch.object(tool, "execute", side_effect=RuntimeError("boom")):
+        result = await agent._execute_tool("grep", {"pattern": "x"})
+    assert "error" in result
+    assert "boom" in result["error"]
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_tool_timeout_returns_error():
+    """Tool yang menggantung meldebihi tool_timeout_sec → error timeout, bukan freeze."""
+    import asyncio
+
+    agent, db = await _agent_with_db()
+
+    async def _hang(*a, **k):
+        await asyncio.sleep(10)
+
+    tool = TOOL_REGISTRY["grep"]
+    with patch.object(tool, "execute", side_effect=_hang):
+        result = await agent._execute_tool("grep", {"pattern": "x"})
+    assert "error" in result and "waktu" in result["error"]
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_tool_output_truncated_uniformly():
+    """Output teks panjang dipotong ke tool_max_output, apa pun tool-nya."""
+    agent, db = await _agent_with_db()
+    agent.config = dataclasses_replace(agent.config, tool_max_output=50)
+    huge = {"content": "a" * 5000}
+    tool = TOOL_REGISTRY["grep"]
+    with patch.object(tool, "execute", new=AsyncMock(return_value=huge)):
+        result = await agent._execute_tool("grep", {"pattern": "x"})
+    assert len(result["content"]) < 200
+    assert "dipotong" in result["content"]
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_tool_missing_required_field_rejected_before_execute():
+    """Field required hilang → error jelas, tool TIDAK dieksekusi (validasi schema)."""
+    agent, db = await _agent_with_db()
+    tool = TOOL_REGISTRY["grep"]
+    called = {"n": 0}
+
+    async def _spy(*a, **k):
+        called["n"] += 1
+        return {}
+
+    with patch.object(tool, "execute", side_effect=_spy):
+        result = await agent._execute_tool("grep", {})  # 'pattern' wajib, hilang
+    assert "error" in result and "pattern" in result["error"]
+    assert called["n"] == 0  # tidak dieksekusi
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_tool_invocation_recorded_in_telemetry():
+    """Eksekusi tool tercatat di tool_invocations dengan outcome & latency."""
+    agent, db = await _agent_with_db()
+    tool = TOOL_REGISTRY["grep"]
+    with patch.object(tool, "execute", new=AsyncMock(return_value={"matches": []})):
+        await agent._execute_tool("grep", {"pattern": "x"})
+    row = await db.fetchone(
+        "SELECT tool_name, outcome, latency_ms FROM tool_invocations WHERE tool_name='grep'"
+    )
+    assert row is not None
+    assert row["outcome"] == "ok"
+    assert row["latency_ms"] is not None
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_tool_failure_recorded_as_error_outcome():
+    """Tool gagal → telemetri mencatat outcome='error'."""
+    agent, db = await _agent_with_db()
+    tool = TOOL_REGISTRY["grep"]
+    with patch.object(tool, "execute", side_effect=ValueError("x")):
+        await agent._execute_tool("grep", {"pattern": "x"})
+    row = await db.fetchone("SELECT outcome FROM tool_invocations WHERE tool_name='grep'")
+    assert row["outcome"] == "error"
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_tool_audit_summary_aggregates():
+    """ToolAudit.summary() mengagregasi total/errors/fail_rate per tool."""
+    from core.tool_audit import ToolAudit
+
+    agent, db = await _agent_with_db()
+    audit = ToolAudit(db)
+    await audit.record("s", "dev", "grep", "ok", 10)
+    await audit.record("s", "dev", "grep", "error", 20)
+    await audit.record("s", "dev", "glob", "ok", 5)
+    summary = await audit.summary()
+    by_tool = {r["tool_name"]: r for r in summary}
+    assert by_tool["grep"]["total"] == 2
+    assert by_tool["grep"]["errors"] == 1
+    assert by_tool["grep"]["fail_rate"] == 50.0
+    await db.close()
+
+
+# ── read_many (batch file read) ──────────────────────────────────────────────
+
+
+def _patch_workspace(monkeypatch, tmp_path, *mods):
+    """CONFIG frozen → ganti referensi CONFIG modul dengan salinan ber-workspace tmp_path."""
+    import dataclasses
+    from infra.config import CONFIG
+
+    patched = dataclasses.replace(CONFIG, workspace_root=str(tmp_path))
+    for mod in mods:
+        monkeypatch.setattr(f"{mod}.CONFIG", patched)
+
+
+@pytest.mark.asyncio
+async def test_read_many_reads_multiple_files(tmp_path, monkeypatch):
+    """read_many membaca beberapa file dalam satu panggilan, semua workspace-safe."""
+    from tools.file_ops import ReadManyTool
+
+    (tmp_path / "a.txt").write_text("isi-a")
+    (tmp_path / "b.txt").write_text("isi-b")
+    _patch_workspace(monkeypatch, tmp_path, "tools.file_ops")
+
+    result = await ReadManyTool().execute({"paths": ["a.txt", "b.txt"]}, vault=None)
+    assert result["count"] == 2
+    contents = {f["path"]: f.get("content") for f in result["files"]}
+    assert contents["a.txt"] == "isi-a"
+    assert contents["b.txt"] == "isi-b"
+
+
+@pytest.mark.asyncio
+async def test_read_many_per_file_error_does_not_fail_others(tmp_path, monkeypatch):
+    """Satu file hilang → error per-file, file lain tetap terbaca (tidak crash)."""
+    from tools.file_ops import ReadManyTool
+
+    (tmp_path / "ok.txt").write_text("ada")
+    _patch_workspace(monkeypatch, tmp_path, "tools.file_ops")
+
+    result = await ReadManyTool().execute({"paths": ["ok.txt", "hilang.txt"]}, vault=None)
+    files = {f["path"]: f for f in result["files"]}
+    assert files["ok.txt"]["content"] == "ada"
+    assert "error" in files["hilang.txt"]
+
+
+@pytest.mark.asyncio
+async def test_read_many_requires_list():
+    """paths bukan list → error, tidak crash."""
+    from tools.file_ops import ReadManyTool
+
+    result = await ReadManyTool().execute({"paths": "bukan-list"}, vault=None)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_read_many_caps_batch_size(tmp_path, monkeypatch):
+    """Lebih dari MAX_FILES_PER_BATCH → dipotong, skipped dilaporkan."""
+    from tools.file_ops import ReadManyTool, MAX_FILES_PER_BATCH
+
+    _patch_workspace(monkeypatch, tmp_path, "tools.file_ops")
+    paths = [f"f{i}.txt" for i in range(MAX_FILES_PER_BATCH + 5)]
+    result = await ReadManyTool().execute({"paths": paths}, vault=None)
+    assert result["count"] == MAX_FILES_PER_BATCH
+    assert result["skipped"] == 5
+
+
+# ── doc_write (docx/pptx/xlsx/md) ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_doc_write_requires_approval():
+    """doc_write menulis file → harus requires_approval=True."""
+    assert TOOL_REGISTRY["doc_write"].requires_approval is True
+
+
+@pytest.mark.asyncio
+async def test_doc_write_rejects_unknown_format(tmp_path, monkeypatch):
+    """Format tak dikenal → error, tidak menulis apa pun."""
+    from tools.document import DocWriteTool
+
+    _patch_workspace(monkeypatch, tmp_path, "tools.document")
+    result = await DocWriteTool().execute(
+        {"path": "x.foo", "format": "foo", "content": "hi"}, vault=None
+    )
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_doc_write_markdown_string(tmp_path, monkeypatch):
+    """md dengan content string → file teks tertulis."""
+    from tools.document import DocWriteTool
+
+    _patch_workspace(monkeypatch, tmp_path, "tools.document")
+    result = await DocWriteTool().execute(
+        {"path": "out.md", "format": "md", "content": "# Judul\n\nisi"}, vault=None
+    )
+    assert result.get("ok") is True
+    assert (tmp_path / "out.md").read_text().startswith("# Judul")
+
+
+@pytest.mark.asyncio
+async def test_doc_write_docx_structured(tmp_path, monkeypatch):
+    """docx dari {title, sections} → file .docx valid yang bisa dibuka kembali."""
+    from tools.document import DocWriteTool
+    from docx import Document
+
+    _patch_workspace(monkeypatch, tmp_path, "tools.document")
+    content = {
+        "title": "Laporan",
+        "sections": [{"heading": "Ringkasan", "body": "teks", "bullets": ["a", "b"]}],
+    }
+    result = await DocWriteTool().execute(
+        {"path": "r.docx", "format": "docx", "content": content}, vault=None
+    )
+    assert result.get("ok") is True
+    d = Document(str(tmp_path / "r.docx"))
+    texts = [p.text for p in d.paragraphs]
+    assert "Laporan" in texts and "teks" in texts
+
+
+@pytest.mark.asyncio
+async def test_doc_write_xlsx_rows(tmp_path, monkeypatch):
+    """xlsx dari {headers, rows} → spreadsheet dengan baris benar."""
+    from tools.document import DocWriteTool
+    from openpyxl import load_workbook
+
+    _patch_workspace(monkeypatch, tmp_path, "tools.document")
+    content = {"headers": ["Nama", "Skor"], "rows": [["A", 1], ["B", 2]]}
+    result = await DocWriteTool().execute(
+        {"path": "data.xlsx", "format": "xlsx", "content": content}, vault=None
+    )
+    assert result.get("ok") is True
+    wb = load_workbook(str(tmp_path / "data.xlsx"))
+    rows = list(wb.active.iter_rows(values_only=True))
+    assert rows[0] == ("Nama", "Skor")
+    assert rows[1] == ("A", 1)
+
+
+@pytest.mark.asyncio
+async def test_doc_write_pptx_slides(tmp_path, monkeypatch):
+    """pptx dari {title, slides} → presentasi dengan slide judul + konten."""
+    from tools.document import DocWriteTool
+    from pptx import Presentation
+
+    _patch_workspace(monkeypatch, tmp_path, "tools.document")
+    content = {"title": "Deck", "slides": [{"title": "Slide 1", "bullets": ["poin"]}]}
+    result = await DocWriteTool().execute(
+        {"path": "deck.pptx", "format": "pptx", "content": content}, vault=None
+    )
+    assert result.get("ok") is True
+    prs = Presentation(str(tmp_path / "deck.pptx"))
+    assert len(prs.slides) >= 2  # judul + 1 konten
+
+
+@pytest.mark.asyncio
+async def test_doc_write_rejects_path_outside_workspace(tmp_path, monkeypatch):
+    """Path di luar workspace ditolak (keamanan #1)."""
+    from tools.document import DocWriteTool
+
+    _patch_workspace(monkeypatch, tmp_path, "tools.document")
+    result = await DocWriteTool().execute(
+        {"path": "../escape.md", "format": "md", "content": "x"}, vault=None
+    )
+    assert "error" in result

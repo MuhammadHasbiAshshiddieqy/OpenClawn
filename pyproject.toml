@@ -14,6 +14,11 @@ dependencies = [
     "tenacity>=8.2",
     "aiofiles>=23.2",
     "pypdf>=4.0",
+    # Penulisan dokumen (doc_write) — murni-Python, tanpa dependency sistem.
+    # Disetujui owner secara eksplisit (lihat CLAUDE.md §7), preseden sama pypdf.
+    "python-docx>=1.1",
+    "python-pptx>=0.6",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]

@@ -247,7 +247,7 @@ flowchart TD
 
 ### Tools & Security
 
-All 18 tools are **workspace-bounded** — every file path is resolved with `Path.resolve()`
+All 20 tools are **workspace-bounded** — every file path is resolved with `Path.resolve()`
 and rejected if it escapes the workspace root (defeats `../` and symlink escape). Tools that
 mutate state or run code require explicit approval.
 
@@ -406,8 +406,8 @@ openclawn/
 ├── infra/          # config · database (WAL, POWER()) · logging · env · workspace
 ├── memory/         # layers (L1–L4) · skill_decay · search (FTS5)
 ├── roles/          # pm/qa/dev soul.toml · contracts (Pydantic) · registry
-├── tools/          # 18 tools: file_ops · search · shell · code · web
-│                   # document · data · interaction (all workspace-bounded)
+├── tools/          # 20 tools: file_ops · read_many · search · shell · code · web
+│                   # document (pdf_read · doc_write) · data · interaction (workspace-bounded)
 ├── security/       # vault · shield (NFKD) · approval (HITL gate)
 ├── web/            # FastAPI app · HTMX templates · SSE streaming
 ├── migrations/     # 001_initial.sql
@@ -437,7 +437,7 @@ Detailed reference for every module, class, and function:
 | `memory/` | [docs/memory.md](docs/memory.md) — L1–L4 layers, skill decay, FTS5 search |
 | `roles/` | [docs/roles.md](docs/roles.md) — contracts, role registry, soul.toml format |
 | `security/` | [docs/security.md](docs/security.md) — vault, shield, approval gate HITL |
-| `tools/` | [docs/tools.md](docs/tools.md) — 18 tools, permission matrix, Docker sandbox |
+| `tools/` | [docs/tools.md](docs/tools.md) — 20 tools, permission matrix, Docker sandbox |
 | `web/` | [docs/web.md](docs/web.md) — FastAPI endpoints, SSE streaming |
 | Database | [docs/database.md](docs/database.md) — full schema + example queries |
 | Tests | [docs/tests.md](docs/tests.md) — test index + patterns |

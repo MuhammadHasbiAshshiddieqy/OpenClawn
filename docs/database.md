@@ -207,6 +207,24 @@ Audit setiap kali offset threshold router digeser dari rekomendasi kalibrasi. Di
 
 ---
 
+### `tool_invocations` — Telemetri Penggunaan Tool
+
+Audit setiap eksekusi tool, dicatat terpusat di `AgentLoop._execute_tool` lewat `ToolAudit` ([core.md](core.md)). Menjawab "tool mana berguna / sering gagal". Ditampilkan di `/metrics`.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `session_id` | TEXT | Sesi yang memanggil |
+| `role` | TEXT | Role agent |
+| `tool_name` | TEXT | Nama tool |
+| `outcome` | TEXT | `ok` \| `error` \| `timeout` |
+| `latency_ms` | INTEGER | Durasi eksekusi |
+| `created_at` | TIMESTAMP | — |
+
+**Index:** `idx_tool_invocations` pada `(tool_name, outcome)` — agregasi per tool cepat. Penulisan fail-soft (error tulis hanya di-log, tak menjatuhkan turn).
+
+---
+
 ## Query Penting
 
 ```sql

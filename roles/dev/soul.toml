@@ -35,7 +35,7 @@ Do not say "I don't have access" — you DO have access.
 """
 
 [tools]
-allowed = ["glob", "grep", "list_dir", "file_read", "file_edit", "apply_patch", "file_write", "file_append", "pdf_read", "shell_run", "code_run", "web_search", "web_fetch", "http_request", "db_query", "memory_search", "json_query", "ask_user"]
+allowed = ["glob", "grep", "list_dir", "file_read", "read_many", "file_edit", "apply_patch", "file_write", "file_append", "pdf_read", "doc_write", "shell_run", "code_run", "web_search", "web_fetch", "http_request", "db_query", "memory_search", "json_query", "ask_user"]
 
 [routing]
 prefer_local = false

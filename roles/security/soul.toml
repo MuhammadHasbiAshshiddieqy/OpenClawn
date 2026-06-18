@@ -49,7 +49,7 @@ HARD RULES:
 """
 
 [tools]
-allowed = ["glob", "grep", "list_dir", "file_read", "pdf_read", "db_query", "json_query", "memory_search", "ask_user"]
+allowed = ["glob", "grep", "list_dir", "file_read", "read_many", "pdf_read", "db_query", "json_query", "memory_search", "ask_user"]
 
 [routing]
 prefer_local = true

@@ -32,7 +32,7 @@ Use the tools. Be thorough. Ask "what could fail?" always.
 """
 
 [tools]
-allowed = ["glob", "grep", "list_dir", "file_read", "file_write", "pdf_read", "shell_run", "code_run", "db_query", "memory_search", "json_query", "ask_user"]
+allowed = ["glob", "grep", "list_dir", "file_read", "read_many", "file_write", "pdf_read", "shell_run", "code_run", "db_query", "memory_search", "json_query", "ask_user"]
 
 [routing]
 prefer_local = false

@@ -5,6 +5,10 @@ from infra.workspace import WorkspaceViolation, resolve_in_workspace
 from tools.base import Tool
 
 MAX_READ = CONFIG.tool_max_output
+# read_many: batasi jumlah file per panggilan & porsi per file agar tidak membanjiri
+# context (token-first §1.4). Total tetap dijepit jaring pengaman di _execute_tool.
+MAX_FILES_PER_BATCH = 10
+PER_FILE_BUDGET = 4_000
 
 
 class FileReadTool(Tool):
@@ -45,6 +49,68 @@ class FileReadTool(Tool):
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
                 "required": ["path"],
+            },
+        }
+
+
+class ReadManyTool(Tool):
+    """Baca beberapa file dalam SATU panggilan → hemat tool hop & token vs N file_read.
+
+    Tiap path divalidasi workspace-safe terpisah; satu file gagal tidak menggagalkan
+    yang lain (kegagalan per-file dilaporkan, bukan exception). Read-only — tanpa approval.
+    """
+
+    name = "read_many"
+    requires_approval = False
+
+    async def execute(self, input_data: dict, vault, db=None) -> dict:
+        paths = input_data.get("paths")
+        if not isinstance(paths, list) or not paths:
+            return {"error": "paths wajib berupa list path (minimal satu)"}
+        capped = paths[:MAX_FILES_PER_BATCH]
+        files: list[dict] = []
+        for path in capped:
+            entry: dict = {"path": path}
+            try:
+                safe = resolve_in_workspace(str(path), CONFIG.workspace_root)
+            except WorkspaceViolation as e:
+                entry["error"] = str(e)
+                files.append(entry)
+                continue
+            try:
+                async with aiofiles.open(safe) as f:
+                    content = await f.read()
+                entry["content"] = content[:PER_FILE_BUDGET]
+                entry["truncated"] = len(content) > PER_FILE_BUDGET
+            except FileNotFoundError:
+                entry["error"] = "tidak ditemukan"
+            except (IsADirectoryError, PermissionError, UnicodeDecodeError) as e:
+                entry["error"] = type(e).__name__
+            files.append(entry)
+        return {
+            "files": files,
+            "count": len(files),
+            "skipped": max(0, len(paths) - len(capped)),
+        }
+
+    def schema(self) -> dict:
+        return {
+            "name": "read_many",
+            "description": (
+                f"Baca beberapa file teks sekaligus (maks {MAX_FILES_PER_BATCH} per panggilan). "
+                "Lebih efisien dari memanggil file_read berulang. Path relatif ke workspace; "
+                "file di luar workspace ditolak. Tiap file dipotong agar context tetap ringkas."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Daftar path file relatif ke workspace.",
+                    }
+                },
+                "required": ["paths"],
             },
         }
 

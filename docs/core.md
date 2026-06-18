@@ -114,7 +114,13 @@ Pipeline utama per turn. Menghasilkan `AgentEvent` (`token` + `status`) ke Web U
 Loop iteratif (bukan rekursif) untuk menangani tool call. Meng-emit `AgentEvent` (`thinking`/`token`/`tool`/`fallback`). Berhenti saat tidak ada tool call pending atau `max_tool_hops` tercapai.
 
 **`_execute_tool(name, input_data) → dict`** *(async, private)*  
-Eksekusi satu tool: cek keberadaan, cek izin role, minta approval jika `requires_approval=True`, lalu jalankan.
+Eksekusi satu tool dengan jaring pengaman §1.3: cek keberadaan → cek izin role → **validasi input vs schema** (`_validate_tool_input`) → approval jika perlu → jalankan dalam `asyncio.wait_for(timeout=tool_timeout_sec)` dengan try/except yang mengubah exception/timeout apa pun menjadi `{"error": ...}` anggun → potong output seragam (`_truncate_tool_output`) → catat telemetri (`ToolAudit.record`). Satu tool yang gagal/menggantung tidak menjatuhkan turn.
+
+**`_truncate_tool_output(result) → dict`** *(private)*  
+Potong field teks hasil tool yang melebihi `tool_max_output` (token-first §1.4) — jaring akhir agar tidak ada tool yang membanjiri context.
+
+**`_validate_tool_input(tool, input_data) → str | None`** *(module-level)*  
+Validasi ringan input vs `input_schema` (required fields ada & non-kosong). Return pesan error (dikirim balik ke model agar memperbaiki) atau `None`. Bukan validator JSON-Schema penuh — cukup menangkap kesalahan umum model lokal tanpa dependency.
 
 **`_tool_allowed(name) → bool`** *(private)*  
 Cek apakah tool ada di daftar `soul.toml[tools][allowed]` untuk role aktif.
@@ -472,3 +478,17 @@ Kembalikan offset ke `old_offset` dari baris aktif terakhir; catat baris `source
 
 **`history(limit=20) → list[dict]`** *(async)*  
 Riwayat perubahan offset terbaru-dulu untuk ditampilkan di `/metrics`.
+
+---
+
+## `core/tool_audit.py` — Telemetri Tooling
+
+Audit penggunaan tool (setara Inovasi 1 untuk routing). DB-bound (hanya `DatabaseManager`, §1.6), extractable. Dicatat terpusat di `AgentLoop._execute_tool`, bukan per-tool.
+
+### Kelas: `ToolAudit`
+
+**`record(session_id, role, tool_name, outcome, latency_ms)`** *(async)*  
+Catat satu eksekusi ke tabel `tool_invocations`. **Fail-soft**: kegagalan menulis hanya di-log, tidak diteruskan — telemetri tak boleh menjatuhkan turn.
+
+**`summary() → list[dict]`** *(async)*  
+Agregasi per tool untuk `/metrics`: `total`, `errors`, `timeouts`, `fail_rate` (%), `avg_latency_ms`. Diurut paling sering dipakai dulu.
