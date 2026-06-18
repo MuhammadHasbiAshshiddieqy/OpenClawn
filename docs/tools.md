@@ -277,6 +277,8 @@ Implementasi:
 
 Kode dijalankan via `timeout {SANDBOX_TIMEOUT_SEC} python /work/script.py` — timeout ganda (Docker + OS timeout) untuk mencegah runaway.
 
+> **Sumber argv tunggal.** Baik `run_python` maupun `run_shell` membangun perintah `docker run` lewat satu helper `_base_docker_args(mount, tmpfs_size)`, sehingga flag keamanan wajib (`_REQUIRED_FLAGS`: `--network none`, `--read-only`, `--user nobody`, `--security-opt no-new-privileges`) tidak bisa terhapus diam-diam di salah satu call site. Test (`test_run_python_argv_enforces_security_flags`, `test_run_shell_argv_enforces_security_flags`) memverifikasi **argv nyata** yang dikirim ke Docker — bukan rekonstruksi manual — sehingga regresi penghapusan flag pasti tertangkap.
+
 **Output:**
 ```python
 {

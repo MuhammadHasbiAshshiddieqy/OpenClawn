@@ -21,35 +21,56 @@ class SandboxUnavailable(Exception):
     """Docker tidak tersedia — sandbox tidak bisa jalan. Fail-safe, jangan jalan di host."""
 
 
+# Flag keamanan WAJIB pada setiap invocation docker run (CLAUDE.md §1.1).
+# Dipakai oleh _base_docker_args() agar konstruksi argv tunggal & terverifikasi —
+# bukan didefinisikan ulang per call site (sebelumnya: rawan flag terhapus diam-diam).
+_REQUIRED_FLAGS: tuple[tuple[str, ...], ...] = (
+    ("--network", "none"),  # isolasi network total
+    ("--read-only",),  # root filesystem read-only
+    ("--user", "nobody"),  # non-root
+    ("--security-opt", "no-new-privileges"),  # cegah escalation via setuid
+)
+
+
 class DockerSandbox:
+    def _base_docker_args(self, mount: str, tmpfs_size: str) -> list[str]:
+        """Bangun argv `docker run` dengan SEMUA flag keamanan wajib.
+
+        Satu sumber kebenaran untuk run_python & run_shell — sehingga test bisa
+        memverifikasi argv NYATA (bukan rekonstruksi manual yang bisa divergen).
+        `mount` = spec `-v src:/work:ro`; selalu read-only.
+        """
+        return [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--memory",
+            SANDBOX_MEM_LIMIT,
+            "--cpus",
+            SANDBOX_CPU_LIMIT,
+            "--read-only",
+            "--tmpfs",
+            f"/tmp:rw,size={tmpfs_size}",
+            "-v",
+            mount,
+            "--workdir",
+            "/work",
+            "--user",
+            "nobody",
+            "--security-opt",
+            "no-new-privileges",
+            SANDBOX_IMAGE,
+        ]
+
     async def run_python(self, code: str) -> dict:
         with tempfile.TemporaryDirectory() as workdir:
             script_path = os.path.join(workdir, "script.py")
             with open(script_path, "w") as f:
                 f.write(code)
 
-            cmd = [
-                "docker",
-                "run",
-                "--rm",
-                "--network",
-                "none",
-                "--memory",
-                SANDBOX_MEM_LIMIT,
-                "--cpus",
-                SANDBOX_CPU_LIMIT,
-                "--read-only",
-                "--tmpfs",
-                "/tmp:rw,size=64m",
-                "-v",
-                f"{workdir}:/work:ro",
-                "--workdir",
-                "/work",
-                "--user",
-                "nobody",
-                "--security-opt",
-                "no-new-privileges",
-                SANDBOX_IMAGE,
+            cmd = self._base_docker_args(f"{workdir}:/work:ro", "64m") + [
                 "timeout",
                 str(SANDBOX_TIMEOUT_SEC),
                 "python",
@@ -84,28 +105,8 @@ class DockerSandbox:
         tidak bisa keluar ke network, tidak bisa baca file di luar workspace yang dimount.
         """
         root = str(Path(workspace_root).resolve())
-        cmd = [
-            "docker",
-            "run",
-            "--rm",
-            "--network",
-            "none",
-            "--memory",
-            SANDBOX_MEM_LIMIT,
-            "--cpus",
-            SANDBOX_CPU_LIMIT,
-            "--read-only",
-            "--tmpfs",
-            "/tmp:rw,size=16m",
-            "-v",
-            f"{root}:/work:ro",  # workspace read-only — tidak bisa dimodifikasi
-            "--workdir",
-            "/work",
-            "--user",
-            "nobody",
-            "--security-opt",
-            "no-new-privileges",
-            SANDBOX_IMAGE,
+        # workspace read-only — tidak bisa dimodifikasi; flag keamanan dari satu sumber.
+        cmd = self._base_docker_args(f"{root}:/work:ro", "16m") + [
             "timeout",
             str(SANDBOX_TIMEOUT_SEC),
             "sh",

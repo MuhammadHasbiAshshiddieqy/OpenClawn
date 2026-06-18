@@ -252,44 +252,122 @@ async def test_sandbox_timeout_handled():
     assert result["exit_code"] == -1
 
 
-def test_sandbox_cmd_has_security_flags():
-    """DockerSandbox harus menyertakan flag keamanan wajib."""
-    from tools.sandbox import SANDBOX_IMAGE
+def _flag_pair_present(argv: list[str], flag: str, value: str | None) -> bool:
+    """True bila `flag` ada di argv dan (jika value diberikan) diikuti value tepat."""
+    if flag not in argv:
+        return False
+    if value is None:
+        return True
+    i = argv.index(flag)
+    return i + 1 < len(argv) and argv[i + 1] == value
 
-    # Rekonstruksi cmd seperti di sandbox.run_python
-    workdir = "/fake/workdir"
-    cmd = [
-        "docker",
-        "run",
-        "--rm",
-        "--network",
-        "none",
-        "--memory",
-        "256m",
-        "--cpus",
-        "0.5",
-        "--read-only",
-        "--tmpfs",
-        "/tmp:rw,size=64m",
-        "-v",
-        f"{workdir}:/work:ro",
-        "--workdir",
-        "/work",
-        "--user",
-        "nobody",
-        "--security-opt",
-        "no-new-privileges",
-        SANDBOX_IMAGE,
-        "timeout",
-        "30",
-        "python",
-        "/work/script.py",
-    ]
 
-    assert "--network" in cmd and "none" in cmd, "Harus --network none"
-    assert "--read-only" in cmd, "Harus --read-only"
-    assert "--user" in cmd and "nobody" in cmd, "Harus user non-root"
-    assert "no-new-privileges" in cmd, "Harus --security-opt no-new-privileges"
+async def _capture_docker_argv(coro_factory) -> list[str]:
+    """Jalankan satu metode sandbox & tangkap argv NYATA yang dikirim ke Docker.
+
+    Bukan rekonstruksi manual — kita patch create_subprocess_exec dan rekam
+    argumen sesungguhnya, sehingga test gagal bila kode menghapus flag keamanan.
+    """
+    captured: dict = {}
+
+    async def _fake_exec(*args, **kwargs):
+        captured["argv"] = list(args)
+        proc = MagicMock()
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        proc.returncode = 0
+        return proc
+
+    with patch("tools.sandbox.asyncio.create_subprocess_exec", side_effect=_fake_exec):
+        await coro_factory()
+    return captured["argv"]
+
+
+@pytest.mark.asyncio
+async def test_run_python_argv_enforces_security_flags():
+    """run_python HARUS mengirim --network none, --read-only, non-root, no-new-privileges.
+
+    Memeriksa argv NYATA (anti test palsu): hapus salah satu flag di sandbox.py
+    → test ini gagal. Mount /work WAJIB read-only (:ro).
+    """
+    from tools.sandbox import DockerSandbox
+
+    sandbox = DockerSandbox()
+    argv = await _capture_docker_argv(lambda: sandbox.run_python("print(1)"))
+
+    assert _flag_pair_present(argv, "--network", "none"), "Harus --network none"
+    assert _flag_pair_present(argv, "--read-only", None), "Harus --read-only"
+    assert _flag_pair_present(argv, "--user", "nobody"), "Harus user non-root"
+    assert _flag_pair_present(argv, "--security-opt", "no-new-privileges"), (
+        "Harus no-new-privileges"
+    )
+    # Tidak boleh ada mount writable ke /work — semua mount -v harus berakhiran :ro
+    mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "-v"]
+    assert mounts and all(m.endswith(":ro") for m in mounts), (
+        f"Semua mount -v harus read-only, dapat: {mounts}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_shell_argv_enforces_security_flags():
+    """run_shell HARUS menegakkan flag keamanan yang sama + mount workspace read-only."""
+    from tools.sandbox import DockerSandbox
+
+    sandbox = DockerSandbox()
+    argv = await _capture_docker_argv(lambda: sandbox.run_shell("ls", workspace_root="."))
+
+    assert _flag_pair_present(argv, "--network", "none"), "Harus --network none"
+    assert _flag_pair_present(argv, "--read-only", None), "Harus --read-only"
+    assert _flag_pair_present(argv, "--user", "nobody"), "Harus user non-root"
+    assert _flag_pair_present(argv, "--security-opt", "no-new-privileges"), (
+        "Harus no-new-privileges"
+    )
+    mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "-v"]
+    assert mounts and all(m.endswith(":ro") for m in mounts), "Workspace mount harus :ro"
+
+
+@pytest.mark.asyncio
+async def test_run_python_fails_safe_when_docker_absent():
+    """Docker tak terpasang → SandboxUnavailable, BUKAN fallback eksekusi di host.
+
+    Prinsip keamanan #1: tidak pernah ada eksekusi kode di host.
+    """
+    from tools.sandbox import DockerSandbox, SandboxUnavailable
+
+    sandbox = DockerSandbox()
+    with patch(
+        "tools.sandbox.asyncio.create_subprocess_exec",
+        side_effect=FileNotFoundError("docker not found"),
+    ):
+        with pytest.raises(SandboxUnavailable):
+            await sandbox.run_python("print(1)")
+
+
+@pytest.mark.asyncio
+async def test_run_shell_fails_safe_when_docker_absent():
+    """Sama untuk run_shell — Docker absen harus fail-safe, tidak jatuh ke host."""
+    from tools.sandbox import DockerSandbox, SandboxUnavailable
+
+    sandbox = DockerSandbox()
+    with patch(
+        "tools.sandbox.asyncio.create_subprocess_exec",
+        side_effect=FileNotFoundError("docker not found"),
+    ):
+        with pytest.raises(SandboxUnavailable):
+            await sandbox.run_shell("ls", workspace_root=".")
+
+
+def test_base_docker_args_contains_every_required_flag():
+    """_base_docker_args (sumber tunggal argv) harus memuat SEMUA _REQUIRED_FLAGS.
+
+    Guard tambahan di level builder: kalau flag dihapus dari sumbernya, test gagal.
+    """
+    from tools.sandbox import DockerSandbox, _REQUIRED_FLAGS
+
+    args = DockerSandbox()._base_docker_args("/x:/work:ro", "16m")
+    for pair in _REQUIRED_FLAGS:
+        flag = pair[0]
+        value = pair[1] if len(pair) > 1 else None
+        assert _flag_pair_present(args, flag, value), f"flag wajib hilang: {pair}"
 
 
 # ── Approval gate integration ────────────────────────────────────────────────
