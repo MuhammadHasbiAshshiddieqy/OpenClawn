@@ -191,7 +191,7 @@ flowchart TD
         PRIMARY -->|error| FALL
         FALL --> F1["1 · gemma4:e4b (local)"]
         F1 -->|error| F2["2 · deepseek-r1 (local)"]
-        F2 -->|error| F3["3 · neural-chat (local)"]
+        F2 -->|error| F3["3 · qwen3.5:9b (local)"]
         F3 -->|error| F4["4 · gemini-2.5-flash (cloud)"]
         F4 -->|error| FAIL["ProviderUnavailable"]
     end
@@ -370,28 +370,29 @@ Handoffs between roles (PM → QA → Dev) use Pydantic models as typed contract
 
 The router scores 8 dimensions, then maps a complexity label to a model. Light tiers stay
 **local** (Ollama, free, private); heavy tiers escalate to a **cloud** model. The exact mapping
-is configurable — a typical multi-tier setup looks like:
+is configurable. Local tiers are ordered **by model capacity** (harder case → more capable
+model); heavy tiers go to the cloud. The shipped default:
 
 ```
 Query complexity → model selection:
 
-TRIVIAL  → gemma4:e2b   (Ollama · local)
-SIMPLE   → gemma4:e4b   (Ollama · local)
-MODERATE → gemma4:12b   (Ollama · local)
-COMPLEX  → gemini-2.5-flash  (cloud)   # or claude-haiku-4-5
-CRITICAL → gemini-2.5-pro    (cloud)   # or claude-sonnet-4-6
+TRIVIAL  → gemma4:e4b          (Ollama · local, lightest)
+SIMPLE   → deepseek-r1         (Ollama · local, reasoning)
+MODERATE → qwen3.5:9b          (Ollama · local, most capable)
+COMPLEX  → gemini-2.5-flash    (cloud)   # or claude-haiku-4-5
+CRITICAL → gemini-2.5-pro      (cloud)   # or claude-sonnet-4-6
 ```
 
 Cloud tiers are pluggable: point them at **Gemini** or **Claude** depending on the API key you
 provide. The shipped default routes heavy tiers to Gemini; swap to Claude in `core/router.py` if
-you prefer.
+you prefer. Local tiers are easy to remap too — just edit the `MODELS` dict.
 
 The router is **soul-aware**: each role's `soul.toml` can define `upgrade_keywords` that force
 higher complexity, and `prefer_local=true` to resist escalating to the cloud. Soul upgrade
 keywords **override** `prefer_local` — the soul has higher priority.
 
 If Ollama is offline, the client falls back down the chain automatically
-(`gemma4:e4b → deepseek-r1 → neural-chat → gemini-2.5-flash`). Every fallback is logged to the
+(`gemma4:e4b → deepseek-r1 → qwen3.5:9b → gemini-2.5-flash`). Every fallback is logged to the
 audit DB.
 
 ---

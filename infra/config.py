@@ -39,14 +39,14 @@ class AppConfig:
     debate_default_rounds: int = 2
     conversation_default_participants: tuple = field(default_factory=lambda: ("pm", "dev", "qa"))
     # fallback chain: urutan model jika provider utama gagal
-    # Fallback chain LOKAL-dulu: model lokal yang BENAR-BENAR ter-pull, lalu Gemini
-    # (cloud) sebagai pengaman terakhir. gemma4:e4b utama; deepseek-r1 & neural-chat
-    # cadangan lokal bila e4b gagal load (mis. kehabisan RAM).
+    # Fallback chain LOKAL-dulu, urut per kapasitas (selaras MODELS router):
+    # gemma4:e4b (ringan) → deepseek-r1 → qwen3.5:9b (paling mampu lokal), lalu
+    # Gemini (cloud) sebagai pengaman terakhir bila semua lokal gagal load.
     fallback_chain: tuple = field(
         default_factory=lambda: (
             ("ollama", "gemma4:e4b"),
             ("ollama", "deepseek-r1:latest"),
-            ("ollama", "neural-chat:latest"),
+            ("ollama", "qwen3.5:9b"),
             ("gemini", "gemini-2.5-flash"),
         )
     )

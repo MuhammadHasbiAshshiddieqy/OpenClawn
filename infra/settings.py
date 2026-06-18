@@ -12,10 +12,11 @@ from infra.database import DatabaseManager
 # Pilihan model yang diketahui, untuk dropdown /settings.
 # Bukan pembatas keras — hanya saran tampilan. (provider, model, label).
 KNOWN_MODELS: list[tuple[str, str, str]] = [
-    # Lokal (Ollama) — setup utama. Daftar di atas = yang ter-pull di mesin ini.
-    ("ollama", "gemma4:e4b", "Gemma4 e4b (lokal, utama)"),
-    ("ollama", "deepseek-r1:latest", "DeepSeek-R1 (lokal, reasoning)"),
-    ("ollama", "neural-chat:latest", "Neural Chat (lokal, ringan)"),
+    # Lokal (Ollama) — setup utama, urut per kapasitas (selaras tier router).
+    ("ollama", "gemma4:e4b", "Gemma4 e4b (lokal, ringan — TRIVIAL)"),
+    ("ollama", "deepseek-r1:latest", "DeepSeek-R1 (lokal, reasoning — SIMPLE)"),
+    ("ollama", "qwen3.5:9b", "Qwen3.5 9B (lokal, paling mampu — MODERATE)"),
+    ("ollama", "neural-chat:latest", "Neural Chat (lokal, cadangan)"),
     ("ollama", "qwen2.5-coder:latest", "Qwen2.5 Coder (lokal, tool-capable)"),
     # Cloud — hanya untuk tier berat / eksperimen.
     ("gemini", "gemini-2.5-flash", "Gemini 2.5 Flash (cloud)"),
