@@ -32,7 +32,7 @@ class ConversationEvent:
     `type`:
       - "turn"             → penanda mulai giliran (frontend buka bubble baru berlabel role)
       - "token" / "status" → di-rewrap dari AgentEvent giliran aktif
-      - "conversation_end" → akhir percakapan; `detail` = alasan
+      - "conversation_end" → akhir percakapan; `detail` = alasan, `usage` = total agregat
     """
 
     type: str
@@ -40,6 +40,7 @@ class ConversationEvent:
     text: str = ""
     detail: str = ""
     turn_index: int = 0
+    usage: dict | None = None
 
 
 @dataclass
@@ -298,15 +299,17 @@ class ConversationOrchestrator:
     async def run(self, initial_message: str):
         """Yield ConversationEvent. Tiap giliran = AgentLoop.run() penuh."""
         state = ConversationState(transcript=[("user", initial_message)])
+        # Akumulasi biaya lintas-giliran → ditampilkan di akhir percakapan.
+        totals = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "latency_ms": 0, "turns": 0}
 
         while state.turn_index < self.config.max_conversation_turns:
             if await self.control.is_stopped():
-                yield ConversationEvent("conversation_end", detail="stopped")
+                yield ConversationEvent("conversation_end", detail="stopped", usage=totals)
                 return
 
             role = self.strategy.next_speaker(state)
             if role is None:
-                yield ConversationEvent("conversation_end", detail="strategy_done")
+                yield ConversationEvent("conversation_end", detail="strategy_done", usage=totals)
                 return
 
             interjection = self.control.pop_interjection()
@@ -325,6 +328,14 @@ class ConversationOrchestrator:
                 if await self.control.is_stopped():
                     stopped_mid = True
                     break
+                # Usage bukan untuk ditampilkan per-token — akumulasi diam-diam.
+                if ev.type == "usage" and ev.usage:
+                    totals["tokens_in"] += ev.usage.get("tokens_in", 0)
+                    totals["tokens_out"] += ev.usage.get("tokens_out", 0)
+                    totals["cost_usd"] += ev.usage.get("cost_usd", 0.0)
+                    totals["latency_ms"] += ev.usage.get("latency_ms", 0)
+                    totals["turns"] += 1
+                    continue
                 if ev.type == "token":
                     collected += ev.text
                 yield ConversationEvent(
@@ -333,7 +344,7 @@ class ConversationOrchestrator:
 
             if stopped_mid:
                 yield ConversationEvent(
-                    "conversation_end", role=role, detail="stopped", turn_index=ti
+                    "conversation_end", role=role, detail="stopped", turn_index=ti, usage=totals
                 )
                 return
 
@@ -347,7 +358,7 @@ class ConversationOrchestrator:
             state.turn_index += 1
             state.round_index = state.turn_index // max(1, len(self.strategy.participants))
 
-        yield ConversationEvent("conversation_end", detail="max_turns")
+        yield ConversationEvent("conversation_end", detail="max_turns", usage=totals)
 
     async def _record_handoff(self, role: str, task_input: str, raw: str) -> dict:
         """Validasi output role vs contract, tulis ke role_handoffs. Gagal → teks mentah."""

@@ -270,6 +270,55 @@ Test untuk fitur pilih model: `SettingsStore`, provider Gemini, override routing
 
 ---
 
+### `tests/test_question.py`
+
+Test untuk `security/question.py` (QuestionGate) + integrasi `ask_user` lewat AgentLoop.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_ask_resolved_returns_answer` | `ask()` menunggu; `resolve_by_session()` memberi jawaban |
+| `test_ask_timeout_returns_no_answer` | Tanpa jawaban dalam batas waktu → `NO_ANSWER` (fail-soft) |
+| `test_resolve_by_id` | `resolve(question_id)` bekerja; `pending_list` mengekspos id |
+| `test_resolve_unknown_session_returns_false` | Sesi tanpa pertanyaan → `False`, tidak crash |
+| `test_resolve_unknown_id_returns_false` | id tak dikenal → `False` |
+| `test_pending_list_filters_by_session` | `pending_list` menyaring per session |
+| `test_agent_loop_ask_user_uses_gate` | `_execute_tool('ask_user')` lewat gate (bukan stub) → jawaban user |
+| `test_agent_loop_ask_user_empty_question` | `ask_user` tanpa question → error, tidak menggantung |
+
+---
+
+### `tests/test_thinking.py`
+
+Test untuk `ThinkTagSplitter` + parsing reasoning per provider (`LLMChunk(type="thinking")`).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_plain_text_no_think` | Teks tanpa tag → semua `text` |
+| `test_think_then_answer_single_chunk` | `<think>x</think>jawaban` → thinking + text terpisah |
+| `test_tag_split_across_chunks` | Tag terpotong antar-chunk tidak bocor sebagai teks |
+| `test_close_tag_split_across_chunks` | Tag penutup terpotong tetap dikenali |
+| `test_unclosed_think_flushed` | `<think>` tak tertutup → di-flush sebagai thinking |
+| `test_text_before_think` | Teks sebelum `<think>` tetap utuh |
+| `test_no_think_with_angle_bracket` | `<` yang bukan tag think tidak rusak |
+| `test_ollama_inline_think_split` | Ollama `<think>` inline → chunk thinking |
+| `test_ollama_thinking_field` | Ollama field `message.thinking` → chunk thinking |
+| `test_anthropic_thinking_delta` | Anthropic `thinking_delta` → chunk thinking |
+| `test_gemini_thought_part` | Gemini `parts[].thought=true` → chunk thinking |
+
+---
+
+### `tests/test_logging.py`
+
+Test untuk `infra/logging.py` (structlog JSON).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_setup_logging_idempotent` | `setup_logging()` aman dipanggil berkali-kali |
+| `test_log_is_callable_logger` | `log` punya method level standar (debug/info/warning/error) |
+| `test_setup_logging_renders_json` | Output log = JSON satu baris dengan level + event + timestamp |
+
+---
+
 ## Pola Test Async
 
 ```python

@@ -63,6 +63,9 @@ data: {"text":"routing","detail":"gemini:gemini-2.0-flash"}
 event: status
 data: {"text":"thinking","detail":""}
 
+event: thinking                        ← potongan reasoning model (blok collapsible)
+data: "token nalar"
+
 event: token                           ← potongan isi jawaban
 data: token1
 
@@ -73,7 +76,7 @@ event: done                            ← selalu dikirim terakhir (finally), pe
 data: [DONE]
 ```
 
-Label status: `routing` (model dipilih), `thinking` (LLM mulai), `tool` (`detail`=nama tool), `fallback` (`detail`=model). Payload `status`/`error` berupa JSON; `token` adalah teks yang sudah di-escape (`&`, `<`) dengan newline → `<br>`.
+Label status: `routing` (model dipilih), `thinking` (LLM mulai), `tool` (`detail`=nama tool), `fallback` (`detail`=model), `question` (`detail`=teks pertanyaan `ask_user`). Payload `status`/`error` berupa JSON; `token` dan `thinking` adalah teks MENTAH (JSON-encoded) yang dirender markdown di frontend. Event `thinking` muncul bila model mengeluarkan reasoning (`<think>` lokal, extended-thinking Anthropic, `parts.thought` Gemini) — UI menampilkannya di blok collapsible yang auto-collapse saat token jawaban pertama tiba.
 
 `event: done` selalu di-emit di blok `finally`, dan exception apa pun dari `agent.run()` ditangkap → `event: error` + di-log (`chat_stream_failed`). Jadi stream tidak pernah berakhir diam-diam tanpa penanda.
 
@@ -105,10 +108,13 @@ Frame SSE (tambahan dari `/chat/stream`):
 ```
 event: turn               data: {"role":"pm","label":"PM","turn":0}     ← mulai giliran (UI buka bubble berlabel)
 event: token              data: {"role":"pm","text":"..."}              ← token (objek, beda dari /chat/stream)
-event: status             data: {"role":"pm","text":"thinking","detail":""}
-event: conversation_end   data: {"reason":"strategy_done|max_turns|stopped"}
+event: thinking           data: {"role":"pm","text":"..."}              ← reasoning model (blok collapsible per bubble)
+event: status             data: {"role":"pm","text":"thinking","detail":""}   ← termasuk text:"question" untuk ask_user
+event: conversation_end   data: {"reason":"strategy_done|max_turns|stopped","usage":{...}}
 event: done               data: [DONE]
 ```
+
+`usage` di `conversation_end` adalah agregat lintas-giliran: `{tokens_in, tokens_out, cost_usd, latency_ms, turns}` (UI menampilkannya sebagai ringkasan; cost ditampilkan hanya bila > 0).
 
 #### `POST /converse/interject`
 
@@ -164,6 +170,20 @@ Atau jika parameter tidak valid:
 ```
 
 Memanggil `approval_gate.resolve(approval_id, decision == "approve")` yang meng-unblock Future di `AgentLoop._execute_tool()`.
+
+---
+
+#### `POST /answer`
+
+**User menjawab pertanyaan klarifikasi (`ask_user`).**
+
+Form data:
+- `session_id` — sesi yang sedang menunggu jawaban
+- `answer` — teks jawaban user
+
+Response: `{"ok": true}` bila ada pertanyaan pending untuk sesi itu, `{"ok": false, ...}` bila tidak.
+
+Memanggil `question_gate.resolve_by_session(session_id, answer)` yang meng-unblock Future di `AgentLoop._execute_tool()` (jalur `ask_user`). Frontend mengirim jawaban ke sini saat status `question` aktif, alih-alih memulai chat baru. `QuestionGate` di-inject sebagai singleton dari level app (sama seperti `ApprovalGate`).
 
 ---
 

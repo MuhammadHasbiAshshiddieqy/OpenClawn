@@ -21,11 +21,14 @@ from infra.database import DatabaseManager
 from infra.logging import log, setup_logging
 from infra.settings import KNOWN_MODELS, SettingsStore
 from security.approval import ApprovalGate
+from security.question import QuestionGate
 
 db = DatabaseManager(CONFIG)
-# ApprovalGate shared di tingkat app: AgentLoop dibuat baru tiap request, tapi
-# Future approval harus bertahan agar /approve bisa me-resolve-nya (HITL §17).
+# ApprovalGate & QuestionGate shared di tingkat app: AgentLoop dibuat baru tiap
+# request, tapi Future-nya harus bertahan agar /approve & /answer bisa me-resolve
+# Future yang sama (HITL §17 untuk approval; klarifikasi interaktif untuk ask_user).
 approval_gate = ApprovalGate(db, CONFIG)
+question_gate = QuestionGate(CONFIG)
 
 # Registry kontrol percakapan per session — agar /converse/interject & /stop bisa
 # mencapai loop yang sedang berjalan di /converse/stream (pola sama ApprovalGate._pending).
@@ -99,7 +102,12 @@ async def chat_stream(request: Request):
     if not message:
         return HTMLResponse("")
 
-    agent = AgentLoop(AgentConfig(role=role, session_id=session_id), db=db, approval=approval_gate)
+    agent = AgentLoop(
+        AgentConfig(role=role, session_id=session_id),
+        db=db,
+        approval=approval_gate,
+        question_gate=question_gate,
+    )
 
     async def generate():
         # Protokol SSE bernama: frontend membedakan `token` (isi jawaban) dari
@@ -112,6 +120,8 @@ async def chat_stream(request: Request):
                     # SSE). Frontend yang merender markdown → HTML + sanitasi. Jangan
                     # escape/<br> di sini, supaya markdown (heading/list/code) utuh.
                     yield f"event: token\ndata: {json.dumps(event.text)}\n\n"
+                elif event.type == "thinking":
+                    yield f"event: thinking\ndata: {json.dumps(event.text)}\n\n"
                 elif event.type == "status":
                     payload = json.dumps({"text": event.text, "detail": event.detail})
                     yield f"event: status\ndata: {payload}\n\n"
@@ -153,7 +163,10 @@ async def converse_stream(request: Request):
 
     def agent_factory(role: str) -> AgentLoop:
         return AgentLoop(
-            AgentConfig(role=role, session_id=session_id), db=db, approval=approval_gate
+            AgentConfig(role=role, session_id=session_id),
+            db=db,
+            approval=approval_gate,
+            question_gate=question_gate,
         )
 
     orch = ConversationOrchestrator(
@@ -174,11 +187,15 @@ async def converse_stream(request: Request):
                 elif ev.type == "token":
                     payload = json.dumps({"role": ev.role, "text": ev.text})
                     yield f"event: token\ndata: {payload}\n\n"
+                elif ev.type == "thinking":
+                    payload = json.dumps({"role": ev.role, "text": ev.text})
+                    yield f"event: thinking\ndata: {payload}\n\n"
                 elif ev.type == "status":
                     payload = json.dumps({"role": ev.role, "text": ev.text, "detail": ev.detail})
                     yield f"event: status\ndata: {payload}\n\n"
                 elif ev.type == "conversation_end":
-                    yield f"event: conversation_end\ndata: {json.dumps({'reason': ev.detail})}\n\n"
+                    end = {"reason": ev.detail, "usage": ev.usage}
+                    yield f"event: conversation_end\ndata: {json.dumps(end)}\n\n"
         except Exception as exc:  # noqa: BLE001 — laporkan ke UI, jangan diam
             log.error("converse_stream_failed", session=session_id, error=str(exc))
             yield f"event: error\ndata: {json.dumps({'text': str(exc)})}\n\n"
@@ -235,6 +252,18 @@ async def approve(request: Request):
 
     resolved = approval_gate.resolve(approval_id, decision == "approve")
     return {"ok": resolved, "approval_id": approval_id, "decision": decision}
+
+
+@app.post("/answer")
+async def answer(request: Request):
+    """User menjawab pertanyaan klarifikasi (ask_user) → resolve Future QuestionGate."""
+    form = await request.form()
+    session_id = (form.get("session_id") or "").strip()
+    text = (form.get("answer") or "").strip()
+    if not session_id or not text:
+        return {"ok": False, "error": "session_id dan answer wajib"}
+    resolved = question_gate.resolve_by_session(session_id, text)
+    return {"ok": resolved}
 
 
 @app.get("/metrics", response_class=HTMLResponse)

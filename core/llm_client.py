@@ -76,7 +76,7 @@ _PLAINTEXT_PARSERS: list[tuple[re.Pattern, str]] = [
 
 @dataclass
 class LLMChunk:
-    type: str  # text | tool_call | usage | fallback
+    type: str  # text | thinking | tool_call | usage | fallback
     text: str = ""
     tool_name: str = ""
     tool_input: dict = field(default_factory=dict)
@@ -87,6 +87,73 @@ class LLMChunk:
 
 class ProviderUnavailable(Exception):
     pass
+
+
+# Tag reasoning yang dipakai model lokal (deepseek-r1, qwen, dsb). Beberapa model
+# memakai variasi; kita kenali keduanya. Kasus paling umum: <think>...</think>.
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+
+
+class ThinkTagSplitter:
+    """Pisahkan `<think>...</think>` dari teks jawaban secara STREAMING.
+
+    Model GGUF lokal menaruh reasoning inline sebagai `<think>...</think>` di
+    dalam content. Karena di-stream token demi token, tag bisa terpotong di
+    tengah (mis. `<thi` lalu `nk>`). Splitter ini menahan ekor yang berpotensi
+    bagian dari tag sampai pasti, lalu mengklasifikasikan tiap potongan sebagai
+    ("thinking", teks) atau ("text", teks).
+
+    Pemakaian: panggil `feed(chunk)` untuk tiap potongan stream → list of
+    (kind, text); panggil `flush()` di akhir untuk sisa buffer.
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._in_think = False
+
+    def feed(self, chunk: str) -> list[tuple[str, str]]:
+        self._buf += chunk
+        out: list[tuple[str, str]] = []
+        while True:
+            marker = _THINK_CLOSE if self._in_think else _THINK_OPEN
+            idx = self._buf.find(marker)
+            if idx == -1:
+                # Tidak ada marker utuh. Emit bagian yang PASTI bukan awal marker,
+                # tahan ekor yang mungkin prefix marker (mis. "<thi").
+                safe = self._emit_safe_prefix(marker)
+                if safe:
+                    out.append((self._kind(), safe))
+                break
+            # Marker ditemukan: emit teks sebelum marker, lalu toggle mode.
+            before = self._buf[:idx]
+            if before:
+                out.append((self._kind(), before))
+            self._buf = self._buf[idx + len(marker) :]
+            self._in_think = not self._in_think
+        return [(k, t) for k, t in out if t]
+
+    def flush(self) -> list[tuple[str, str]]:
+        """Emit sisa buffer di akhir stream (tag tak tertutup → anggap apa adanya)."""
+        rest = self._buf
+        self._buf = ""
+        return [(self._kind(), rest)] if rest else []
+
+    def _kind(self) -> str:
+        return "thinking" if self._in_think else "text"
+
+    def _emit_safe_prefix(self, marker: str) -> str:
+        """Kembalikan bagian buffer yang aman dikirim; tahan ekor yang bisa jadi
+        awal `marker` (agar tag terpotong tidak bocor sebagai teks)."""
+        keep = 0
+        for n in range(1, min(len(marker), len(self._buf)) + 1):
+            if self._buf[-n:] == marker[:n]:
+                keep = n
+        if keep:
+            safe, self._buf = self._buf[:-keep], self._buf[-keep:]
+            return safe
+        safe, self._buf = self._buf, ""
+        return safe
 
 
 class LLMClient:
@@ -276,16 +343,24 @@ class LLMClient:
                 text_buf: list[str] = []
                 native_tool_calls: list[dict] = []
                 usage_data: dict = {}
+                # Splitter memisahkan <think>…</think> inline dari jawaban. Tool call
+                # tidak pernah di dalam <think>, jadi hanya bagian "text" yang masuk
+                # text_buf untuk deteksi plaintext tool call.
+                splitter = ThinkTagSplitter()
 
                 async for line in resp.aiter_lines():
                     if not line.strip():
                         continue
                     data = json.loads(line)
                     msg = data.get("message", {})
+                    # Field thinking terpisah (Ollama API baru / model reasoning).
+                    if msg.get("thinking"):
+                        yield LLMChunk(type="thinking", text=msg["thinking"])
                     if msg.get("content"):
-                        text_buf.append(msg["content"])
-                        # Kirim real-time — cegah "server tidak merespon"
-                        yield LLMChunk(type="text", text=msg["content"])
+                        for kind, piece in splitter.feed(msg["content"]):
+                            if kind == "text":
+                                text_buf.append(piece)
+                            yield LLMChunk(type=kind, text=piece)
                     for tc in msg.get("tool_calls", []):
                         native_tool_calls.append({
                             "name": tc["function"]["name"],
@@ -296,6 +371,12 @@ class LLMClient:
                             "input_tokens": data.get("prompt_eval_count", 0),
                             "output_tokens": data.get("eval_count", 0),
                         }
+
+                # Flush sisa buffer splitter (mis. teks tanpa tag penutup di akhir).
+                for kind, piece in splitter.flush():
+                    if kind == "text":
+                        text_buf.append(piece)
+                    yield LLMChunk(type=kind, text=piece)
 
                 # Post-processing: deteksi tool call plain-text di akumulasi teks.
                 # Tool call dari model GGUF (Gemma, Qwen, dsb.) muncul sebagai
@@ -365,6 +446,9 @@ class LLMClient:
                         delta = data.get("delta", {})
                         if delta.get("type") == "text_delta":
                             yield LLMChunk(type="text", text=delta["text"])
+                        elif delta.get("type") == "thinking_delta":
+                            # Extended thinking Anthropic → blok reasoning terpisah.
+                            yield LLMChunk(type="thinking", text=delta.get("thinking", ""))
                     elif etype == "message_delta":
                         if data.get("usage"):
                             yield LLMChunk(type="usage", usage=data["usage"])
@@ -411,7 +495,9 @@ class LLMClient:
                     for cand in data.get("candidates", []):
                         for part in cand.get("content", {}).get("parts", []):
                             if part.get("text"):
-                                yield LLMChunk(type="text", text=part["text"])
+                                # parts dengan thought=true adalah reasoning Gemini.
+                                kind = "thinking" if part.get("thought") else "text"
+                                yield LLMChunk(type=kind, text=part["text"])
                     usage = data.get("usageMetadata")
                     if usage:
                         yield LLMChunk(

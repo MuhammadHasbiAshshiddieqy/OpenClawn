@@ -18,6 +18,7 @@ from memory.skill_decay import SkillDecayManager
 from tools import TOOL_REGISTRY
 from security.vault import Vault
 from security.approval import ApprovalGate
+from security.question import QuestionGate
 from security.shield import Shield
 
 
@@ -33,14 +34,20 @@ class AgentEvent:
     """Event yang di-stream ke UI.
 
     `type="token"` → potongan jawaban (content) yang harus ditampilkan.
+    `type="thinking"` → potongan reasoning model (bila ada): <think> lokal,
+    extended-thinking Anthropic, atau parts.thought Gemini. Ditampilkan di blok
+    collapsible terpisah, TIDAK masuk jawaban final.
     `type="status"` → sinyal proses (routing/thinking/tool/approval/fallback)
     agar user tahu agent sedang apa, bukan diam karena macet. `text` adalah
     label singkat untuk status, `detail` opsional (mis. nama model/tool).
+    `type="usage"` → ringkasan biaya turn (tokens/cost/latency) di akhir run,
+    dipakai conversation untuk mengagregasi total lintas-giliran.
     """
 
     type: str
     text: str = ""
     detail: str = ""
+    usage: dict | None = None
 
 
 @dataclass
@@ -83,6 +90,7 @@ class AgentLoop:
         db: DatabaseManager,
         config: AppConfig = CONFIG,
         approval: ApprovalGate | None = None,
+        question_gate: QuestionGate | None = None,
     ):
         self.cfg = agent_cfg
         self.config = config
@@ -95,9 +103,10 @@ class AgentLoop:
         self.auditor = RoutingAuditor(db)
         self.compactor = ContextCompactor(config.max_context_tokens)
         self.crystallizer = ConfidenceCrystallizer(agent_cfg.role, self.llm, db)
-        # ApprovalGate di-inject dari Web UI agar resolve() mengenai Future yang sama
-        # (AgentLoop dibuat baru per request, tapi approval harus shared antar request).
+        # ApprovalGate & QuestionGate di-inject dari Web UI agar resolve() mengenai
+        # Future yang sama (AgentLoop dibuat baru per request, tapi gate harus shared).
         self.approval = approval or ApprovalGate(db, config)
+        self.question_gate = question_gate or QuestionGate(config)
         self.shield = Shield()
         self.settings = SettingsStore(db)
         self.history: list[Turn] = []
@@ -173,6 +182,18 @@ class AgentLoop:
         self.history.append(turn)
         await self.auditor.finalize(event_id, turn)
 
+        # Ringkasan biaya turn → UI (conversation mengagregasi lintas-giliran).
+        yield AgentEvent(
+            type="usage",
+            usage={
+                "tokens_in": turn.tokens_in,
+                "tokens_out": turn.tokens_out,
+                "cost_usd": turn.cost_usd,
+                "latency_ms": turn.latency_ms,
+                "model": turn.model_used,
+            },
+        )
+
         # 8. Post-turn dengan error handling (audit #3: bukan fire-and-forget)
         # Snapshot history sebelum create_task — hindari race condition jika history berubah
         history_snapshot = list(self.history)
@@ -210,6 +231,10 @@ class AgentLoop:
                 if chunk.type == "text":
                     turn.content += chunk.text
                     yield AgentEvent(type="token", text=chunk.text)
+                elif chunk.type == "thinking":
+                    # Reasoning model → blok terpisah di UI. JANGAN masuk turn.content
+                    # (itu jawaban final yang di-crystallize/diarsipkan, bukan nalar).
+                    yield AgentEvent(type="thinking", text=chunk.text)
                 elif chunk.type == "tool_call":
                     pending_tool = chunk
                 elif chunk.type == "usage":
@@ -245,10 +270,16 @@ class AgentLoop:
                 repeat_count = 0
             last_call = call_key
 
-            # Status: tool akan dijalankan — tampilkan nama tool + parameter utamanya
-            # agar user bisa lihat path/command apa yang sedang dijelajahi.
-            param_preview = _format_tool_params(pending_tool.tool_name, pending_tool.tool_input)
-            yield AgentEvent(type="status", text="tool", detail=param_preview)
+            # ask_user menunggu input manusia → beri tahu UI agar memunculkan kotak
+            # jawaban (detail = teks pertanyaan), bukan sekadar chip "tool".
+            if pending_tool.tool_name == "ask_user":
+                question = str(pending_tool.tool_input.get("question", "")).strip()
+                yield AgentEvent(type="status", text="question", detail=question)
+            else:
+                # Status: tool akan dijalankan — tampilkan nama tool + parameter utamanya
+                # agar user bisa lihat path/command apa yang sedang dijelajahi.
+                param_preview = _format_tool_params(pending_tool.tool_name, pending_tool.tool_input)
+                yield AgentEvent(type="status", text="tool", detail=param_preview)
             result = await self._execute_tool(pending_tool.tool_name, pending_tool.tool_input)
             turn.tool_calls.append(
                 {"name": pending_tool.tool_name, "input": pending_tool.tool_input}
@@ -265,6 +296,16 @@ class AgentLoop:
 
         if not self._tool_allowed(name):
             return {"error": f"Tool '{name}' tidak diizinkan untuk role {self.cfg.role}"}
+
+        # ask_user: klarifikasi interaktif lewat QuestionGate (menggantikan stub lama).
+        # Tool-nya tetap menyediakan schema, tapi eksekusi nyata menunggu jawaban user
+        # via Future yang di-resolve Web UI — pola sama ApprovalGate.
+        if name == "ask_user":
+            question = str(input_data.get("question", "")).strip()
+            if not question:
+                return {"error": "ask_user butuh field 'question'"}
+            answer = await self.question_gate.ask(self.cfg.session_id, question)
+            return {"answer": answer}
 
         if tool.requires_approval:
             approved = await self.approval.request(self.cfg.session_id, name, input_data)

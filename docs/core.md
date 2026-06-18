@@ -81,9 +81,12 @@ Event yang di-stream `run()` ke Web UI. Memisahkan isi jawaban dari sinyal prose
 
 | Field | Keterangan |
 |---|---|
-| `type` | `"token"` (potongan jawaban) atau `"status"` (sinyal proses) |
-| `text` | Untuk `token`: isi teks. Untuk `status`: label (`routing`/`thinking`/`tool`/`fallback`) |
-| `detail` | Konteks status opsional (mis. `provider:model` saat `routing`, nama tool saat `tool`) |
+| `type` | `"token"` (jawaban), `"thinking"` (reasoning model), `"status"` (sinyal proses), atau `"usage"` (ringkasan biaya turn di akhir) |
+| `text` | Untuk `token`/`thinking`: isi teks. Untuk `status`: label (`routing`/`thinking`/`tool`/`fallback`/`question`/`loop_stopped`) |
+| `detail` | Konteks status opsional (mis. `provider:model` saat `routing`, nama tool saat `tool`, teks pertanyaan saat `question`) |
+| `usage` | Untuk `usage`: `{tokens_in, tokens_out, cost_usd, latency_ms, model}` |
+
+> `type="thinking"` di-emit dari reasoning model dan ditampilkan di blok collapsible terpisah di UI — **tidak** masuk `turn.content` (bukan jawaban final, jadi tidak di-crystallize/diarsipkan).
 
 ### Kelas: `AgentLoop`
 
@@ -147,16 +150,24 @@ Unit terkecil output streaming dari LLM.
 
 | Field | Nilai `type` | Keterangan |
 |---|---|---|
-| `type` | `"text"` | Token teks biasa |
+| `type` | `"text"` | Token jawaban final |
+| `type` | `"thinking"` | Token reasoning model (lihat ThinkTagSplitter & parser) |
 | `type` | `"tool_call"` | LLM ingin panggil tool |
 | `type` | `"usage"` | Data penggunaan token |
 | `type` | `"fallback"` | Sinyal bahwa fallback aktif |
-| `text` | — | Konten teks (untuk type `text`) |
+| `text` | — | Konten teks (untuk type `text`/`thinking`) |
 | `tool_name` | — | Nama tool (untuk type `tool_call`) |
 | `tool_input` | — | Input tool sebagai dict |
 | `usage` | — | Dict `{input_tokens, output_tokens}` |
 | `fallback_used` | — | True jika fallback aktif |
 | `fallback_model` | — | Nama model fallback yang dipakai |
+
+### Kelas: `ThinkTagSplitter`
+
+Memisahkan reasoning inline `<think>...</think>` dari teks jawaban secara **streaming-safe**. Model GGUF lokal (deepseek-r1, qwen, gemma) menaruh nalar di dalam `<think>` di tengah content; karena di-stream token demi token, tag bisa terpotong (`<thi` lalu `nk>`). Splitter menahan ekor yang berpotensi bagian tag sampai pasti.
+
+**`feed(chunk) → list[tuple[str, str]]`** — proses satu potongan stream → daftar `(kind, text)` dengan `kind ∈ {"thinking","text"}`.
+**`flush() → list[tuple[str, str]]`** — emit sisa buffer di akhir stream (tag tak tertutup → diperlakukan apa adanya).
 
 ### Exception: `ProviderUnavailable`
 
@@ -204,11 +215,13 @@ Parse 7 format plaintext tool call dari berbagai keluarga model:
 
 Return: `(cleaned_text, [{"name": "...", "input": {...}}, ...])` — teks bersih tanpa token tool call + daftar parsed call.
 
+> **Reasoning/thinking:** `_ollama` melewatkan content lewat `ThinkTagSplitter` (memisahkan `<think>…</think>` → `LLMChunk(type="thinking")`) dan juga menangkap field `message.thinking` terpisah (API Ollama baru). Hanya bagian non-thinking yang masuk buffer deteksi tool call.
+
 **`_claude(model, messages, tools, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
-Streaming request ke `POST /v1/messages` Anthropic. Parse SSE response (`data:` lines). API key diambil dari `Vault` tepat sebelum request — tidak pernah di-cache di memori lebih lama dari perlu.
+Streaming request ke `POST /v1/messages` Anthropic. Parse SSE response (`data:` lines). `text_delta` → `text`; `thinking_delta` (extended thinking) → `LLMChunk(type="thinking")`. API key diambil dari `Vault` tepat sebelum request — tidak pernah di-cache di memori lebih lama dari perlu.
 
 **`_gemini(model, messages, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
-Streaming request ke Google AI Studio (`POST /v1beta/models/{model}:streamGenerateContent?alt=sse`). API key (`GOOGLE_API_KEY`) diambil dari `Vault`, dikirim via header `x-goog-api-key`. Mengonversi format internal (`system`/`assistant`) ke format Gemini (`systemInstruction` + `contents` dengan peran `user`/`model`). Parse SSE → `candidates[].content.parts[].text` dan `usageMetadata`. Tool calling belum didukung di jalur Gemini (cukup teks — audit/crystallizer yang butuh JSON teks tetap jalan).
+Streaming request ke Google AI Studio (`POST /v1beta/models/{model}:streamGenerateContent?alt=sse`). API key (`GOOGLE_API_KEY`) diambil dari `Vault`, dikirim via header `x-goog-api-key`. Mengonversi format internal (`system`/`assistant`) ke format Gemini (`systemInstruction` + `contents` dengan peran `user`/`model`). Parse SSE → `candidates[].content.parts[].text` dan `usageMetadata`; `parts[]` dengan `thought=true` → `LLMChunk(type="thinking")`. Tool calling belum didukung di jalur Gemini (cukup teks — audit/crystallizer yang butuh JSON teks tetap jalan).
 
 **Provider yang didukung:** `ollama`, `anthropic`, `gemini`.
 
@@ -273,12 +286,12 @@ Teks penjelasan untuk audit record.
 | Complexity | Model | Provider |
 |---|---|---|
 | TRIVIAL | `gemma4:e4b` | Ollama |
-| SIMPLE | `gemma4:e4b` | Ollama |
-| MODERATE | `gemma4:e4b` | Ollama |
+| SIMPLE | `deepseek-r1:latest` | Ollama |
+| MODERATE | `qwen3.5:9b` | Ollama |
 | COMPLEX | `gemini-2.5-flash` | Gemini |
 | CRITICAL | `gemini-2.5-pro` | Gemini |
 
-> Semua tier lokal disamakan ke `gemma4:e4b` (satu-satunya gemma4 yang ter-pull & tool-capable). Bisa di-spesialisasi (mis. `deepseek-r1` untuk MODERATE) bila model lain di-`pull`.
+> Tier lokal dibedakan **per kapasitas model** — makin sulit case, makin mampu model (gemma4:e4b ringan → deepseek-r1 → qwen3.5:9b paling mampu lokal). Fallback chain mengikuti urutan yang sama. Remap lewat `MODELS` dict + `config.fallback_chain`.
 
 ---
 

@@ -97,6 +97,34 @@ Update row `approval_log` dari `pending:{approval_id}` ke keputusan final.
 
 ---
 
+## `security/question.py`
+
+### Dataclass: `PendingQuestion`
+
+Pertanyaan klarifikasi (`ask_user`) yang menunggu jawaban user dari Web UI: `question_id`, `session_id`, `question`, `future`.
+
+### Kelas: `QuestionGate`
+
+Analog `ApprovalGate` tapi untuk **pertanyaan terbuka** (bukan ya/tidak). Memberi tool `ask_user` kemampuan benar-benar bertanya ke user di tengah turn (menggantikan stub lama). Di-inject sebagai singleton dari `web/main.py` agar `resolve()` dari endpoint `/answer` mencapai Future yang sama.
+
+**Ephemeral by design:** tidak ada tabel DB — jawaban klarifikasi tidak punya nilai audit seperti keputusan approval (CLAUDE.md §6). State hanya Future in-memory + registry per session.
+
+**`ask(session_id, question) → str`** *(async)*  
+Ajukan pertanyaan & tunggu jawaban. Timeout (`approval_timeout_sec`) → kembalikan `NO_ANSWER` (**fail-soft** — beda dari approval yang fail-safe DENY; pertanyaan tak dijawab tidak berbahaya, agent lanjut dengan asumsi).
+
+**`resolve(question_id, answer) → bool`**  
+Set jawaban pada Future berdasarkan `question_id`. Return `True` bila valid.
+
+**`resolve_by_session(session_id, answer) → bool`**  
+Resolve pertanyaan pending tertua (FIFO) untuk sebuah session — dipakai endpoint `/answer` agar frontend cukup kirim `session_id` tanpa melacak `question_id` (single-user, satu pertanyaan aktif per session pada satu waktu).
+
+**`pending_list(session_id=None) → list[dict]`**  
+Daftar pertanyaan yang masih menunggu jawaban.
+
+> **Eksekusi `ask_user`** ditangani `AgentLoop._execute_tool`: bila tool = `ask_user`, ia memanggil `question_gate.ask()` (bukan `tool.execute()`), dan tool loop meng-emit `AgentEvent(type="status", text="question")` agar UI memunculkan kotak jawaban.
+
+---
+
 ## Alur HITL End-to-End
 
 ```
@@ -134,4 +162,5 @@ Jika user tidak merespons dalam `approval_timeout_sec` (default 120 detik) → F
 | `Vault` | Credential bocor ke prompt/log | Semua LLM call |
 | `Shield` | Prompt injection yang jelas | Input user |
 | `ApprovalGate` | Tool destruktif jalan tanpa izin | Tool execution |
+| `QuestionGate` | (bukan keamanan) klarifikasi interaktif `ask_user` | Tool execution |
 | `DockerSandbox` | Kode berbahaya akses host/network | **Pertahanan utama** |

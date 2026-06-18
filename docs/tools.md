@@ -216,11 +216,12 @@ HTTP request generik (GET/POST/PUT/PATCH/DELETE) ke API eksternal. **Destruktif*
 
 ### `AskUserTool`
 
-Tool untuk bertanya ke user. **Saat ini stub** — belum diimplementasi sebagai SSE interaktif.
+Tool untuk bertanya klarifikasi ke user. **Interaktif** — eksekusi nyata ditangani `AgentLoop._execute_tool` lewat `QuestionGate` (lihat [security.md](security.md)): agent mengirim pertanyaan, UI menampilkan kotak jawaban, jawaban user dikembalikan ke agent.
 
 - `requires_approval = False`
 - Input: `{"question": "..."}`
-- Output: `{"answer": "[stub] pertanyaan tertunda: ..."}` — placeholder sampai UI interaktif siap
+- Output: `{"answer": "<jawaban user>"}` (atau penanda timeout bila user tak menjawab dalam batas waktu — fail-soft, agent lanjut dengan asumsi)
+- `execute()` di tool ini hanya fallback non-interaktif (mis. test langsung di luar agent loop); jalur utama lewat `QuestionGate`.
 
 ---
 

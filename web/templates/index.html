@@ -101,10 +101,11 @@
                         </button>
                     </div>
                 </div>
+                <!-- Indikator proses efemeral: di DALAM aliran chat (sticky bawah)
+                     agar menyatu dengan percakapan, bukan melayang di atas composer. -->
+                <div id="status-line" class="status-line" hidden></div>
             </div>
         </div>
-
-        <div id="status-line" class="status-line" hidden></div>
 
         <div class="composer-wrap">
             <div class="mode-bar">
@@ -200,10 +201,21 @@
             case 'routing':      return '<span class="status-tag route">Route</span> Memilih model… (' + detail + ')';
             case 'thinking':     return '<span class="status-tag think">Think</span> Berpikir…';
             case 'tool':         return '<span class="status-tag tool">Tool</span> ' + detail;
+            case 'question':     return '<span class="status-tag ask">Ask</span> ' + escapeHtml(detail);
             case 'fallback':     return '<span class="status-tag fall">Fallback</span> ke ' + detail;
             case 'loop_stopped': return '<span class="status-tag stop">Halt</span> Loop dihentikan: ' + detail + ' dipanggil berulang';
             default:             return '<span class="status-tag">Info</span> ' + (detail ? text + ' ' + detail : text);
         }
+    }
+
+    // Ringkasan biaya agregat akhir percakapan (tokens/giliran/latency, cost bila >0).
+    function usageSummary(u) {
+        if (!u || !u.turns) return '';
+        const tok = (u.tokens_in || 0) + (u.tokens_out || 0);
+        const secs = ((u.latency_ms || 0) / 1000).toFixed(1);
+        let s = ' · ' + u.turns + ' giliran · ' + tok + ' token · ' + secs + 's';
+        if (u.cost_usd && u.cost_usd > 0) s += ' · $' + u.cost_usd.toFixed(4);
+        return '<span class="usage-note">' + s + '</span>';
     }
 
     function showStatus(html, kind) {
@@ -238,6 +250,7 @@
     const stopBtn = document.getElementById('stop-btn');
     const convoHint = document.getElementById('convo-hint');
     let activeConvo = null;   // AbortController saat conversation berjalan (untuk STOP + interject)
+    let awaitingAnswer = false;   // true saat agent menunggu jawaban ask_user (kirim ke /answer)
 
     // ── Konfigurasi peserta percakapan ───────────────────────────────────────
     const convoConfig = document.getElementById('convo-config');
@@ -394,8 +407,44 @@
         return body;  // caller menulis ke body, bukan ke wrap
     }
 
+    // Reasoning model → blok <details> collapsible DI ATAS msg-body. Dibuat lazy
+    // saat thinking pertama tiba. `raw` disimpan di dataset agar bisa di-append.
+    function appendThinking(bodyEl, piece) {
+        const wrap = bodyEl.parentElement;
+        let det = wrap.querySelector('.think-block');
+        if (!det) {
+            det = document.createElement('details');
+            det.className = 'think-block';
+            det.open = true;   // terbuka selagi berpikir
+            det.innerHTML = '<summary><span class="think-spin"></span> Thinking…</summary>'
+                          + '<div class="think-body"></div>';
+            wrap.insertBefore(det, bodyEl);   // sebelum jawaban
+            det.dataset.raw = '';
+        }
+        det.dataset.raw += piece;
+        det.querySelector('.think-body').innerHTML = renderMarkdown(det.dataset.raw);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    // Jawaban final mulai → tutup blok thinking & ganti label (tetap bisa dibuka lagi).
+    function collapseThinking(bodyEl) {
+        const det = bodyEl.parentElement.querySelector('.think-block');
+        if (det && det.open) {
+            det.open = false;
+            det.classList.add('done');
+            const sum = det.querySelector('summary');
+            if (sum) sum.innerHTML = 'Thinking · selesai';
+        }
+    }
+
     // Tangani satu status event → status-line efemeral atau action chip persisten.
     function handleStatus(s, beforeEl) {
+        if (s.text === 'question') {
+            // Agent bertanya → chip persisten + aktifkan mode jawab di composer.
+            appendAction(statusLabel(s.text, s.detail), 'ask', beforeEl);
+            beginAnswerMode(s.detail);
+            return;
+        }
         if (s.text === 'thinking') {
             showStatus(statusLabel(s.text, s.detail));
         } else {
@@ -403,6 +452,18 @@
                        : s.text === 'loop_stopped' ? 'error' : '';
             appendAction(statusLabel(s.text, s.detail), kind, beforeEl);
         }
+    }
+
+    // Mode jawab: agent menunggu jawaban ask_user. Composer dialihkan ke /answer.
+    function beginAnswerMode(question) {
+        awaitingAnswer = true;
+        textarea.placeholder = 'Jawab pertanyaan agent…';
+        textarea.focus();
+        showStatus(statusLabel('question', question));
+    }
+    function endAnswerMode() {
+        awaitingAnswer = false;
+        textarea.placeholder = 'Tanya apa saja ke CLAWN…';
     }
 
     // ── Mode SINGLE: 1 agent (endpoint /chat/stream) ──────────────────────────
@@ -424,8 +485,12 @@
             if (!resp.ok || !resp.body) { showStatus('Error HTTP ' + resp.status, 'error'); wrapEl.remove(); return; }
             await readSSE(resp, (evType, data) => {
                 arm();
-                if (evType === 'token') {
+                if (evType === 'thinking') {
                     let piece = data; try { piece = JSON.parse(data); } catch (_) {}
+                    appendThinking(bodyEl, piece); showStatus('<span class="status-tag think">Think</span> Menalar…');
+                } else if (evType === 'token') {
+                    let piece = data; try { piece = JSON.parse(data); } catch (_) {}
+                    if (!raw) collapseThinking(bodyEl);   // jawaban final mulai → tutup thinking
                     raw += piece; bodyEl.innerHTML = renderMarkdown(raw); showStatus('<span class="status-tag think">Gen</span> Menulis jawaban…');
                 } else if (evType === 'status') {
                     try { handleStatus(JSON.parse(data), wrapEl); } catch (_) {}
@@ -478,8 +543,12 @@
                     currentWrap = currentBody.parentElement;
                     currentRaw = '';
                     showStatus('<span class="status-tag think">Gen</span> ' + (d.label || d.role).toUpperCase() + ' sedang menjawab…');
+                } else if (evType === 'thinking') {
+                    if (!currentBody) { currentBody = newAssistantBubble(d.role); currentWrap = currentBody.parentElement; }
+                    appendThinking(currentBody, d.text || '');
                 } else if (evType === 'token') {
                     if (!currentBody) { currentBody = newAssistantBubble(d.role); currentWrap = currentBody.parentElement; }
+                    if (!currentRaw) collapseThinking(currentBody);   // jawaban final mulai
                     currentRaw += (d.text || ''); currentBody.innerHTML = renderMarkdown(currentRaw);
                 } else if (evType === 'status') {
                     handleStatus(d, currentWrap);
@@ -490,7 +559,7 @@
                         strategy_done: ['route', 'Percakapan selesai'],
                     };
                     const [cls, label] = map[d.reason] || ['', 'Selesai: ' + d.reason];
-                    appendAction('<span class="status-tag ' + cls + '">' + label + '</span>', d.reason === 'stopped' ? 'error' : '', null);
+                    appendAction('<span class="status-tag ' + cls + '">' + label + '</span>' + usageSummary(d.usage), d.reason === 'stopped' ? 'error' : '', null);
                 } else if (evType === 'error') {
                     appendAction('<span class="status-tag stop">Err</span> ' + escapeHtml(d.text || data), 'error', null);
                 }
@@ -538,6 +607,19 @@
     async function sendMessage() {
         const message = textarea.value.trim();
         if (!message) return;
+
+        // ANSWER: agent sedang menunggu jawaban ask_user → kirim ke /answer.
+        // Stream yang berjalan akan lanjut sendiri begitu Future di-resolve.
+        if (awaitingAnswer) {
+            if (emptyState) emptyState.remove();
+            textarea.value = ''; autoGrow();
+            userBubble(message);
+            endAnswerMode();
+            const body = new URLSearchParams({ session_id: form.session_id.value, answer: message });
+            fetch('/answer', { method: 'POST', body }).catch(() => {});
+            showStatus('<span class="status-tag think">Gen</span> Melanjutkan…');
+            return;
+        }
 
         // INTERJECT: bila percakapan sedang aktif, sela alih-alih memulai baru.
         if (activeConvo) {
