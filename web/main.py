@@ -8,8 +8,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from core.activity import ActivityTimeline
 from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
+from core.autopilot import AutopilotScheduler, AutopilotStore
 from core.calibration import CalibrationStore, RoutingCalibrator
 from core.router import Complexity, SmartRouter
 from core.router_config import RouterConfigStore
@@ -36,6 +38,40 @@ question_gate = QuestionGate(CONFIG)
 # Registry kontrol percakapan per session — agar /converse/interject & /stop bisa
 # mencapai loop yang sedang berjalan di /converse/stream (pola sama ApprovalGate._pending).
 _conversations: dict[str, ConversationControl] = {}
+
+
+async def _run_autopilot(ap: dict) -> int:
+    """Jalankan satu autopilot: AgentLoop mode autopilot (read-only + antrian proposal).
+
+    Keamanan (§1, §17): autopilot=True → tool butuh-approval TIDAK dieksekusi, diantri
+    sebagai proposal. Di sini kita HITUNG berapa proposal yang masuk selama run agar
+    user tahu ada aksi menunggu ditinjau. Return jumlah proposal baru.
+    """
+    session_id = f"autopilot-{ap['id']}"
+
+    async def _count_proposals() -> int:
+        row = await db.fetchone(
+            "SELECT COUNT(*) AS n FROM approval_log WHERE session_id=? AND decision='proposal:pending'",
+            (session_id,),
+        )
+        return (row or {}).get("n", 0)
+
+    before = await _count_proposals()
+    agent = AgentLoop(
+        AgentConfig(role=ap["role"], session_id=session_id, autopilot=True),
+        db=db,
+        approval=approval_gate,
+        question_gate=question_gate,
+    )
+    # Drain stream sampai selesai; output tidak di-stream ke mana pun (tak ada user live).
+    async for _ev in agent.run(ap["prompt"]):
+        pass
+    after = await _count_proposals()
+    return max(0, after - before)
+
+
+autopilot_store = AutopilotStore(db)
+autopilot_scheduler = AutopilotScheduler(autopilot_store, runner=_run_autopilot, config=CONFIG)
 
 # Urutan tampil role yang sudah dikenal; role lain (folder soul.toml baru) muncul
 # setelahnya secara alfabetis. Daftar role di-scan dari folder roles/ agar menambah
@@ -64,7 +100,10 @@ def available_roles() -> list[str]:
 async def lifespan(app: FastAPI):
     setup_logging()
     await db.run_migration("migrations/001_initial.sql")
+    # Scheduler autopilot hidup selama server hidup (loop asyncio in-process).
+    autopilot_scheduler.start()
     yield
+    await autopilot_scheduler.stop()
     await db.close()
 
 
@@ -396,6 +435,129 @@ async def conversations_page(request: Request):
         "conversations.html",
         {"conversations": convos},
     )
+
+
+@app.get("/activity", response_class=HTMLResponse)
+async def activity_page(request: Request, role: str | None = None):
+    """Linimasa kronologis aksi agent (terinspirasi Activity Timeline Multica).
+
+    Agregasi read-only lintas tabel — tidak menulis apa pun. Filter `?role=` opsional
+    memfokuskan pada satu peran (padanan 'agent profile').
+    """
+    roles = available_roles()
+    # Validasi filter: role tak dikenal → abaikan (tampilkan semua), jangan error.
+    active_role = role if role in roles else None
+    timeline = await ActivityTimeline(db).recent(role=active_role)
+    # Blocker terbuka ditampilkan menonjol di atas linimasa (proactive reporting).
+    open_blockers = await db.fetchall(
+        """SELECT id, role, summary, detail, severity, created_at
+           FROM agent_blockers WHERE status='open'
+           ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                    id DESC LIMIT 20"""
+    )
+    return templates.TemplateResponse(
+        request,
+        "activity.html",
+        {
+            "events": timeline,
+            "kinds": ActivityTimeline.KINDS,
+            "roles": roles,
+            "active_role": active_role,
+            "open_blockers": open_blockers,
+        },
+    )
+
+
+@app.post("/blockers/resolve")
+async def blockers_resolve(request: Request):
+    """Tandai blocker sebagai resolved (user sudah menanggapi)."""
+    form = await request.form()
+    try:
+        blocker_id = int(form.get("blocker_id") or 0)
+    except (ValueError, TypeError):
+        blocker_id = 0
+    if blocker_id:
+        await db.execute(
+            "UPDATE agent_blockers SET status='resolved', resolved_at=CURRENT_TIMESTAMP WHERE id=?",
+            (blocker_id,),
+        )
+    return RedirectResponse(url="/activity", status_code=303)
+
+
+@app.get("/autopilots", response_class=HTMLResponse)
+async def autopilots_page(request: Request):
+    """Kelola tugas agent terjadwal (terinspirasi Autopilots Multica).
+
+    Menampilkan jadwal, riwayat run, dan proposal aksi destruktif yang menunggu
+    persetujuan (autopilot tidak pernah mengeksekusi aksi destruktif sendiri, §17).
+    """
+    autopilots = await autopilot_store.list_all()
+    runs = await autopilot_store.recent_runs()
+    # Proposal yang diantri autopilot (decision='proposal:pending') — menunggu tinjauan.
+    proposals = await db.fetchall(
+        """SELECT id, session_id, tool_name, tool_input, created_at
+           FROM approval_log WHERE decision='proposal:pending'
+           ORDER BY id DESC LIMIT 30"""
+    )
+    return templates.TemplateResponse(
+        request,
+        "autopilots.html",
+        {
+            "autopilots": autopilots,
+            "runs": runs,
+            "proposals": proposals,
+            "roles": available_roles(),
+        },
+    )
+
+
+@app.post("/autopilots")
+async def autopilots_create(request: Request):
+    """Buat autopilot baru. interval_unit (menit/jam/hari) → detik."""
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    role = (form.get("role") or "").strip()
+    prompt = (form.get("prompt") or "").strip()
+    try:
+        every = int(form.get("every") or 0)
+    except (ValueError, TypeError):
+        every = 0
+    unit = (form.get("unit") or "hour").strip()
+    factor = {"minute": 60, "hour": 3600, "day": 86400}.get(unit, 3600)
+    interval_sec = every * factor
+    # Validasi: role harus dikenal, field wajib terisi, interval masuk akal.
+    if not name or not prompt or role not in available_roles() or interval_sec <= 0:
+        return RedirectResponse(url="/autopilots", status_code=303)
+    ap_id = await autopilot_store.create(name, role, prompt, interval_sec)
+    log.info("autopilot_created", autopilot=ap_id, role=role, interval_sec=interval_sec)
+    return RedirectResponse(url="/autopilots", status_code=303)
+
+
+@app.post("/autopilots/toggle")
+async def autopilots_toggle(request: Request):
+    """Aktif/jeda autopilot."""
+    form = await request.form()
+    try:
+        ap_id = int(form.get("autopilot_id") or 0)
+    except (ValueError, TypeError):
+        ap_id = 0
+    enabled = (form.get("enabled") or "") == "1"
+    if ap_id:
+        await autopilot_store.set_enabled(ap_id, enabled)
+    return RedirectResponse(url="/autopilots", status_code=303)
+
+
+@app.post("/autopilots/delete")
+async def autopilots_delete(request: Request):
+    """Hapus autopilot."""
+    form = await request.form()
+    try:
+        ap_id = int(form.get("autopilot_id") or 0)
+    except (ValueError, TypeError):
+        ap_id = 0
+    if ap_id:
+        await autopilot_store.delete(ap_id)
+    return RedirectResponse(url="/autopilots", status_code=303)
 
 
 @app.get("/router", response_class=HTMLResponse)

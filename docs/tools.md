@@ -300,6 +300,20 @@ Agent mengelola daftar langkah multi-step yang terlihat user. Tiap panggilan **m
 
 ---
 
+## `tools/blocker.py`
+
+### `ReportBlockerTool` — `report_blocker`
+
+Agent menandai hambatan secara **terstruktur** (terinspirasi *proactive blocker reporting* Multica). Beda dari `ask_user` (yang MEMBLOKIR menunggu jawaban): `report_blocker` **asinkron** — agent melaporkan lalu boleh lanjut/berhenti, user meninjau di `/activity`. Menulis ke `agent_blockers` → **tanpa approval**.
+
+- `requires_approval = False`
+- Input: `{"summary": "...", "detail": "...", "severity": "low|medium|high"}` (default `medium`)
+- `session_id` & `role` disuntik `AgentLoop` (`_session_id`, `_role`) — model tak mengarang
+- Output sukses: `{"ok": true, "reported": "...", "severity": "...", "note": "..."}`
+- Output error: `{"error": "..."}` jika `summary` kosong, severity tak valid, atau konteks sesi/DB hilang
+
+---
+
 ## `tools/code.py`
 
 ### `CodeRunTool`
@@ -424,6 +438,7 @@ List isi direktori dalam workspace. Read-only — **tidak butuh approval**.
 | `json_query` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 | `ask_user` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 | `todo_write` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
+| `report_blocker` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 
 Permission dikontrol via `soul.toml[tools][allowed]` tiap role — bukan hardcoded di kode tool. Semua tool filesystem dibatasi ke `workspace_root` (lihat catatan di `TOOL_REGISTRY`). `security` read-only murni (tanpa write/exec/network); `data` boleh tulis dokumen & jalankan kode tapi tidak `shell_run`/`http_request`.
 

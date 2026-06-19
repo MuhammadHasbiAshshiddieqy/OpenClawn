@@ -521,3 +521,26 @@ Catat satu eksekusi ke tabel `tool_invocations`. **Fail-soft**: kegagalan menuli
 
 **`summary() → list[dict]`** *(async)*  
 Agregasi per tool untuk `/metrics`: `total`, `errors`, `timeouts`, `fail_rate` (%), `avg_latency_ms`. Diurut paling sering dipakai dulu.
+
+---
+
+## `core/activity.py` — Activity Timeline
+
+Linimasa kronologis aksi agent (terinspirasi *Activity Timeline* Multica). **Tanpa tabel baru** — mengagregasi peristiwa yang sudah dicatat: `routing_events`, `tool_invocations`, `role_handoffs`, `conversations`, `crystallization_log`, `agent_blockers`. Read-only & extractable (hanya `DatabaseManager`).
+
+### Kelas: `ActivityTimeline`
+
+**`recent(role=None, limit=60) → list[dict]`** *(async)*  
+Gabungkan peristiwa lintas-tabel jadi satu linimasa terurut waktu (terbaru dulu). Tiap baris diseragamkan: `{kind, role, title, detail, outcome, created_at}`. `role=None` → semua peran; filter role memfokuskan satu peran (padanan "agent profile"). `conversation` hanya muncul saat `role=None` (tak punya kolom role tunggal). **Fail-soft**: sumber yang rusak/hilang di-skip, tak menjatuhkan halaman. `KINDS` memetakan jenis → label tampil.
+
+---
+
+## `core/autopilot.py` — Autopilots (tugas terjadwal)
+
+Tugas agent berulang yang dijalankan otomatis (terinspirasi *Autopilots* Multica). **Scheduler = loop asyncio in-process** (tanpa dependency baru, §7), interval detik berbasis UTC tanpa cron/DST. **Keamanan (§1, §17):** dijalankan dengan `AgentConfig.autopilot=True` → tool butuh-approval TIDAK dieksekusi, diantri sebagai proposal lewat `ApprovalGate.queue_proposal`.
+
+### Kelas: `AutopilotStore` (DB-bound, extractable)
+CRUD `autopilots` + riwayat `autopilot_runs`. Metode utama: `create(name, role, prompt, interval_sec)` *(async)* (interval di-floor ke `MIN_INTERVAL_SEC`=60), `list_all`/`get`/`set_enabled`/`delete` *(async)*, `due(now=None)` *(async)* (aktif & `next_run_at` lewat), `mark_ran(id, interval_sec)` *(async)* (reschedule dari sekarang — misfire-safe), `record_run`/`recent_runs` *(async)*.
+
+### Kelas: `AutopilotScheduler`
+Loop asyncio: cek due tiap `tick_sec`, jalankan via `runner` callable (disuntik web layer → AgentLoop autopilot mode; modul ini tak impor web/AgentLoop). `start()`/`stop()` *(async)* dipasang di lifespan FastAPI. **`run_due_once() → int`** *(async)* dipisah agar bisa di-test tanpa menunggu tick. `mark_ran` dipanggil SEBELUM eksekusi agar tick tumpang-tindih tak menjalankan ganda. Error per-run dicatat ke `autopilot_runs` (fail-soft), error loop di-log (`add_done_callback`, audit #3).

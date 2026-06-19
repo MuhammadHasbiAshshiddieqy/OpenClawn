@@ -159,3 +159,54 @@ CREATE TABLE IF NOT EXISTS agent_todos (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_agent_todos_session ON agent_todos(session_id, position);
+
+-- ===================== AGENT BLOCKERS [tool report_blocker] =====================
+-- Terinspirasi "proactive blocker reporting" Multica: agent dapat MENANDAI hambatan
+-- yang dihadapinya (mis. kredensial hilang, kebutuhan tak jelas) sebagai sinyal
+-- terstruktur — bukan sekadar teks di jawaban. Ditampilkan menonjol di UI agar user
+-- bisa menanggapi. Berbeda dari ask_user (yang MEMBLOKIR menunggu jawaban): blocker
+-- bersifat asinkron — agent melaporkan lalu lanjut/berhenti, user meninjau kapan saja.
+CREATE TABLE IF NOT EXISTS agent_blockers (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    summary TEXT NOT NULL,                   -- ringkas: apa yang menghambat
+    detail TEXT,                             -- konteks tambahan (opsional)
+    severity TEXT NOT NULL DEFAULT 'medium', -- low | medium | high
+    status TEXT NOT NULL DEFAULT 'open',     -- open | resolved
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_blockers_status ON agent_blockers(status, created_at DESC);
+
+-- ===================== AUTOPILOTS [scheduled agent runs] =====================
+-- Terinspirasi "Autopilots" Multica: tugas berulang yang dijalankan otomatis (mis.
+-- audit harian, ringkasan mingguan). KEAMANAN (CLAUDE.md §1, §17): autopilot berjalan
+-- TANPA manusia di depan, jadi tool yang butuh approval TIDAK dieksekusi — melainkan
+-- diantri sebagai PROPOSAL (approval_log pending) untuk ditinjau user. Scheduler =
+-- loop asyncio in-process (tanpa dependency baru), interval sederhana (UTC, tanpa cron).
+CREATE TABLE IF NOT EXISTS autopilots (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL,                      -- role yang menjalankan tugas
+    prompt TEXT NOT NULL,                    -- instruksi tugas terjadwal
+    interval_sec INTEGER NOT NULL,           -- jeda antar-jalan (detik); UTC, tanpa cron
+    enabled INTEGER NOT NULL DEFAULT 1,      -- 1=aktif, 0=jeda
+    last_run_at TIMESTAMP,                   -- kapan terakhir dijalankan (NULL=belum)
+    next_run_at TIMESTAMP,                   -- kapan due berikutnya (dihitung scheduler)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_autopilots_due ON autopilots(enabled, next_run_at);
+
+-- Riwayat tiap eksekusi autopilot — agar user bisa meninjau hasil & proposal.
+CREATE TABLE IF NOT EXISTS autopilot_runs (
+    id INTEGER PRIMARY KEY,
+    autopilot_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL,                -- sesi run (tautkan ke routing_events dll)
+    status TEXT NOT NULL DEFAULT 'running',  -- running | done | error
+    output TEXT,                             -- ringkasan jawaban agent
+    proposals INTEGER NOT NULL DEFAULT 0,    -- jumlah aksi destruktif yang DIANTRI (bukan dieksekusi)
+    error TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_autopilot_runs ON autopilot_runs(autopilot_id, id DESC);

@@ -268,6 +268,127 @@ def test_converse_stream_rejects_unknown_pattern(client):
     assert "event: error" in resp.text
 
 
+def test_activity_page_renders_empty(client):
+    """/activity tanpa peristiwa → 200 + pesan kosong + filter peran."""
+    resp = client.get("/activity")
+    assert resp.status_code == 200
+    assert "Activity" in resp.text
+    assert "Belum ada aktivitas" in resp.text
+    assert "Semua peran" in resp.text
+
+
+def test_activity_page_shows_seeded_events(client):
+    """Peristiwa observability muncul di linimasa (agregasi lintas tabel)."""
+    import os
+    import sqlite3
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    conn.execute(
+        """INSERT INTO tool_invocations (session_id, role, tool_name, outcome, latency_ms)
+           VALUES ('s','dev','file_read','ok',10)"""
+    )
+    conn.execute(
+        """INSERT INTO routing_events (session_id, role, query_text, complexity_label,
+               model_chosen, provider, had_correction)
+           VALUES ('s','dev','x','simple','gemma4:e2b','ollama',0)"""
+    )
+    conn.commit()
+    conn.close()
+
+    html = client.get("/activity").text
+    assert "file_read" in html
+    assert "simple" in html or "Routing" in html
+
+
+def test_activity_page_role_filter(client):
+    """Filter ?role= memfokuskan satu peran; role tak dikenal → tampil semua (tak crash)."""
+    resp = client.get("/activity?role=dev")
+    assert resp.status_code == 200
+    resp2 = client.get("/activity?role=ghost")
+    assert resp2.status_code == 200
+
+
+def test_activity_shows_open_blocker_and_resolve(client):
+    """Blocker terbuka tampil di banner /activity; POST /blockers/resolve menutupnya."""
+    import os
+    import sqlite3
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    cur = conn.execute(
+        """INSERT INTO agent_blockers (session_id, role, summary, severity, status)
+           VALUES ('s','dev','butuh API key','high','open')"""
+    )
+    bid = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    html = client.get("/activity").text
+    assert "Hambatan terbuka" in html
+    assert "butuh API key" in html
+
+    # Resolve → redirect 200, blocker tak lagi di banner.
+    resp = client.post("/blockers/resolve", data={"blocker_id": str(bid)})
+    assert resp.status_code == 200
+    assert "Hambatan terbuka" not in resp.text
+
+
+def test_autopilots_page_renders_empty(client):
+    """/autopilots tanpa jadwal → 200 + form + catatan keamanan."""
+    resp = client.get("/autopilots")
+    assert resp.status_code == 200
+    assert "Autopilots" in resp.text
+    assert "Aman by design" in resp.text
+    assert "Belum ada autopilot" in resp.text
+
+
+def test_autopilots_create_then_listed(client):
+    """Buat autopilot via form → muncul di daftar; role tak dikenal ditolak."""
+    resp = client.post(
+        "/autopilots",
+        data={
+            "name": "Audit harian",
+            "role": "security",
+            "prompt": "audit deps",
+            "every": "1",
+            "unit": "day",
+        },
+    )
+    assert resp.status_code == 200
+    assert "Audit harian" in resp.text
+
+    # Role tak dikenal → tidak dibuat (redirect tanpa menambah).
+    before = client.get("/autopilots").text.count("autopilot-row")
+    client.post(
+        "/autopilots",
+        data={"name": "X", "role": "ghost", "prompt": "p", "every": "1", "unit": "hour"},
+    )
+    after = client.get("/autopilots").text.count("autopilot-row")
+    assert after == before
+
+
+def test_autopilots_toggle_and_delete(client):
+    """Toggle menjeda; delete menghapus."""
+    import os
+    import sqlite3
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    cur = conn.execute(
+        """INSERT INTO autopilots (name, role, prompt, interval_sec, enabled, next_run_at)
+           VALUES ('t','dev','p',3600,1,'2099-01-01 00:00:00')"""
+    )
+    ap_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    resp = client.post("/autopilots/toggle", data={"autopilot_id": str(ap_id), "enabled": "0"})
+    assert resp.status_code == 200
+    assert "Aktifkan" in resp.text  # tombol berubah jadi 'Aktifkan' saat jeda
+
+    resp = client.post("/autopilots/delete", data={"autopilot_id": str(ap_id)})
+    assert resp.status_code == 200
+    assert "Belum ada autopilot" in resp.text
+
+
 def test_router_page_renders_tiers(client):
     """/router menampilkan 5 tier dengan dropdown model + tanda default."""
     html = client.get("/router").text

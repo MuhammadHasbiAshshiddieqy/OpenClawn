@@ -18,8 +18,8 @@ def dataclasses_replace(obj, **changes):
 # ── TOOL_REGISTRY ─────────────────────────────────────────────────────────────
 
 
-def test_registry_has_all_25_tools():
-    """Semua 25 tool harus terdaftar di TOOL_REGISTRY."""
+def test_registry_has_all_26_tools():
+    """Semua 26 tool harus terdaftar di TOOL_REGISTRY."""
     expected = {
         "file_read",
         "read_many",
@@ -46,6 +46,7 @@ def test_registry_has_all_25_tools():
         "json_query",
         "ask_user",
         "todo_write",
+        "report_blocker",
     }
     assert set(TOOL_REGISTRY.keys()) == expected
 

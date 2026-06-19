@@ -30,6 +30,10 @@ class AgentConfig:
     role: str
     session_id: str
     user_id: str = "default"
+    # Mode autopilot (CLAUDE.md §1, §17): agent berjalan TANPA manusia di depan.
+    # Tool yang butuh approval TIDAK dieksekusi — diantri sebagai proposal pending
+    # ke approval_log untuk ditinjau user nanti. Default False (sesi interaktif biasa).
+    autopilot: bool = False
 
 
 @dataclass
@@ -353,12 +357,32 @@ class AgentLoop:
         if schema_err:
             return {"error": schema_err}
 
-        # todo_write per-sesi: suntik session_id (tool tak menerima konteks sesi via
-        # signature execute; model tak perlu — & tak boleh — mengarang session_id).
-        if name == "todo_write":
-            input_data = {**input_data, "_session_id": self.cfg.session_id}
+        # Tool internal per-sesi (todo_write, report_blocker): suntik konteks sesi/role.
+        # Tool tak menerima ini via signature execute; model tak perlu — & tak boleh —
+        # mengarang session_id/role (sumber kebenaran = AgentLoop, bukan output model).
+        if name in ("todo_write", "report_blocker"):
+            input_data = {
+                **input_data,
+                "_session_id": self.cfg.session_id,
+                "_role": self.cfg.role,
+            }
 
         if tool.requires_approval:
+            # Autopilot (§1, §17): tidak ada manusia untuk approve → JANGAN eksekusi.
+            # Antri sebagai proposal pending agar user meninjau nanti. Tanpa ini,
+            # ApprovalGate.request() akan menggantung sampai timeout lalu DENY —
+            # "rusak", bukan "aman". Di sini aman secara eksplisit: aksi destruktif
+            # terjadwal jadi PROPOSAL, bukan eksekusi diam-diam.
+            if self.cfg.autopilot:
+                await self.approval.queue_proposal(self.cfg.session_id, name, input_data)
+                return {
+                    "proposed": True,
+                    "note": (
+                        f"Aksi '{name}' butuh persetujuan & tidak dijalankan otomatis di "
+                        "autopilot. Diantri sebagai proposal untuk ditinjau user. "
+                        "Lanjutkan tanpa hasil aksi ini."
+                    ),
+                }
             approved = await self.approval.request(self.cfg.session_id, name, input_data)
             if not approved:
                 return {"error": f"Tool '{name}' ditolak oleh user"}

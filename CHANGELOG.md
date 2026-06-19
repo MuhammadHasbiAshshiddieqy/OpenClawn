@@ -4,6 +4,25 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/) with pre-release suffixes during the research phase.
 
+## [Unreleased]
+
+### Added — fitur terinspirasi Multica (multica-ai/multica)
+- **Activity Timeline** (`/activity`) — linimasa kronologis aksi agent lintas tabel
+  (routing · tool · handoff · conversation · crystallize · blocker), filter per role.
+  Agregasi read-only, tanpa tabel baru (`core/activity.py`).
+- **Proactive blocker reporting** — tool `report_blocker` (tool ke-26): agent menandai
+  hambatan secara terstruktur & asinkron (beda dari `ask_user` yang memblokir). Tampil
+  menonjol di `/activity`, bisa ditutup user (`agent_blockers`).
+- **Autopilots** (`/autopilots`) — tugas agent terjadwal (scheduler asyncio in-process,
+  tanpa dependency baru). **Aman by design (§1, §17):** berjalan read-only; aksi
+  butuh-approval TIDAK dieksekusi otomatis — diantri sebagai *proposal* untuk ditinjau
+  user (`AgentConfig.autopilot`, `ApprovalGate.queue_proposal`). Misfire-safe.
+
+### Security
+- SSRF guard pada `web_fetch`/`http_request` (rilis sebelumnya, dipertahankan).
+- Autopilot tidak pernah mengeksekusi aksi destruktif tanpa persetujuan eksplisit —
+  HITL tetap utuh meski agent berjalan tanpa manusia di depan.
+
 ## [0.3.0-alpha] — 2026-06-19
 
 First tagged pre-release. Feature-complete against the v0.3 core spec, but still in

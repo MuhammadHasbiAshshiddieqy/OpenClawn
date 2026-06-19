@@ -77,6 +77,24 @@ class ApprovalGate:
             (decision, f"pending:{approval_id}"),
         )
 
+    async def queue_proposal(self, session_id: str, tool_name: str, tool_input: dict) -> None:
+        """Antri aksi destruktif dari autopilot sebagai PROPOSAL (tanpa Future hidup).
+
+        Berbeda dari `request()`: tidak ada manusia menunggu, jadi tidak ada Future &
+        tidak memblokir. Hanya mencatat baris pending bertanda `proposal:` di
+        approval_log agar user bisa meninjau nanti. Eksekusi nyata TIDAK terjadi di
+        sini — keputusan tetap di tangan user (CLAUDE.md §17). Fail-soft: kegagalan
+        tulis hanya di-log, tidak menjatuhkan run autopilot.
+        """
+        try:
+            await self.db.execute(
+                """INSERT INTO approval_log (session_id, tool_name, tool_input, decision)
+                   VALUES (?,?,?,?)""",
+                (session_id, tool_name, json.dumps(tool_input), "proposal:pending"),
+            )
+        except Exception as e:  # noqa: BLE001 — antrian proposal bukan jalur kritis
+            log.error("proposal_queue_failed", session=session_id, tool=tool_name, error=str(e))
+
     def resolve(self, approval_id: str, approved: bool) -> bool:
         """
         Dipanggil dari Web UI saat user klik approve/reject.

@@ -285,6 +285,67 @@ Daftar langkah multi-step yang dikelola agent lewat tool `todo_write`, per sesi.
 
 ---
 
+### `agent_blockers` — Hambatan Terstruktur (tool `report_blocker`)
+
+Hambatan yang dilaporkan agent secara terstruktur (terinspirasi *proactive blocker reporting* Multica). Beda dari `ask_user` (yang MEMBLOKIR menunggu jawaban): blocker **asinkron** — agent melaporkan lalu lanjut/berhenti, user meninjau & menutup kapan saja di `/activity`.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `session_id` | TEXT | Sesi pelapor |
+| `role` | TEXT | Role agent (disuntik `_role`) |
+| `summary` | TEXT | Ringkas: apa yang menghambat |
+| `detail` | TEXT | Konteks tambahan (opsional) |
+| `severity` | TEXT | `low` \| `medium` \| `high` |
+| `status` | TEXT | `open` \| `resolved` |
+| `created_at` | TIMESTAMP | — |
+| `resolved_at` | TIMESTAMP | Saat user menutup (NULL = masih terbuka) |
+
+**Index:** `idx_agent_blockers_status` pada `(status, created_at DESC)`.
+
+---
+
+### `autopilots` — Jadwal Tugas Agent Terjadwal
+
+Definisi tugas berulang yang dijalankan otomatis (terinspirasi *Autopilots* Multica). Dijalankan `AutopilotScheduler` (loop asyncio in-process). **Keamanan (§1, §17):** autopilot berjalan dengan `autopilot=True` → tool butuh-approval TIDAK dieksekusi, diantri sebagai proposal.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `name` | TEXT | Nama jadwal |
+| `role` | TEXT | Role yang menjalankan tugas |
+| `prompt` | TEXT | Instruksi tugas terjadwal |
+| `interval_sec` | INTEGER | Jeda antar-jalan (detik, UTC, tanpa cron); min 60 |
+| `enabled` | INTEGER | 1 = aktif, 0 = jeda |
+| `last_run_at` | TIMESTAMP | Terakhir dijalankan (NULL = belum) |
+| `next_run_at` | TIMESTAMP | Due berikutnya (dihitung scheduler, misfire-safe) |
+| `created_at` | TIMESTAMP | — |
+
+**Index:** `idx_autopilots_due` pada `(enabled, next_run_at)` — cari yang due cepat.
+
+---
+
+### `autopilot_runs` — Riwayat Eksekusi Autopilot
+
+Satu baris per run autopilot, untuk ditinjau di `/autopilots`.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `autopilot_id` | INTEGER | Autopilot yang dijalankan |
+| `session_id` | TEXT | Sesi run (`autopilot-{id}`) — tautkan ke routing_events dll |
+| `status` | TEXT | `running` \| `done` \| `error` |
+| `output` | TEXT | Ringkasan jawaban agent |
+| `proposals` | INTEGER | Jumlah aksi destruktif yang DIANTRI (bukan dieksekusi) |
+| `error` | TEXT | Pesan error bila gagal |
+| `created_at` | TIMESTAMP | — |
+
+**Index:** `idx_autopilot_runs` pada `(autopilot_id, id DESC)`.
+
+**Catatan `approval_log`:** autopilot mengantri aksi destruktif dengan `decision='proposal:pending'` (bukan `pending:{id}` seperti approval interaktif). Ditampilkan di `/autopilots` sebagai proposal menunggu tinjauan.
+
+---
+
 ## Query Penting
 
 ```sql

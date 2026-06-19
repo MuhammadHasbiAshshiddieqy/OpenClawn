@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenCLAWN · Conversations</title>
+    <title>OpenCLAWN · Activity</title>
     <link rel="icon" type="image/png" href="/static/logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -26,7 +26,7 @@
                     <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v7a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm4 8v2m4-2v2M0 4h16"/></svg>
                     Chat
                 </a>
-                <a href="/activity" class="nav-link">
+                <a href="/activity" class="nav-link active">
                     <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg>
                     Activity
                 </a>
@@ -42,7 +42,7 @@
                     <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3-6 3-6-3 6-3z"/><path d="M2 8l6 3 6-3M2 11.5l6 3 6-3"/></svg>
                     Skills
                 </a>
-                <a href="/conversations" class="nav-link active">
+                <a href="/conversations" class="nav-link">
                     <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 3h12v8H6l-3 3V3z"/></svg>
                     Conversations
                 </a>
@@ -62,34 +62,60 @@
     <main class="main">
         <div class="topbar">
             <div>
-                <h1>Conversations</h1>
-                <div class="sub">arsip percakapan multi-agent — pipeline · debate · orchestrator</div>
+                <h1>Activity</h1>
+                <div class="sub">linimasa aksi agent — routing · tool · handoff · conversation · crystallize</div>
             </div>
         </div>
 
         <div class="page">
-            {% if not conversations %}
-            <p class="muted">Belum ada percakapan tersimpan. Mulai mode Pipeline/Debate/Orchestrator di Chat.</p>
-            {% else %}
-            {% for c in conversations %}
-            <details class="convo-archive">
-                <summary>
-                    <span class="tag">{{ c.pattern }}</span>
-                    <span class="convo-parts">{{ c.participants }}</span>
-                    <span class="muted">· {{ c.turns }} giliran · {{ c.end_reason }}
-                        {% if c.cost_usd and c.cost_usd > 0 %}· ${{ '%.4f'|format(c.cost_usd) }}{% endif %}
-                        · {{ c.created_at }}</span>
-                </summary>
-                <div class="convo-archive-body">
-                    {% for role, content in c.transcript %}
-                    <div class="archive-msg {{ 'archive-user' if role == 'user' else 'role-' + role }}">
-                        <div class="archive-role">{{ role|upper }}</div>
-                        <div class="archive-text">{{ content }}</div>
+            <div class="activity-filter">
+                <a href="/activity" class="chip-filter {{ 'on' if not active_role }}">Semua peran</a>
+                {% for r in roles %}
+                <a href="/activity?role={{ r }}" class="chip-filter {{ 'on' if active_role == r }}">{{ r|upper }}</a>
+                {% endfor %}
+            </div>
+
+            {% if open_blockers %}
+            <div class="blocker-panel">
+                <div class="blocker-panel-head">⚠ Hambatan terbuka ({{ open_blockers|length }})</div>
+                {% for b in open_blockers %}
+                <div class="blocker-row sev-{{ b.severity }}">
+                    <span class="blocker-sev">{{ b.severity }}</span>
+                    <div class="blocker-text">
+                        <span class="blocker-role">{{ b.role|upper }}</span>
+                        <span class="blocker-summary">{{ b.summary }}</span>
+                        {% if b.detail %}<div class="blocker-detail">{{ b.detail }}</div>{% endif %}
                     </div>
-                    {% endfor %}
+                    <form method="post" action="/blockers/resolve">
+                        <input type="hidden" name="blocker_id" value="{{ b.id }}">
+                        <button type="submit" class="btn-resolve">Selesai</button>
+                    </form>
                 </div>
-            </details>
-            {% endfor %}
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if not events %}
+            <p class="muted">Belum ada aktivitas{% if active_role %} untuk peran {{ active_role|upper }}{% endif %}. Mulai percakapan di Chat agar linimasa terisi.</p>
+            {% else %}
+            <ol class="timeline">
+                {% for e in events %}
+                <li class="tl-item role-{{ e.role }}">
+                    <span class="tl-kind kind-{{ e.kind }}">{{ kinds.get(e.kind, e.kind) }}</span>
+                    <div class="tl-body">
+                        <div class="tl-head">
+                            <span class="tl-role">{{ e.role|upper }}</span>
+                            <span class="tl-title">{{ e.title }}</span>
+                            {% if e.outcome %}
+                            <span class="tl-outcome outcome-{{ e.outcome }}">{{ e.outcome }}</span>
+                            {% endif %}
+                        </div>
+                        {% if e.detail %}<div class="tl-detail">{{ e.detail }}</div>{% endif %}
+                    </div>
+                    <span class="tl-time muted">{{ e.created_at }}</span>
+                </li>
+                {% endfor %}
+            </ol>
             {% endif %}
         </div>
     </main>

@@ -16,6 +16,7 @@ from tools.document import DocWriteTool, PdfReadTool, PdfWriteTool
 from tools.data import DbQueryTool, JsonQueryTool, MemorySearchTool
 from tools.git import GitDiffTool, GitLogTool, GitStatusTool
 from tools.todo import TodoWriteTool
+from tools.blocker import ReportBlockerTool
 
 TOOL_REGISTRY: dict[str, Tool] = {
     # filesystem (workspace-bounded)
@@ -49,4 +50,5 @@ TOOL_REGISTRY: dict[str, Tool] = {
     # interaksi & manajemen
     "ask_user": AskUserTool(),
     "todo_write": TodoWriteTool(),
+    "report_blocker": ReportBlockerTool(),
 }

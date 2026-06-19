@@ -152,6 +152,56 @@ Test untuk `core/conversation.py` (multi-agent conversation). Seam = fake `agent
 
 ---
 
+### `tests/test_activity.py`
+
+Test untuk `core/activity.py` (Activity Timeline — agregasi lintas tabel, terinspirasi Multica).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_timeline_aggregates_all_sources` | Gabung route/tool/handoff/crystallize/conversation jadi satu linimasa |
+| `test_timeline_sorted_newest_first` | Urut global terbaru-dulu (lintas sumber) |
+| `test_timeline_filter_by_role` | `role=` memfokuskan satu peran; conversation hanya saat `role=None` |
+| `test_timeline_outcome_normalized` | Outcome diseragamkan (ok/valid/corrected/degraded dll) |
+| `test_timeline_empty_returns_list` | Tanpa data → `[]`, tak crash |
+| `test_timeline_unknown_role_filters_to_empty` | Role tak dikenal → kosong |
+| `test_timeline_respects_limit` | `limit` menjepit jumlah, tetap terbaru-dulu |
+
+---
+
+### `tests/test_blocker.py`
+
+Test untuk `tools/blocker.py` (`report_blocker`) + tampil di linimasa.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_report_blocker_persists` | Tulis `agent_blockers` (summary/severity/role/status open) |
+| `test_report_blocker_no_approval` | `requires_approval=False` (tabel internal) |
+| `test_report_blocker_requires_session` | Tanpa `_session_id` → error |
+| `test_report_blocker_requires_summary` | Summary kosong → error |
+| `test_report_blocker_rejects_bad_severity` | Severity tak valid → error, tak menulis |
+| `test_report_blocker_default_severity_medium` | Default severity `medium` |
+| `test_blocker_appears_in_timeline` | Muncul di `ActivityTimeline` sebagai kind `blocker` |
+
+---
+
+### `tests/test_autopilot.py`
+
+Test untuk `core/autopilot.py` (store, scheduler) + **gating keamanan** mode autopilot.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_create_and_list` | Buat autopilot → tersimpan dengan next_run_at |
+| `test_interval_floored_to_minimum` | Interval < 60s dinaikkan ke minimum |
+| `test_toggle_and_delete` | Enable/disable & hapus |
+| `test_due_returns_only_past_and_enabled` | `due()` hanya aktif & `next_run_at` lewat |
+| `test_mark_ran_reschedules_forward` | Reschedule dari sekarang (misfire-safe, tak menumpuk) |
+| `test_scheduler_runs_due_via_runner` | Scheduler jalankan yang due lewat `runner`, lalu reschedule |
+| `test_scheduler_records_run_and_survives_runner_error` | Runner error → `autopilot_runs` status `error`, scheduler tak mati |
+| `test_autopilot_queues_proposal_not_executes` | **§17:** tool butuh-approval di autopilot → DIANTRI proposal, `ApprovalGate.request` TIDAK dipanggil |
+| `test_interactive_mode_still_requests_approval` | Tanpa autopilot → approval tetap diminta (tak ada regresi) |
+
+---
+
 ### `tests/test_audit.py`
 
 Test untuk `core/audit.py`.
@@ -219,7 +269,7 @@ Test untuk `tools/`.
 
 | Test | Yang Diverifikasi |
 |---|---|
-| `test_registry_has_all_25_tools` | Semua 25 tool terdaftar di registry |
+| `test_registry_has_all_26_tools` | Semua 26 tool terdaftar di registry |
 | `test_file_read_returns_content` | `FileReadTool` baca file yang ada |
 | `test_file_read_not_found` | File tidak ada → error dict (tidak crash) |
 | `test_file_write_creates_file` | `FileWriteTool` tulis konten |
@@ -355,6 +405,13 @@ Smoke test untuk endpoints Web UI.
 | `test_converse_interject_and_stop_reach_live_control` | Interject & stop mencapai `ConversationControl` di registry sesi |
 | `test_converse_stream_emits_named_frames` | `/converse/stream` (orchestrator di-mock) → frame SSE `turn`/`token`/`conversation_end`/`done` |
 | `test_converse_stream_rejects_unknown_pattern` | Pattern tak dikenal → frame `error`, bukan 500 |
+| `test_activity_page_renders_empty` | `/activity` tanpa peristiwa → 200 + filter peran |
+| `test_activity_page_shows_seeded_events` | Peristiwa observability muncul di linimasa |
+| `test_activity_page_role_filter` | `?role=` fokus peran; role tak dikenal tak crash |
+| `test_activity_shows_open_blocker_and_resolve` | Blocker terbuka tampil di banner; `/blockers/resolve` menutup |
+| `test_autopilots_page_renders_empty` | `/autopilots` → 200 + form + catatan keamanan |
+| `test_autopilots_create_then_listed` | Buat autopilot → muncul; role tak dikenal ditolak |
+| `test_autopilots_toggle_and_delete` | Toggle menjeda, delete menghapus |
 
 ---
 

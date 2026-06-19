@@ -253,6 +253,32 @@ Context: `conversations` — list dict `{pattern, participants, initial_message,
 
 ---
 
+#### `GET /activity`
+
+**Linimasa aksi agent** (terinspirasi Activity Timeline Multica). Template: `web/templates/activity.html`.
+
+Agregasi read-only lintas tabel via `ActivityTimeline.recent(role)` (routing/tool/handoff/conversation/crystallize/blocker). Param `?role=` opsional memfokuskan satu peran (role tak dikenal → abaikan, tampil semua). Blocker terbuka (`agent_blockers.status='open'`) ditampilkan menonjol di banner atas, diurut severity. Read-only.
+
+#### `POST /blockers/resolve`
+
+Tandai blocker `resolved` (`agent_blockers.status`, set `resolved_at`). Form: `blocker_id`. Redirect `/activity`.
+
+---
+
+#### `GET /autopilots` & `POST /autopilots`
+
+**Kelola tugas agent terjadwal** (terinspirasi Autopilots Multica). Template: `web/templates/autopilots.html`.
+
+`GET` menampilkan jadwal (`AutopilotStore.list_all`), riwayat run (`recent_runs`), dan proposal menunggu (`approval_log.decision='proposal:pending'` — aksi destruktif yang DIANTRI autopilot, bukan dieksekusi). `POST` membuat autopilot: form `name`, `role` (harus dikenal), `prompt`, `every` + `unit` (menit/jam/hari → detik). Validasi gagal → redirect tanpa membuat.
+
+**Keamanan (§1, §17):** autopilot dijalankan `_run_autopilot` dengan `AgentConfig.autopilot=True` → tool butuh-approval tidak dieksekusi, diantri jadi proposal. Scheduler (`AutopilotScheduler`) start/stop di lifespan.
+
+#### `POST /autopilots/toggle` & `POST /autopilots/delete`
+
+Aktif/jeda (`set_enabled`) dan hapus (`delete`) autopilot. Form: `autopilot_id` (+ `enabled` untuk toggle). Redirect `/autopilots`.
+
+---
+
 #### `GET /router` & `POST /router`
 
 **Editor peta tier→model.** Template: `web/templates/router.html`.
