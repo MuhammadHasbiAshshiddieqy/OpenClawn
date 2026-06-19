@@ -24,18 +24,22 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+      # uv + lockfile: build reproducible. --frozen GAGAL bila uv.lock tak sinkron
+      # dengan pyproject.toml → memaksa kontributor commit lock yang konsisten.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (locked)
+        run: uv sync --frozen --extra dev
 
       - name: Ruff format check
-        run: ruff format --check .
+        run: uv run ruff format --check .
 
       - name: Ruff lint
-        run: ruff check .
+        run: uv run ruff check .
 
       - name: Pytest
-        run: pytest -q
+        run: uv run pytest -q

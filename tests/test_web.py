@@ -187,6 +187,87 @@ def test_conversations_page_shows_archived_run(client):
     assert "setuju" in html
 
 
+# ── /converse/* (multi-agent conversation endpoints) ──────────────────────────
+
+
+def test_converse_interject_unknown_session(client):
+    """Interject ke sesi yang tidak aktif → ok=False, tidak crash."""
+    resp = client.post("/converse/interject", data={"session_id": "ghost", "message": "halo"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
+def test_converse_stop_unknown_session(client):
+    """Stop ke sesi yang tidak aktif → ok=False, tidak crash."""
+    resp = client.post("/converse/stop", data={"session_id": "ghost"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
+def test_converse_interject_and_stop_reach_live_control(client):
+    """Interject & stop mencapai ConversationControl yang terdaftar di registry."""
+    import web.main as web_main
+    from core.conversation import ConversationControl
+
+    control = ConversationControl()
+    web_main._conversations["live-1"] = control
+    try:
+        r1 = client.post("/converse/interject", data={"session_id": "live-1", "message": "fokus"})
+        assert r1.json()["ok"] is True
+        assert control.pop_interjection() == "fokus"
+
+        r2 = client.post("/converse/stop", data={"session_id": "live-1"})
+        assert r2.json()["ok"] is True
+        # stop() memicu flag internal → is_stopped() akan True pada cek berikutnya.
+        assert control._stopped is True
+    finally:
+        web_main._conversations.pop("live-1", None)
+
+
+def test_converse_stream_emits_named_frames(client, monkeypatch):
+    """/converse/stream menstream frame SSE bernama (turn/token/conversation_end).
+
+    Orchestrator di-mock agar tidak memanggil LLM nyata — kita hanya memverifikasi
+    wiring endpoint → frame SSE, bukan logika percakapan (itu di test_conversation).
+    """
+    import web.main as web_main
+    from core.conversation import ConversationEvent
+
+    class FakeOrch:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self, initial_message):
+            yield ConversationEvent("turn", role="pm", text="PM", turn_index=0)
+            yield ConversationEvent("token", role="pm", text="halo dari pm")
+            yield ConversationEvent("conversation_end", detail="strategy_done", usage={})
+
+    monkeypatch.setattr(web_main, "ConversationOrchestrator", FakeOrch)
+
+    resp = client.post(
+        "/converse/stream",
+        data={"message": "bangun fitur", "pattern": "pipeline", "session_id": "s-stream"},
+    )
+    assert resp.status_code == 200
+    body = resp.text
+    assert "event: turn" in body
+    assert "event: token" in body
+    assert "halo dari pm" in body
+    assert "event: conversation_end" in body
+    assert "strategy_done" in body
+    assert "event: done" in body
+
+
+def test_converse_stream_rejects_unknown_pattern(client):
+    """Pattern tak dikenal → frame error, bukan crash 500."""
+    resp = client.post(
+        "/converse/stream",
+        data={"message": "x", "pattern": "nonsense", "session_id": "s-bad"},
+    )
+    assert resp.status_code == 200
+    assert "event: error" in resp.text
+
+
 def test_router_page_renders_tiers(client):
     """/router menampilkan 5 tier dengan dropdown model + tanda default."""
     html = client.get("/router").text

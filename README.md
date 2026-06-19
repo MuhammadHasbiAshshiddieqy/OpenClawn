@@ -45,6 +45,10 @@ to each other, with live stop and interject.
 git clone https://github.com/MuhammadHasbiAshshiddieqy/OpenClawn.git
 cd OpenClawn
 
+# Recommended: uv with the committed lockfile (reproducible, identical to CI)
+uv sync --frozen --extra dev
+
+# Or with pip
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 

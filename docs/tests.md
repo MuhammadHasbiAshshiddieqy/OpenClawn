@@ -251,6 +251,14 @@ Test untuk `tools/`.
 | `test_doc_write_xlsx_rows` | xlsx dari `{headers,rows}` → spreadsheet baris benar |
 | `test_doc_write_pptx_slides` | pptx dari `{title,slides}` → presentasi multi-slide |
 | `test_doc_write_rejects_path_outside_workspace` | Path di luar workspace ditolak (keamanan #1) |
+| `test_ssrf_guard_blocks_loopback` | `_ssrf_guard` tolak `localhost`/`127.0.0.1`/`::1` |
+| `test_ssrf_guard_blocks_cloud_metadata` | Tolak endpoint metadata cloud `169.254.169.254` (link-local) |
+| `test_ssrf_guard_blocks_private_rfc1918` | Tolak alamat privat RFC1918 (10.x/192.168.x) |
+| `test_ssrf_guard_allows_public_ip` | IP publik literal lolos guard |
+| `test_ssrf_guard_blocks_dns_rebinding` | Domain yang resolve ke IP internal tetap diblokir (bukan hanya literal IP) |
+| `test_web_fetch_rejects_internal_host` | `web_fetch` ke host internal ditolak SEBELUM request keluar (tanpa approval) |
+| `test_web_fetch_rejects_non_http_scheme` | Scheme selain http/https (mis. `file://`) ditolak |
+| `test_http_request_rejects_internal_host` | `http_request` diblokir SSRF walau butuh approval |
 
 ---
 
@@ -342,6 +350,11 @@ Smoke test untuk endpoints Web UI.
 | `test_conversations_page_shows_archived_run` | Percakapan tersimpan tampil dengan pattern/peserta/transkrip |
 | `test_router_page_renders_tiers` | `/router` menampilkan 5 tier + dropdown + tanda default |
 | `test_router_save_then_reflected` | Simpan peta → "Peta kustom aktif"; reset → "memakai peta default" |
+| `test_converse_interject_unknown_session` | `/converse/interject` sesi tak aktif → `ok=False`, tak crash |
+| `test_converse_stop_unknown_session` | `/converse/stop` sesi tak aktif → `ok=False`, tak crash |
+| `test_converse_interject_and_stop_reach_live_control` | Interject & stop mencapai `ConversationControl` di registry sesi |
+| `test_converse_stream_emits_named_frames` | `/converse/stream` (orchestrator di-mock) → frame SSE `turn`/`token`/`conversation_end`/`done` |
+| `test_converse_stream_rejects_unknown_pattern` | Pattern tak dikenal → frame `error`, bukan 500 |
 
 ---
 

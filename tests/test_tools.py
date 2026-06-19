@@ -4,7 +4,7 @@ import dataclasses
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from tools.file_ops import FileReadTool, FileWriteTool
-from tools.web import WebFetchTool
+from tools.web import HttpRequestTool, WebFetchTool, _ssrf_guard
 from tools.interaction import AskUserTool
 from tools.code import CodeRunTool
 from tools import TOOL_REGISTRY
@@ -173,7 +173,11 @@ async def test_web_fetch_success():
     mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch("tools.web.httpx.AsyncClient", return_value=mock_client):
+    # _ssrf_guard di-bypass (return None = aman) agar test tak melakukan DNS nyata.
+    with (
+        patch("tools.web.httpx.AsyncClient", return_value=mock_client),
+        patch("tools.web._ssrf_guard", return_value=None),
+    ):
         result = await tool.execute({"url": "http://example.com"}, vault=None)
 
     assert result["status"] == 200
@@ -200,10 +204,77 @@ async def test_web_fetch_http_error():
     mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_client.get = AsyncMock(side_effect=httpx.HTTPError("connection error"))
 
-    with patch("tools.web.httpx.AsyncClient", return_value=mock_client):
-        result = await tool.execute({"url": "http://bad-url"}, vault=None)
+    with (
+        patch("tools.web.httpx.AsyncClient", return_value=mock_client),
+        patch("tools.web._ssrf_guard", return_value=None),
+    ):
+        result = await tool.execute({"url": "https://bad-url.example"}, vault=None)
 
     assert "error" in result
+
+
+# ── SSRF guard (web_fetch + http_request) ─────────────────────────────────────
+
+
+def test_ssrf_guard_blocks_loopback():
+    """localhost / 127.0.0.1 ditolak (IP literal → tanpa DNS nyata)."""
+    assert _ssrf_guard("http://127.0.0.1:11434/api") is not None
+    assert _ssrf_guard("http://[::1]/x") is not None
+
+
+def test_ssrf_guard_blocks_cloud_metadata():
+    """Endpoint metadata cloud (link-local 169.254.169.254) ditolak."""
+    blocked = _ssrf_guard("http://169.254.169.254/latest/meta-data/")
+    assert blocked is not None and "SSRF" in blocked
+
+
+def test_ssrf_guard_blocks_private_rfc1918():
+    """Alamat privat RFC1918 (mis. 10.x, 192.168.x) ditolak."""
+    assert _ssrf_guard("http://10.0.0.5/") is not None
+    assert _ssrf_guard("http://192.168.1.1/admin") is not None
+
+
+def test_ssrf_guard_allows_public_ip():
+    """IP publik (literal) lolos guard."""
+    assert _ssrf_guard("http://8.8.8.8/") is None
+
+
+def test_ssrf_guard_blocks_dns_rebinding(monkeypatch):
+    """Nama domain yang resolve ke IP internal tetap diblokir (bukan hanya literal IP)."""
+
+    def fake_getaddrinfo(host, port, **kwargs):
+        # Simulasikan domain jahat yang menunjuk ke loopback.
+        return [(2, 1, 6, "", ("127.0.0.1", port or 80))]
+
+    monkeypatch.setattr("tools.web.socket.getaddrinfo", fake_getaddrinfo)
+    assert _ssrf_guard("http://evil.example.com/") is not None
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_rejects_internal_host():
+    """web_fetch ke host internal ditolak SEBELUM request keluar (tanpa approval)."""
+    tool = WebFetchTool()
+    result = await tool.execute({"url": "http://localhost:11434/api/tags"}, vault=None)
+    assert "error" in result and "SSRF" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_rejects_non_http_scheme():
+    """Scheme selain http/https (mis. file://) ditolak."""
+    tool = WebFetchTool()
+    result = await tool.execute({"url": "file:///etc/passwd"}, vault=None)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_http_request_rejects_internal_host():
+    """http_request juga diblokir SSRF walau butuh approval (approval bukan satu-satunya penghalang)."""
+    tool = HttpRequestTool()
+    result = await tool.execute(
+        {"url": "http://169.254.169.254/latest/meta-data/", "method": "GET"},
+        vault=None,
+    )
+    assert "error" in result and "SSRF" in result["error"]
 
 
 # ── AskUserTool ───────────────────────────────────────────────────────────────

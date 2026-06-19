@@ -239,14 +239,16 @@ Cari teks/regex di dalam isi file pada workspace.
 
 ## `tools/web.py`
 
+> **Anti-SSRF (`_ssrf_guard`, §1 keamanan dulu).** `web_fetch` & `http_request` memanggil `_ssrf_guard(url)` SEBELUM request keluar. Guard me-resolve DNS host lalu menolak bila salah satu alamat **bukan publik** (`ip.is_global == False`): loopback (`localhost`/`127.0.0.1`/`::1`), privat RFC1918 (`10.x`/`192.168.x`/`172.16.x`), dan link-local — termasuk endpoint metadata cloud `169.254.169.254`. Resolusi DNS di guard menangkap juga domain yang mengarah ke IP internal (DNS rebinding), bukan hanya literal IP. Karena `web_fetch` tidak butuh approval, guard ini adalah satu-satunya penghalang ke service internal (mis. Ollama `localhost:11434`).
+
 ### `WebFetchTool`
 
-Fetch konten dari URL via HTTP GET.
+Fetch konten dari URL publik via HTTP GET.
 
 - `requires_approval = False`
-- Input: `{"url": "..."}`
-- Output sukses: `{"status": 200, "content": "..."}` — konten teks (maks 5.000 karakter)
-- Output error: `{"error": "..."}` jika HTTP error
+- Input: `{"url": "..."}` — scheme wajib `http://`/`https://`
+- Output sukses: `{"status": 200, "content": "...", "truncated": bool}` — konten dipotong ke `CONFIG.tool_max_output` (seragam dengan tool lain)
+- Output error: `{"error": "..."}` jika HTTP error, scheme tak valid, atau **diblokir SSRF guard**
 
 Timeout 30 detik, ikut redirect otomatis.
 
@@ -267,7 +269,7 @@ HTTP request generik (GET/POST/PUT/PATCH/DELETE) ke API eksternal. **Destruktif*
 - Input: `{"url": "https://...", "method": "GET", "headers": {...}, "body": ...}`
 - Kredensial: nilai header berformat `"vault:NAMA_KEY"` di-resolve dari Vault (jangan tulis API key langsung)
 - Output sukses: `{"status": N, "body": "...", "truncated": bool}`
-- Output error: `{"error": "..."}` jika URL/method tidak valid atau kredensial vault hilang
+- Output error: `{"error": "..."}` jika URL/method tidak valid, kredensial vault hilang, atau **diblokir SSRF guard** (host internal ditolak walau sudah di-approve — approval bukan satu-satunya penghalang)
 
 ---
 
