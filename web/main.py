@@ -2,9 +2,15 @@ import json
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -12,6 +18,7 @@ from core.activity import ActivityTimeline
 from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
 from core.autopilot import AutopilotScheduler, AutopilotStore
+from core.skill_pack import SkillPack
 from core.calibration import CalibrationStore, RoutingCalibrator
 from core.router import Complexity, SmartRouter
 from core.router_config import RouterConfigStore
@@ -411,8 +418,56 @@ async def skills_page(request: Request):
             "decay_base": base,
             "crystallization": crystallization,
             "confidence_threshold": CONFIG.confidence_threshold,
+            "roles": available_roles(),
+            "import_msg": request.query_params.get("import_msg"),
         },
     )
+
+
+@app.get("/skills/export")
+async def skills_export(role: str | None = None):
+    """Ekspor skill aktif → berkas Markdown (skill pack) untuk dibagikan.
+
+    role tak dikenal → ekspor semua. Berkas diunduh (Content-Disposition attachment).
+    """
+    active_role = role if role in available_roles() else None
+    pack = await SkillPack(db, CONFIG).export_skills(role=active_role)
+    suffix = active_role or "all"
+    return PlainTextResponse(
+        pack or "# (tidak ada skill aktif untuk diekspor)\n",
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="openclawn-skills-{suffix}.md"'},
+    )
+
+
+@app.post("/skills/import")
+async def skills_import(request: Request):
+    """Impor skill pack (teks tempel atau URL) → DB sebagai DRAFT (berlapis-keamanan §1).
+
+    Lapis: SSRF guard (URL) → Shield scan → status draft → hash. Skill impor TIDAK
+    auto-masuk context; user meninjau di /skills lalu mengaktifkan manual.
+    """
+    form = await request.form()
+    pack_text = (form.get("pack_text") or "").strip()
+    url = (form.get("url") or "").strip()
+    target_role = (form.get("target_role") or "").strip() or None
+    if target_role and target_role not in available_roles():
+        target_role = None
+
+    pack = SkillPack(db, CONFIG)
+    if url:
+        result = await pack.import_url(url, target_role)
+    elif pack_text:
+        result = await pack.import_pack(pack_text, target_role)
+    else:
+        result = {"error": "tempel teks pack atau isi URL"}
+
+    if "error" in result:
+        msg = f"Gagal: {result['error']}"
+    else:
+        msg = f"Impor selesai: {result['imported']} skill (draft), {result['skipped']} dilewati."
+    log.info("skill_import", **{k: v for k, v in result.items() if k != "reasons"})
+    return RedirectResponse(url=f"/skills?import_msg={quote(msg)}", status_code=303)
 
 
 @app.get("/conversations", response_class=HTMLResponse)

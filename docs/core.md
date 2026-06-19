@@ -544,3 +544,23 @@ CRUD `autopilots` + riwayat `autopilot_runs`. Metode utama: `create(name, role, 
 
 ### Kelas: `AutopilotScheduler`
 Loop asyncio: cek due tiap `tick_sec`, jalankan via `runner` callable (disuntik web layer → AgentLoop autopilot mode; modul ini tak impor web/AgentLoop). `start()`/`stop()` *(async)* dipasang di lifespan FastAPI. **`run_due_once() → int`** *(async)* dipisah agar bisa di-test tanpa menunggu tick. `mark_ran` dipanggil SEBELUM eksekusi agar tick tumpang-tindih tak menjalankan ganda. Error per-run dicatat ke `autopilot_runs` (fail-soft), error loop di-log (`add_done_callback`, audit #3).
+
+---
+
+## `core/skill_pack.py` — Berbagi Skill (export/import)
+
+Ekspor & impor skill antar-instalasi (terinspirasi sistem skill + `skills-lock.json` Multica). Skill OpenCLAWN bisa lahir dari crystallization; modul ini menambah jalur **berbagi**. DB-bound + stdlib + httpx (URL).
+
+### Kelas: `SkillPack`
+
+**`export_skills(role=None) → str`** *(async)*  
+Render skill `active` (opsional per role) → satu pack Markdown berfrontmatter (`name/role/trigger_pattern/generator_model/confidence/hash` + konten). Hanya `active` (draft/archived tak dibagi).
+
+**`import_pack(text, target_role=None) → dict`** *(async)*  
+Impor pack → DB. **Berlapis keamanan (§1):** (2) `Shield.scan_input` tolak pola injeksi → (3) status **`draft`** (tak auto-masuk context; `get_active_skills` hanya ambil `active`) → (4) hash SHA-256 diverifikasi bila disertakan. `ON CONFLICT DO NOTHING` (tak menimpa skill lokal). Tiap skill divalidasi sendiri — gagal satu tak jatuhkan lainnya. Return `{imported, skipped, reasons}`. Batas `MAX_IMPORT_BYTES`.
+
+**`import_url(url, target_role=None) → dict`** *(async)*  
+Impor dari URL publik. **Lapis 1:** `_ssrf_guard` (tolak host internal) + scheme `http(s)` saja, lalu delegasi ke `import_pack`.
+
+**`_record_lock(name, digest)`** *(async, private)*  
+Catat hash skill impor ke `skills-lock.json` di `workspace_root` (integritas, fail-soft). Lockfile di-gitignore (state lokal); commit sengaja bila ingin men-pin pack bersama.

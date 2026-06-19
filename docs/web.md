@@ -253,6 +253,16 @@ Context: `conversations` — list dict `{pattern, participants, initial_message,
 
 ---
 
+#### `GET /skills/export` & `POST /skills/import`
+
+**Berbagi skill antar-instalasi** (skill packs, terinspirasi Multica). Lewat `core/skill_pack.py`.
+
+`GET /skills/export?role=` → unduh skill `active` sebagai berkas Markdown (`Content-Disposition: attachment`); role tak dikenal → ekspor semua.
+
+`POST /skills/import` → impor pack dari `pack_text` (tempel) atau `url`, opsional `target_role`. **Berlapis keamanan (§1):** SSRF guard (URL) → Shield scan → status **`draft`** (tak auto-masuk context, user aktifkan manual) → hash. Redirect `/skills?import_msg=...` dengan ringkasan. UI ada di `skills.html` (panel `<details>` ekspor/impor).
+
+---
+
 #### `GET /activity`
 
 **Linimasa aksi agent** (terinspirasi Activity Timeline Multica). Template: `web/templates/activity.html`.

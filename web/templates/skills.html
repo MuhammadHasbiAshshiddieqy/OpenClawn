@@ -83,6 +83,38 @@
                 </span>
             </div>
 
+            <details class="skill-pack">
+                <summary>📦 Skill packs — ekspor & impor (berbagi antar-instalasi)</summary>
+                <div class="skill-pack-body">
+                    {% if import_msg %}<div class="pack-msg">{{ import_msg }}</div>{% endif %}
+                    <div class="pack-cols">
+                        <div class="pack-col">
+                            <h3>Ekspor</h3>
+                            <p class="muted">Unduh skill aktif sebagai berkas Markdown untuk dibagikan.</p>
+                            <div class="pack-export-links">
+                                <a href="/skills/export" class="btn-ghost">Semua</a>
+                                {% for r in roles %}<a href="/skills/export?role={{ r }}" class="btn-ghost">{{ r|upper }}</a>{% endfor %}
+                            </div>
+                        </div>
+                        <div class="pack-col">
+                            <h3>Impor</h3>
+                            <p class="muted">Masuk sebagai <b>draft</b> (discan keamanan, tidak otomatis dipakai — Anda aktifkan manual).</p>
+                            <form method="post" action="/skills/import" class="pack-import-form">
+                                <textarea name="pack_text" placeholder="Tempel isi skill pack (Markdown)…"></textarea>
+                                <div class="pack-import-row">
+                                    <input type="text" name="url" placeholder="atau URL pack (https://…)">
+                                    <select name="target_role">
+                                        <option value="">role asli</option>
+                                        {% for r in roles %}<option value="{{ r }}">→ {{ r|upper }}</option>{% endfor %}
+                                    </select>
+                                    <button type="submit" class="btn-primary">Impor</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </details>
+
             {% if not skills %}
             <p class="muted">Belum ada skill terkristalisasi. Skill lahir saat agent menilai solusinya layak disimpan (Inovasi #3).</p>
             {% else %}

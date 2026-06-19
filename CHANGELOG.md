@@ -17,6 +17,11 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
   tanpa dependency baru). **Aman by design (§1, §17):** berjalan read-only; aksi
   butuh-approval TIDAK dieksekusi otomatis — diantri sebagai *proposal* untuk ditinjau
   user (`AgentConfig.autopilot`, `ApprovalGate.queue_proposal`). Misfire-safe.
+- **Skill packs** (`/skills/export`, `/skills/import`) — berbagi skill antar-instalasi
+  sebagai berkas Markdown (terinspirasi `skills-lock.json` Multica). **Impor berlapis
+  keamanan (§1):** SSRF guard (URL) → Shield scan (anti prompt-injection) → status
+  `draft` (tak auto-masuk context, user aktifkan manual) → hash SHA-256 (integritas,
+  dicatat di `skills-lock.json`). `core/skill_pack.py`.
 
 ### Security
 - SSRF guard pada `web_fetch`/`http_request` (rilis sebelumnya, dipertahankan).

@@ -202,6 +202,30 @@ Test untuk `core/autopilot.py` (store, scheduler) + **gating keamanan** mode aut
 
 ---
 
+### `tests/test_skill_pack.py`
+
+Test untuk `core/skill_pack.py` (berbagi skill) + **4 lapis keamanan impor**.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_export_renders_active_skills` | Ekspor skill active → Markdown berfrontmatter + hash |
+| `test_export_excludes_non_active` | Draft/archived tak diekspor |
+| `test_export_filter_by_role` | Ekspor per role |
+| `test_export_empty_when_no_skills` | Tanpa skill → string kosong |
+| `test_export_then_import_roundtrip` | Ekspor → impor ke DB lain → konten utuh |
+| `test_import_lands_as_draft_not_active` | **Lapis 3:** impor → `draft` (tak auto-context), visibility `inherited` |
+| `test_import_blocks_prompt_injection` | **Lapis 2:** konten berpola injeksi ditolak Shield, tak tersimpan |
+| `test_import_rejects_tampered_hash` | **Lapis 4:** hash tak cocok → ditolak |
+| `test_import_accepts_correct_hash` | Hash cocok → diterima |
+| `test_import_url_blocks_internal_host` | **Lapis 1:** impor URL ke host internal ditolak SSRF |
+| `test_import_url_rejects_non_http` | Scheme non-http ditolak |
+| `test_import_url_fetches_and_imports` | URL publik (mock) → fetch → impor draft |
+| `test_import_skips_block_without_name` | Blok tanpa `name` di-skip, lanjut yang valid |
+| `test_import_oversized_pack_rejected` | Pack > batas → ditolak |
+| `test_parse_pack_multiple_skills` | Parser pisah banyak skill via delimiter |
+
+---
+
 ### `tests/test_audit.py`
 
 Test untuk `core/audit.py`.
@@ -412,6 +436,9 @@ Smoke test untuk endpoints Web UI.
 | `test_autopilots_page_renders_empty` | `/autopilots` → 200 + form + catatan keamanan |
 | `test_autopilots_create_then_listed` | Buat autopilot → muncul; role tak dikenal ditolak |
 | `test_autopilots_toggle_and_delete` | Toggle menjeda, delete menghapus |
+| `test_skills_export_returns_markdown` | `/skills/export` → berkas Markdown (attachment) |
+| `test_skills_import_lands_as_draft` | `/skills/import` → skill draft, muncul di `/skills` |
+| `test_skills_import_blocks_injection` | Pack berpola injeksi ditolak, tak muncul |
 
 ---
 

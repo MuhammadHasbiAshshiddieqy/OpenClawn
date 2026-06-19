@@ -17,6 +17,10 @@ env/
 # Database (runtime data) — anchored ke root agar tidak menelan roles/data/
 /data/
 
+# Skill pack lockfile — catatan hash skill yang DIIMPOR di instalasi ini (state lokal).
+# Commit secara sengaja hanya bila ingin men-pin skill pack bersama (lihat docs).
+/skills-lock.json
+
 # Environment secrets
 .env
 
