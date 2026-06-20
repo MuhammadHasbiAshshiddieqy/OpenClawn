@@ -10,8 +10,10 @@ skill aktif → Markdown, dan impor skill orang lain → DB.
 Keamanan (CLAUDE.md §1) — impor = teks eksternal masuk ke ranah agent, jadi BERLAPIS:
   1. URL  → `_ssrf_guard` (tolak host internal) + scheme http(s) saja.
   2. Isi  → `Shield.scan_input` (tolak pola prompt-injection).
-  3. Status → DRAFT (skill impor TIDAK auto-masuk context; user aktifkan manual).
-  4. Integritas → SHA-256 tiap skill dicatat di `skills-lock.json`.
+  3. Scanner → `scan_skill` (AST + pola): risiko tinggi (exec/eval/subprocess/
+     eksfiltrasi) DITOLAK; risiko sedang masuk draft dengan label. SELALU aktif.
+  4. Status → DRAFT (skill impor TIDAK auto-masuk context; user aktifkan manual).
+  5. Integritas → SHA-256 tiap skill dicatat di `skills-lock.json`.
 
 Extractable: hanya bergantung `DatabaseManager` + stdlib + (opsional) httpx untuk URL.
 """
@@ -27,6 +29,7 @@ from infra.config import CONFIG, AppConfig
 from infra.database import DatabaseManager
 from infra.logging import log
 from security.shield import Shield
+from security.skill_scanner import scan_skill
 from tools.web import _ssrf_guard
 
 # Penanda batas antar-skill dalam satu pack Markdown.
@@ -144,6 +147,7 @@ class SkillPack:
 
         parsed = _parse_pack(text)
         imported = 0
+        flagged: list[dict] = []  # diimpor TAPI scanner menandai risiko sedang
         skipped: list[dict] = []
         for sk in parsed:
             name = sk["name"]
@@ -158,7 +162,26 @@ class SkillPack:
                 skipped.append({"name": name, "reason": f"ditolak shield: {reason}"})
                 log.warning("skill_import_blocked", skill=name, reason=reason)
                 continue
-            # Lapis 4: verifikasi hash bila pack menyertakannya (integritas).
+            # Lapis 3: scanner skill (AST + pola) — risiko tinggi DITOLAK total (§1,
+            # keputusan owner). Risiko sedang tetap impor tapi diberi label di temuan.
+            scan = scan_skill(name, content)
+            if scan.blocked:
+                skipped.append(
+                    {
+                        "name": name,
+                        "reason": f"ditolak scanner (skor {scan.score}): {scan.findings}",
+                    }
+                )
+                log.warning(
+                    "skill_import_unsafe", skill=name, score=scan.score, findings=scan.findings
+                )
+                continue
+            if scan.verdict == "flag":
+                flagged.append({"name": name, "score": scan.score, "findings": scan.findings})
+                log.info(
+                    "skill_import_flagged", skill=name, score=scan.score, findings=scan.findings
+                )
+            # Lapis 5: verifikasi hash bila pack menyertakannya (integritas).
             expected = sk.get("hash")
             actual = _skill_hash(name, content)
             if expected and expected != actual:
@@ -187,7 +210,12 @@ class SkillPack:
             except Exception as e:  # noqa: BLE001 — satu skill gagal jangan jatuhkan impor
                 skipped.append({"name": name, "reason": str(e)})
                 log.error("skill_import_failed", skill=name, error=str(e))
-        return {"imported": imported, "skipped": len(skipped), "reasons": skipped}
+        return {
+            "imported": imported,
+            "skipped": len(skipped),
+            "reasons": skipped,
+            "flagged": flagged,
+        }
 
     async def import_url(self, url: str, target_role: str | None = None) -> dict:
         """Impor pack dari URL publik. Lapis 1: SSRF guard + scheme http(s)."""

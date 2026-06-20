@@ -110,6 +110,22 @@ class AppConfig:
     # (network, DB lock) tidak boleh membekukan turn. code_run/shell_run punya timeout
     # sandbox sendiri 30s, jadi batas ini sedikit di atasnya agar tidak memotong sandbox.
     tool_timeout_sec: int = 40
+    # === Headroom compaction (opt-in via /settings, terinspirasi chopratejas/headroom) ===
+    # Saat budget token habis, compactor default MEMOTONG turn lama (truncation — yang
+    # hilang benar-benar hilang, tapi jujur). Compaction MERINGKAS turn lama jadi satu
+    # blok alih-alih membuang — hemat token tanpa kehilangan konteks total (§1.4).
+    # OPT-IN & default OFF: peringkasan via LLM bisa membuang nuansa & menambah latensi/
+    # biaya; truncation tetap default aman. Mode disimpan di /settings: off|local|cloud.
+    # `local` = tier lokal ringan (gratis/privat); `cloud` = fallback chain (kualitas
+    # untuk history kompleks, bisa naik ke cloud). Default mode di sini hanya dipakai bila
+    # /settings kosong.
+    compaction_default_mode: str = "off"  # off | local | cloud
+    # Model lokal untuk meringkas saat mode=local (ekstraktif, model kecil cukup).
+    compaction_local_model: tuple = field(default_factory=lambda: ("ollama", "gemma4:e2b"))
+    # Sisakan minimal N turn terbaru UTUH (jangan ringkas yang baru — paling relevan).
+    compaction_keep_recent: int = 4
+    # Hanya ringkas bila ada cukup turn lama untuk dipadatkan (hindari LLM call sia-sia).
+    compaction_min_old_turns: int = 3
     # Multi-agent conversation: batasi total giliran agar tidak loop tak berujung
     # & token blowout (pola sama max_tool_hops). Ronde default untuk debate.
     max_conversation_turns: int = 12

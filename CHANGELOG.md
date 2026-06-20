@@ -6,6 +6,33 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added — skill scanner (terinspirasi nvidia/skillspector)
+Skill packs sudah membuka jalur "terima skill dari URL/file eksternal", tapi scanner-nya
+hanya 4 regex `Shield` kosmetik — tak sepadan dengan ancaman skill yang membawa kode.
+- **`security/skill_scanner.py`** — pemindai dua lapis MURNI stdlib (`ast` + `re`):
+  AST mendeteksi `exec`/`eval`/`subprocess`/`os.system`/`__import__`/`open(write)` pada
+  blok kode; pola leksikal menangkap eksfiltrasi (`curl|sh`), path kredensial (`~/.ssh`,
+  `id_rsa`), URL ber-kredensial, endpoint metadata cloud. Skor 0–100 → verdict
+  `clean`/`flag`/`reject`.
+- **Wiring impor (§1 keamanan-dulu):** risiko tinggi → DITOLAK total (tak masuk DB,
+  keputusan owner); risiko sedang → tetap draft tapi dicatat `flagged`; bersih → draft.
+  **SELALU aktif** (keamanan, bukan optimasi — tak bisa dimatikan dari UI). Berlaku impor
+  file & URL. `Shield.DANGER_PATTERNS` juga diperluas (eksfiltrasi instruksi/jailbreak).
+- Tak pernah crash (input eksternal) & tak false-positive pada prosa biasa. +12 test.
+
+### Added — context compaction "headroom" (opt-in, terinspirasi chopratejas/headroom)
+Saat context window penuh, compactor default MEMOTONG turn terlama (truncation — jujur
+tapi yang hilang benar-benar hilang). Compaction MERINGKAS turn lama jadi satu blok
+alih-alih membuang — hemat token tanpa kehilangan konteks total (§1.4).
+- **OPT-IN, default OFF (§8):** diatur di `/settings` (`off`|`local`|`cloud`). `off` =
+  truncation aman; `local` = ringkas via model lokal kecil (gratis/privat); `cloud` =
+  via model cloud (kualitas untuk history kompleks). Peringkasan via LLM bisa membuang
+  nuansa & menambah latensi — karenanya tak dipaksakan.
+- **`ContextCompactor.compact()`** (async, pre-pass sebelum `build()`): ringkas turn lama
+  jadi `[compacted] …`, sisakan N turn terbaru UTUH. **Fail-safe (§1.3):** muat budget /
+  summarizer error / ringkasan kosong / sudah ringkasan → history asli (truncation lama).
+  Summarizer di-inject (seam bersih) → testable tanpa LLM. +9 test.
+
 ### Added — single-user production polish
 Setelah review pihak ketiga (yang sebagian keliru menilai OpenCLAWN sebagai produk
 multi-user), dua gap yang BENAR-BENAR valid untuk self-hosted single-user ditutup:

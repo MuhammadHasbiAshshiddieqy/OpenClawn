@@ -12,7 +12,8 @@ Referensi teknis lengkap untuk semua modul dan fungsi dalam OpenCLAWN. Dibaca be
 | Agent loop, LLM client (Ollama/Claude/**Gemini**), router (**multibahasa**), audit, crystallizer | [core.md](core.md) |
 | **Multi-agent conversation** (pipeline/debate/orchestrator) | [core.md](core.md) · [web.md](web.md) |
 | **Autopilots** (tugas terjadwal, proposal-gated) · **Activity timeline** | [core.md](core.md) · [web.md](web.md) |
-| **Skill packs** (export/import antar-instalasi) | [core.md](core.md) · [web.md](web.md) |
+| **Skill packs** (export/import antar-instalasi) + **skill scanner** (AST, anti kode berbahaya) | [core.md](core.md) · [security.md](security.md) · [web.md](web.md) |
+| **Context compaction** (headroom, opt-in: ringkas turn lama, bukan buang) | [core.md](core.md) · [infra.md](infra.md) |
 | **MCP** — tool dari server MCP eksternal (stdio/HTTP, approval-gated) | [core.md](core.md) · [tools.md](tools.md) · [web.md](web.md) |
 | Sistem memori L1–L4, skill decay, FTS5 search | [memory.md](memory.md) |
 | **Compounding**: curator (merge), draft promotion, refine, user model | [memory.md](memory.md) · [core.md](core.md) |
@@ -43,6 +44,7 @@ web/main.py          → web.md
 │   ├── SkillFeedback / SkillCuratorManager / UserModel → memory.md (I1/I2/I3/I5)
 │   ├── ApprovalGate → security.md (HITL + queue_proposal)
 │   ├── Shield / Vault → security.md
+│   ├── skill_scanner → security.md (AST + pola, lapis impor skill)
 │   └── tool_audit · activity · autopilot · skill_pack → core.md
 │
 ├── ConversationOrchestrator → core.md (conversation: pipeline/debate/orchestrator)

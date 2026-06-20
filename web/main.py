@@ -790,12 +790,14 @@ async def settings_page(request: Request, saved: bool = False):
     """Halaman override model. Override = pilihan sadar; kosong = router otomatis."""
     store = SettingsStore(db)
     current = await store.get_model_override()  # (provider, model) | None
+    compaction = await store.get_compaction_mode()  # off | local | cloud
     return templates.TemplateResponse(
         request,
         "settings.html",
         {
             "known_models": KNOWN_MODELS,
             "current": current,  # None artinya mode otomatis (router)
+            "compaction": compaction,
             "saved": saved,
         },
     )
@@ -803,7 +805,7 @@ async def settings_page(request: Request, saved: bool = False):
 
 @app.post("/settings")
 async def settings_save(request: Request):
-    """Simpan override. Nilai 'auto' (atau kosong) → hapus override, kembali ke router."""
+    """Simpan override + mode compaction. 'auto'/kosong → router otomatis."""
     form = await request.form()
     choice = (form.get("model_choice") or "").strip()
     store = SettingsStore(db)
@@ -815,5 +817,8 @@ async def settings_save(request: Request):
         provider, _, model = choice.partition("|")
         if provider and model:
             await store.set_model_override(provider, model)
+
+    # Mode compaction headroom (opt-in): off (default aman) | local | cloud.
+    await store.set_compaction_mode((form.get("compaction_mode") or "off").strip())
 
     return RedirectResponse(url="/settings?saved=true", status_code=303)

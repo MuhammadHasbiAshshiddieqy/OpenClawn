@@ -28,6 +28,10 @@ KNOWN_MODELS: list[tuple[str, str, str]] = [
 
 _KEY_PROVIDER = "model_override_provider"
 _KEY_MODEL = "model_override_model"
+_KEY_COMPACTION = "compaction_mode"
+
+# Mode compaction yang valid (lihat core/compactor.py). off = truncation lama (aman).
+COMPACTION_MODES = ("off", "local", "cloud")
 
 
 class SettingsStore:
@@ -63,3 +67,19 @@ class SettingsStore:
         """Set override. Kirim None/'' di keduanya untuk kembali ke router otomatis."""
         await self.set(_KEY_PROVIDER, provider)
         await self.set(_KEY_MODEL, model)
+
+    async def get_compaction_mode(self, default: str = "off") -> str:
+        """Mode compaction headroom: off (truncation, aman) | local | cloud.
+
+        Nilai tak dikenal → fail-safe ke `default` (tak diam-diam menyalakan LLM call).
+        """
+        value = await self.get(_KEY_COMPACTION)
+        if value in COMPACTION_MODES:
+            return value
+        return default
+
+    async def set_compaction_mode(self, mode: str | None) -> None:
+        """Set mode compaction. None/'' atau nilai tak valid → kembali ke 'off'."""
+        if mode not in COMPACTION_MODES:
+            mode = None  # set() menghapus baris → get_compaction_mode pakai default 'off'
+        await self.set(_KEY_COMPACTION, mode)

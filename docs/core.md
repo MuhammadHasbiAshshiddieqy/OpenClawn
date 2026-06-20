@@ -107,7 +107,7 @@ Pipeline utama per turn. Menghasilkan `AgentEvent` (`token` + `status`) ke Web U
 2. **Correction check** — deteksi apakah turn sebelumnya dikoreksi user (audit feedback)
 3. **Load active skills** — ambil skill dari decay manager (Inovasi 2)
 4. **Load memory context** — L1/L2/L3/L4 (Inovasi 2 lanjutan)
-5. **Build messages** — compactor merakit context dengan budget token
+5. **Build messages** — compaction pre-pass opsional (`_maybe_compact`, off by default), lalu compactor merakit context dengan budget token
 6. **Route + log decision** — soul-aware routing, catat ke audit DB (Inovasi 1). Jika ada **model override** dari `/settings` (`SettingsStore.get_model_override()`), provider/model dipaksa ke pilihan itu — keputusan router asli tetap tercatat di `reason` untuk transparansi audit
 7. **Tool loop** — iterasi tool call (tidak rekursif)
 8. **Finalize** — update audit record dengan latensi, cost, token
@@ -146,6 +146,9 @@ Serialisasi list `Turn` menjadi teks untuk arsip L4.
 
 **`_load_soul_once() → dict`** *(private)*  
 Baca `roles/{role}/soul.toml` dan cache hasilnya. Dipanggil sekali di `__init__`.
+
+**`_maybe_compact(memory_ctx, user_message) → list[Turn]`** *(async, private)*  
+Pre-pass compaction headroom (opt-in `/settings`, default `off`). Baca mode dari `SettingsStore.get_compaction_mode()`; `off` → kembalikan `self.history` apa adanya (truncation lama). `local`/`cloud` → bungkus LLM (tier lokal `compaction_local_model`, atau cloud via ujung `fallback_chain`) sebagai summarizer lalu panggil `ContextCompactor.compact()`. Semua jalur fail-safe ke history asli (§1.3) — tak pernah menjatuhkan turn.
 
 ---
 
@@ -432,11 +435,18 @@ Buat nama skill dari 5 kata pertama task (`"task-langkah-pertama"`).
 
 Merakit `messages` list dengan batas token. Memastikan context tidak melebihi `max_context_tokens`.
 
+Dua strategi saat budget habis:
+- **default** — `build()` MEMOTONG turn lama (truncation). Bodoh tapi jujur: yang hilang benar-benar hilang, tak ada yang dikarang.
+- **opt-in** — `compact()` MERINGKAS turn lama jadi satu blok (terinspirasi `chopratejas/headroom`) sebelum `build()`. Hemat token tanpa kehilangan konteks total (§1.4). Diaktifkan via `/settings` (mode `off`|`local`|`cloud`); default `off`.
+
 ### Fungsi: `_estimate_tokens(text) → int`
 
 Heuristik `len(text) // 4` (±4 karakter per token). Tidak butuh dependency tiktoken.
 
 ### Kelas: `ContextCompactor`
+
+**`compact(history, summarizer, *, keep_recent=4, min_old_turns=3, reserve_tokens=0) → list`** *(async)*  
+Ringkas turn lama jadi satu turn ringkasan (`[compacted] …`) bila history melebihi budget, menyisakan `keep_recent` turn terbaru UTUH. `summarizer` adalah callable async yang di-inject `AgentLoop` (membungkus LLM tier lokal/cloud) — seam bersih agar compactor tetap extractable & bisa di-test tanpa LLM. **Fail-safe (§1.3):** history muat / turn lama < `min_old_turns` / summarizer error / ringkasan kosong / sudah ada blok ringkasan → kembalikan history asli (lalu `build()` truncation seperti biasa). Tak pernah mengubah input maupun crash turn.
 
 **`build(soul, memory, history, user_message) → list[dict]`**  
 Rakit messages dengan urutan:

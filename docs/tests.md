@@ -218,7 +218,7 @@ Test untuk `core/autopilot.py` (store, scheduler) + **gating keamanan** mode aut
 
 ### `tests/test_skill_pack.py`
 
-Test untuk `core/skill_pack.py` (berbagi skill) + **4 lapis keamanan impor**.
+Test untuk `core/skill_pack.py` (berbagi skill) + **5 lapis keamanan impor** (lihat juga `test_skill_scanner.py` untuk lapis scanner).
 
 | Test | Yang Diverifikasi |
 |---|---|
@@ -237,6 +237,45 @@ Test untuk `core/skill_pack.py` (berbagi skill) + **4 lapis keamanan impor**.
 | `test_import_skips_block_without_name` | Blok tanpa `name` di-skip, lanjut yang valid |
 | `test_import_oversized_pack_rejected` | Pack > batas → ditolak |
 | `test_parse_pack_multiple_skills` | Parser pisah banyak skill via delimiter |
+
+---
+
+### `tests/test_skill_scanner.py`
+
+Test untuk `security/skill_scanner.py` (lapis scanner impor, terinspirasi skillspector). Yang kritis: skill berbahaya DITOLAK sebelum masuk DB, tanpa false-positive pada prosa, tanpa pernah crash.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_clean_prose_passes` | Prosa biasa → `clean`, tak ada temuan |
+| `test_exec_in_code_block_blocked` | `exec()` di blok kode → `reject` (AST kritis) |
+| `test_subprocess_blocked` | `subprocess.run` → `reject` (skor ≥ HIGH) |
+| `test_shell_exfil_pattern_blocked` | `curl … \| bash` → `reject` (pola eksfiltrasi) |
+| `test_credential_path_flagged_or_blocked` | `~/.ssh/id_rsa` → minimal `flag` |
+| `test_non_python_code_block_not_crash` | Blok bukan-Python → AST skip diam, tak crash |
+| `test_open_write_is_medium_not_reject_alone` | `open(...,'w')` sendiri = medium, tak auto-reject |
+| `test_never_raises_on_garbage` | Input biner/sampah → tak pernah raise |
+| `test_import_rejects_high_risk_skill` | Integrasi: skill `exec()` tak masuk DB sama sekali |
+| `test_import_clean_skill_succeeds` | Skill bersih tetap masuk draft (jalur normal utuh) |
+| `test_import_flagged_skill_imported_with_label` | Risiko sedang → impor + tercatat di `flagged` |
+| `test_import_url_rejects_high_risk` | Impor URL juga lewat scanner (defense-in-depth) |
+
+---
+
+### `tests/test_compaction.py`
+
+Test untuk compaction headroom (`ContextCompactor.compact` + `SettingsStore.get/set_compaction_mode`). Yang kritis: opt-in, hemat tanpa kehilangan total, fail-safe ke truncation, idempoten.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_no_compaction_when_history_fits` | History muat budget → tak ada LLM call, history utuh |
+| `test_compaction_summarizes_old_keeps_recent` | Overflow → turn lama jadi 1 ringkasan, recent UTUH |
+| `test_compaction_off_via_min_old_turns` | Turn lama < `min_old_turns` → tak diringkas |
+| `test_summarizer_error_falls_back_to_original` | Summarizer error → history asli (truncation), tak crash |
+| `test_empty_summary_falls_back` | Ringkasan kosong → tak ganti dengan blok kosong |
+| `test_idempotent_does_not_recompact` | Blok yang sudah ringkasan tak diringkas lagi |
+| `test_compaction_mode_default_off` | Default mode = `off` (aman) |
+| `test_compaction_mode_roundtrip` | Set/get `local`/`cloud` |
+| `test_compaction_mode_invalid_falls_back` | Nilai tak dikenal → fail-safe ke `off` |
 
 ---
 
@@ -516,6 +555,8 @@ Smoke test untuk endpoints Web UI.
 | `test_metrics_renders_empty` | `GET /metrics` render tanpa data (tidak crash) |
 | `test_index_renders` | `GET /` return 200 |
 | `test_health_endpoint` | `GET /health` → JSON status + cek DB (monitoring self-hosted) |
+| `test_settings_renders_with_compaction_control` | `/settings` render 200 + dropdown compaction (default off) |
+| `test_settings_save_compaction_mode` | `POST /settings` simpan mode compaction; round-trip di GET |
 | `test_index_lists_new_roles` | Sidebar + chip memuat `data` & `security` |
 | `test_index_unknown_role_falls_back` | `?role=` tak dikenal → 200 (fallback role pertama) |
 | `test_approve_requires_valid_params` | `POST /approve` tanpa params → `ok=False`, tidak crash |

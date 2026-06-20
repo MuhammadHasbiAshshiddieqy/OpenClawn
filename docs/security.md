@@ -33,11 +33,7 @@ headers = {"x-api-key": api_key, ...}
 
 ### Konstanta: `DANGER_PATTERNS`
 
-Daftar pola regex yang menandakan upaya prompt injection atau jailbreak:
-- `ignore (previous|all) instructions`
-- `abaikan (instruksi|perintah) (sebelumnya|di atas)`
-- `system prompt`
-- `reveal your (instructions|prompt)`
+Daftar pola regex yang menandakan upaya prompt injection atau jailbreak (prompt-injection klasik, eksfiltrasi instruksi, mode jailbreak). Cosmetik — diperluas seiring pola umum, tapi tetap BUKAN pertahanan utama.
 
 ### Kelas: `Shield`
 
@@ -49,6 +45,32 @@ Daftar pola regex yang menandakan upaya prompt injection atau jailbreak:
 3. Return `(True, "")` jika aman, `(False, "Input ditolak: ...")` jika mencurigakan
 
 Dipanggil di awal `agent_loop.run()` sebelum input masuk pipeline apapun.
+
+---
+
+## `security/skill_scanner.py`
+
+Pemeriksa keamanan untuk **skill yang diimpor dari luar** (skill packs). Terinspirasi `nvidia/skillspector`: skill pack = konten TAK-TEPERCAYA, jadi diperiksa SEBELUM masuk DB. Lebih dalam dari `Shield` (yang hanya regex prompt-injection) — menangkap kode/eksfiltrasi yang dibawa skill. Murni stdlib (`ast`+`re`), tanpa dependency (§6). **Selalu aktif** pada impor — keamanan bukan optimasi, tak bisa dimatikan dari UI.
+
+Dua lapis:
+1. **AST** (`ast.walk`) pada blok kode berpagar (```` ```python ````): `exec`/`eval`/`compile`/`__import__`, `os.system`/`os.popen`, `subprocess.*`, `shutil.rmtree`, `open(...,'w')`. Blok yang tak parse sebagai Python → di-skip diam (banyak skill = prosa).
+2. **Pola leksikal**: eksfiltrasi shell (`curl|wget … | sh`), `curl` POST, path kredensial (`~/.ssh`, `id_rsa`, `.aws/credentials`), URL dengan kredensial inline, endpoint metadata cloud (`169.254.169.254`), `eval(input())`, blob base64 panjang.
+
+### Dataclass: `ScanResult`
+
+| Field | Keterangan |
+|---|---|
+| `score` | 0–100, akumulasi severity per temuan (di-clamp 100) |
+| `verdict` | `clean` (<25) / `flag` (25–49) / `reject` (≥50) |
+| `findings` | list label temuan (mis. `ast call:exec`, `pattern shell_exfil`) |
+| `blocked` *(property)* | `True` bila `verdict == "reject"` |
+
+Ambang: satu temuan **kritis** (exec/subprocess/`curl\|sh` = 50) cukup untuk reject sendirian — eksekusi kode arbitrer tak butuh bukti kedua. Temuan sedang (15) baru reject bila menumpuk.
+
+**`scan_skill(name, content) → ScanResult`**  
+Pindai satu skill. **Tak pernah raise** (input eksternal): kegagalan analisis = fail-safe ke temuan terkumpul, bukan diam-diam meloloskan.
+
+**Jalur impor** (`core/skill_pack.py`): `reject` → skill DITOLAK total (tak masuk DB, keputusan owner §1); `flag` → tetap impor sebagai draft tapi dicatat di `flagged` & log; `clean` → draft normal. Berlaku untuk impor file maupun URL (defense-in-depth).
 
 ---
 
@@ -161,6 +183,7 @@ Jika user tidak merespons dalam `approval_timeout_sec` (default 120 detik) → F
 |---|---|---|
 | `Vault` | Credential bocor ke prompt/log | Semua LLM call |
 | `Shield` | Prompt injection yang jelas | Input user |
+| `skill_scanner` | Skill impor membawa kode berbahaya/eksfiltrasi | Impor skill pack (file/URL) |
 | `ApprovalGate` | Tool destruktif jalan tanpa izin | Tool execution |
 | `QuestionGate` | (bukan keamanan) klarifikasi interaktif `ask_user` | Tool execution |
 | `DockerSandbox` | Kode berbahaya akses host/network | **Pertahanan utama** |

@@ -2,10 +2,15 @@ import re
 import unicodedata
 
 DANGER_PATTERNS = [
+    # Prompt-injection klasik.
     r"ignore (previous|all) instructions",
     r"abaikan (instruksi|perintah) (sebelumnya|di atas)",
     r"system prompt",
     r"reveal your (instructions|prompt)",
+    # Eksfiltrasi instruksi (variasi yang sering muncul di payload injection).
+    r"print your (system )?(instructions|prompt|rules)",
+    r"disregard (the above|previous|all)",
+    r"you are now (in )?(developer|dan|jailbreak) mode",
 ]
 
 

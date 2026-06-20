@@ -49,6 +49,26 @@ def test_index_renders(client):
     assert resp.status_code == 200
 
 
+def test_settings_renders_with_compaction_control(client):
+    """/settings render 200 + memuat kontrol compaction (default off)."""
+    resp = client.get("/settings")
+    assert resp.status_code == 200
+    assert "compaction_mode" in resp.text  # dropdown ada
+    assert "headroom" in resp.text.lower()
+
+
+def test_settings_save_compaction_mode(client):
+    """POST /settings menyimpan mode compaction; round-trip terlihat di GET berikutnya."""
+    resp = client.post(
+        "/settings",
+        data={"model_choice": "auto", "compaction_mode": "local"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    # Status di halaman menampilkan mode aktif.
+    assert "<code>local</code>" in resp.text
+
+
 def test_health_endpoint(client):
     """/health untuk monitoring self-hosted: JSON status + cek DB."""
     resp = client.get("/health")

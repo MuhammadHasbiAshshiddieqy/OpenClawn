@@ -163,6 +163,55 @@ class AgentLoop:
         with open(f"roles/{self.cfg.role}/soul.toml", "rb") as f:
             return tomllib.load(f)
 
+    async def _maybe_compact(self, memory_ctx: dict, user_message: str) -> list[Turn]:
+        """Pre-pass compaction headroom (opt-in /settings). Kembalikan history untuk build().
+
+        Mode 'off' → history apa adanya (build() lalu truncation seperti biasa). Mode
+        'local'/'cloud' → ringkas turn lama via summarizer bila melebihi budget. Semua
+        jalur fail-safe ke history asli (§1.3 kegagalan anggun) — tak pernah jatuhkan turn.
+        """
+        mode = await self.settings.get_compaction_mode(self.config.compaction_default_mode)
+        if mode == "off" or len(self.history) <= self.config.compaction_keep_recent:
+            return self.history
+
+        async def _summarize(joined: str) -> str:
+            prompt = (
+                "Ringkas percakapan agent berikut menjadi catatan padat yang menyimpan "
+                "fakta, keputusan, dan konteks penting untuk melanjutkan. Jangan menambah "
+                "informasi baru. Maksimal beberapa kalimat.\n\n" + joined[:8000]
+            )
+            if mode == "local":
+                prov, mdl = self.config.compaction_local_model
+            else:  # cloud → lewat fallback chain (provider utama = item pertama chain)
+                prov, mdl = self.config.fallback_chain[-1]
+            text = ""
+            async for chunk in self.llm.stream_with_fallback(
+                prov, mdl, [{"role": "user", "content": prompt}]
+            ):
+                if chunk.type == "text":
+                    text += chunk.text
+            return text
+
+        # Sisakan ruang untuk system prompt + user message agar peringkasan dipicu
+        # sebelum truncation menendang turn (estimasi kasar, konsisten build()).
+        reserve = self.compactor.estimate_context_tokens(
+            [
+                {"role": "system", "content": self._soul["system_prompt"]["content"]},
+                {"role": "user", "content": user_message},
+            ]
+        )
+        try:
+            return await self.compactor.compact(
+                self.history,
+                _summarize,
+                keep_recent=self.config.compaction_keep_recent,
+                min_old_turns=self.config.compaction_min_old_turns,
+                reserve_tokens=reserve,
+            )
+        except Exception as e:  # noqa: BLE001 — compaction gagal → truncation aman
+            log.warning("compaction_failed", session=self.cfg.session_id, error=str(e))
+            return self.history
+
     async def run(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         start = time.monotonic()
 
@@ -197,11 +246,17 @@ class AgentLoop:
         if profile:
             memory_ctx["user_model"] = profile
 
-        # 4. Build messages
+        # 4. Compaction headroom (opt-in /settings, default OFF): bila diaktifkan &
+        # history melebihi budget, ringkas turn lama jadi satu blok alih-alih dibuang
+        # (truncation). Pre-pass async sebelum build() sinkron tetap utuh. Fail-safe:
+        # mode 'off' / error / ringkasan kosong → history apa adanya (truncation lama).
+        history_for_build = await self._maybe_compact(memory_ctx, user_message)
+
+        # 4b. Build messages
         messages = self.compactor.build(
             soul=self._soul["system_prompt"]["content"],
             memory=memory_ctx,
-            history=self.history,
+            history=history_for_build,
             user_message=user_message,
         )
         # Token-first (§1.4): ukur context window terpakai untuk meter budget di UI.

@@ -39,6 +39,10 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `routing_urgency_keywords` | ID+EN | Keyword urgensi (urgent/segera/deadline…) |
 | `routing_language_bump` | `False` | Multibahasa lapis 2 (opt-in): naikkan tier bila script query di luar `routing_local_scripts` (model cloud lebih multibahasa). Default OFF agar tak menambah biaya |
 | `routing_local_scripts` | `("latin",)` | Script (sistem tulisan) yang dianggap kuat di tier lokal — query di luar ini di-bump bila `routing_language_bump` aktif |
+| `compaction_default_mode` | `"off"` | Mode compaction headroom bila `/settings` kosong: `off` (truncation, aman) / `local` / `cloud`. Opt-in karena peringkasan LLM menambah latensi & bisa membuang nuansa |
+| `compaction_local_model` | `("ollama", "gemma4:e2b")` | Model lokal untuk meringkas turn lama saat mode `local` (peringkasan = ekstraktif, model kecil cukup) |
+| `compaction_keep_recent` | `4` | Jumlah turn terbaru yang DIPERTAHANKAN utuh (tak diringkas) |
+| `compaction_min_old_turns` | `3` | Minimal turn lama agar peringkasan dijalankan (hindari LLM call sia-sia) |
 | `fallback_chain` | lihat di bawah | Urutan model jika provider utama gagal |
 
 **Fallback chain default:**
@@ -144,7 +148,7 @@ log.error("event_name", ...)
 
 ## `infra/settings.py`
 
-Setting runtime yang bisa diubah lewat halaman `/settings` **tanpa restart**. Saat ini menyimpan **override model** — memaksa semua routing ke satu `(provider, model)`, melewati keputusan otomatis `SmartRouter`. Override adalah *pilihan sadar* untuk eksperimen/development; router cerdas tetap default jika override kosong.
+Setting runtime yang bisa diubah lewat halaman `/settings` **tanpa restart**. Menyimpan: (1) **override model** — memaksa semua routing ke satu `(provider, model)`, melewati `SmartRouter`; (2) **mode compaction** — `off`/`local`/`cloud` untuk peringkasan context headroom. Keduanya *pilihan sadar* untuk eksperimen/development; default-nya (router otomatis + compaction `off`) tetap berlaku jika tak diubah.
 
 ### Konstanta: `KNOWN_MODELS`
 
@@ -160,5 +164,7 @@ Murni di atas `DatabaseManager` (tabel `app_settings` key-value).
 | `set(key, value) → None` *(async)* | Tulis setting; `None`/`""` menghapus baris (UPSERT) |
 | `get_model_override() → tuple[str, str] \| None` *(async)* | `(provider, model)` jika override aktif, `None` jika router otomatis |
 | `set_model_override(provider, model) → None` *(async)* | Set override; kirim `None`/`None` untuk kembali ke router otomatis |
+| `get_compaction_mode(default="off") → str` *(async)* | Mode compaction: `off`/`local`/`cloud`. Nilai tak dikenal → fail-safe ke `default` |
+| `set_compaction_mode(mode) → None` *(async)* | Set mode; nilai tak valid/`None` → kembali ke `off` |
 
-Override dianggap aktif hanya jika **provider dan model** keduanya terisi — partial (satu saja) = tetap otomatis.
+Override dianggap aktif hanya jika **provider dan model** keduanya terisi — partial (satu saja) = tetap otomatis. Mode compaction valid: `COMPACTION_MODES = ("off","local","cloud")`.

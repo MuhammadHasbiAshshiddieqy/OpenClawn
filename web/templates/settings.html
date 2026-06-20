@@ -66,8 +66,8 @@
     <main class="main">
         <div class="topbar">
             <div>
-                <h1>Model Settings</h1>
-                <div class="sub">override model untuk semua query</div>
+                <h1>Settings</h1>
+                <div class="sub">override model · context compaction</div>
             </div>
         </div>
 
@@ -96,6 +96,22 @@
                         </option>
                         {% endfor %}
                     </select>
+
+                    <label for="compaction_mode" style="margin-top:18px;display:block">
+                        <strong>Context compaction (headroom)</strong>
+                    </label>
+                    <select name="compaction_mode" id="compaction_mode">
+                        <option value="off" {{ 'selected' if compaction == 'off' else '' }}>
+                            Off — potong turn lama (default, aman)
+                        </option>
+                        <option value="local" {{ 'selected' if compaction == 'local' else '' }}>
+                            Local — ringkas turn lama via model lokal (gratis, privat)
+                        </option>
+                        <option value="cloud" {{ 'selected' if compaction == 'cloud' else '' }}>
+                            Cloud — ringkas via model cloud (kualitas, untuk history kompleks)
+                        </option>
+                    </select>
+
                     <button type="submit" class="btn">Simpan</button>
                 </form>
             </div>
@@ -107,6 +123,16 @@
                 {% else %}
                 Status: <strong>mode otomatis</strong>. Router memilih model per query.
                 {% endif %}
+                Compaction: <code>{{ compaction }}</code>.
+            </p>
+
+            <p class="muted">
+                <strong>Compaction</strong> (terinspirasi <em>headroom</em>): saat context window
+                penuh, default memotong turn terlama (yang hilang benar-benar hilang). Mode
+                <code>local</code>/<code>cloud</code> meringkas turn lama jadi satu blok alih-alih
+                membuang — hemat token tanpa kehilangan konteks total. Default <code>off</code>
+                karena peringkasan via LLM menambah latensi & bisa membuang nuansa; nyalakan
+                jika percakapanmu panjang.
             </p>
 
             <hr>
