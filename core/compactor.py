@@ -44,6 +44,10 @@ class ContextCompactor:
     def _build_system(self, soul: str, memory: dict) -> str:
         parts = [soul]
 
+        # I5: profil user naratif (blok stabil → cocok prompt-caching). Hanya bila ada.
+        if memory.get("user_model"):
+            parts.append(f"\n## User\n{memory['user_model']}")
+
         if memory.get("l1"):
             facts = "\n".join(f"- {k}: {v}" for k, v in memory["l1"].items())
             parts.append(f"\n## State\n{facts}")

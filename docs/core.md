@@ -362,6 +362,9 @@ Agent menilai kualitas solusinya sendiri sebelum menyimpan sebagai skill.
 
 **Aturan kritis:** evaluator harus **minimal setara** generator. Solusi Sonnet tidak boleh dinilai model 7B.
 
+**`refine_on_correction(skill_id, correction_trace) → dict`** *(async)* — **I3**  
+Perbaiki skill yang menyesatkan saat dipakai (turn-nya dikoreksi). Evaluator ≥ generator menulis ulang konten; diterapkan HANYA bila `improved && confidence ≥ CONFIDENCE_THRESHOLD`. Konten lama → `skill_versions` (revertible), `version += 1`. Confidence rendah → konten TIDAK disentuh (fail-safe). Dipicu via `SkillFeedback`, dijepit `refine_max_per_pass`.
+
 ```python
 EVALUATOR_FOR = {
     "gemma4:e2b":  ("ollama",     "gemma4:e4b"),
@@ -508,9 +511,8 @@ Kembalikan offset ke `old_offset` dari baris aktif terakhir; catat baris `source
 **`history(limit=20) → list[dict]`** *(async)*  
 Riwayat perubahan offset terbaru-dulu untuk ditampilkan di `/metrics`.
 
----
-
-## `core/tool_audit.py` — Telemetri Tooling
+**`maybe_auto_apply(config, calibrator=None) → dict`** *(async)* — **I4**  
+Guarded auto-apply (opt-in §8): bila `config.calibration_auto_apply=True`, throttled (`calibration_auto_interval_sec`) & butuh data cukup (`calibration_auto_min_sample`), ambil rekomendasi top-1 lalu `apply()` dengan delta **dijepit ±`calibration_auto_max_step`** (=1). `source='auto'`, tetap revertible. Default `False` → no-op. Dipanggil post-turn dari AgentLoop.
 
 Audit penggunaan tool (setara Inovasi 1 untuk routing). DB-bound (hanya `DatabaseManager`, §1.6), extractable. Dicatat terpusat di `AgentLoop._execute_tool`, bukan per-tool.
 

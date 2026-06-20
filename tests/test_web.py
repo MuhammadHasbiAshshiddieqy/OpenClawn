@@ -197,6 +197,62 @@ def test_skills_import_blocks_injection(client):
     assert "evil" not in html
 
 
+def test_skills_page_shows_curation(client):
+    """Jejak merge skill (I1) tampil di /skills dengan tombol batalkan."""
+    import os
+    import sqlite3
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    conn.execute(
+        """INSERT INTO curation_log (role, action, winner_id, loser_ids, similarity,
+               judge_confidence, reasoning)
+           VALUES ('dev','merge',1,'[2]',0.85,5,'dua skill identik')"""
+    )
+    conn.commit()
+    conn.close()
+
+    html = client.get("/skills").text
+    assert "Curation" in html
+    assert "dua skill identik" in html
+    assert "Batalkan" in html
+
+
+def test_skills_revert_merge_endpoint(client):
+    """POST /skills/revert-merge mengembalikan loser ke active."""
+    import os
+    import sqlite3
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    conn.execute(
+        """INSERT INTO skills (id, role, skill_name, skill_content, status, decay_score)
+           VALUES (1,'dev','winner','isi','active',0.9)"""
+    )
+    conn.execute(
+        """INSERT INTO skills (id, role, skill_name, skill_content, status, merged_into, decay_score)
+           VALUES (2,'dev','loser','isi2','merged',1,0.4)"""
+    )
+    conn.execute(
+        """INSERT INTO curation_log (role, action, winner_id, loser_ids)
+           VALUES ('dev','merge',1,'[2]')"""
+    )
+    conn.commit()
+    conn.close()
+
+    resp = client.post("/skills/revert-merge", data={"role": "dev"})
+    assert resp.status_code == 200
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    status = conn.execute("SELECT status FROM skills WHERE id=2").fetchone()[0]
+    conn.close()
+    assert status == "active"
+
+
+def test_metrics_shows_auto_apply_badge(client):
+    """/metrics menampilkan status auto-tune (I4)."""
+    html = client.get("/metrics").text
+    assert "auto-tune" in html
+
+
 def test_conversations_page_renders_empty(client):
     """/conversations tanpa arsip → 200 + pesan kosong."""
     resp = client.get("/conversations")

@@ -28,6 +28,27 @@ class AppConfig:
     # Memori jangka panjang: arsipkan sesi ke L4 setelah melewati ambang turn ini
     # (cukup bermakna untuk dicari lagi lintas sesi, tapi tidak tiap turn).
     archive_after_turns: int = 6
+    # === Compounding intelligence (Sprint 6-8) ===
+    # I1 — Skill Curator: gabung skill mirip agar library tak terfragmentasi.
+    # Jauh lebih jarang dari decay (1×/hari); gated oleh judge & similarity.
+    curation_interval_sec: int = 86_400
+    curation_similarity_threshold: float = 0.78  # ambang pre-filter leksikal
+    curation_max_pairs_per_pass: int = 5  # batasi biaya LLM judge per pass
+    curation_judge_min_confidence: int = 4  # merge hanya bila judge ≥ 4/5
+    curation_auto: bool = False  # §8: default usulan-saja, user apply di /skills
+    # I2 — Draft promotion: draft yang terbukti berguna naik 'active'.
+    draft_promote_uses: int = 3  # dipakai-sukses N kali → promote
+    # I3 — Skill refine on correction: perbaiki skill yang menyesatkan (versioned).
+    refine_on_correction: bool = True
+    refine_max_per_pass: int = 3
+    # I4 — Calibration auto-apply: router menyetel diri DALAM rem (opt-in, §8).
+    calibration_auto_apply: bool = False  # default aman: tetap manual
+    calibration_auto_max_step: int = 1  # clamp ±1, tak pernah melompat
+    calibration_auto_interval_sec: int = 86_400
+    calibration_auto_min_sample: int = 20  # jangan menyetel dari noise
+    # I5 — Dialectic user model (opsional): profil user naratif lintas sesi.
+    user_model_enabled: bool = False
+    user_model_interval_sec: int = 86_400
     # Workspace root: semua tool file (read/write/edit/glob/grep/list_dir) dibatasi
     # ke folder ini. Path di luar root ditolak (anti ../ & symlink escape). Keamanan #1.
     workspace_root: str = "."

@@ -18,6 +18,9 @@ from core.crystallizer import ConfidenceCrystallizer
 from core.llm_client import LLMClient
 from memory.layers import MemoryManager
 from memory.skill_decay import SkillDecayManager
+from memory.skill_feedback import SkillFeedback
+from memory.curator import SkillCuratorManager
+from memory.user_model import UserModel
 from tools import TOOL_REGISTRY
 from security.vault import Vault
 from security.approval import ApprovalGate
@@ -137,6 +140,14 @@ class AgentLoop:
         self.tool_audit = ToolAudit(db)
         self.compactor = ContextCompactor(config.max_context_tokens)
         self.crystallizer = ConfidenceCrystallizer(agent_cfg.role, self.llm, db)
+        # Compounding (I2/I3): jembatan outcome skill antar-turn (revive + promote + refine).
+        self.skill_feedback = SkillFeedback(
+            agent_cfg.role, db, self.decay, self.crystallizer, config
+        )
+        # Compounding (I1): konsolidasi skill mirip (throttled post-turn).
+        self.curator = SkillCuratorManager(agent_cfg.role, db, self.llm, config)
+        # Compounding (I5, opsional): profil user naratif (default nonaktif).
+        self.user_model = UserModel(agent_cfg.role, db, self.llm, config)
         # ApprovalGate & QuestionGate di-inject dari Web UI agar resolve() mengenai
         # Future yang sama (AgentLoop dibuat baru per request, tapi gate harus shared).
         self.approval = approval or ApprovalGate(db, config)
@@ -168,13 +179,23 @@ class AgentLoop:
         # web (history selalu kosong di awal), sehingga koreksi tak pernah terdeteksi.
         # check_correction aman dipanggil selalu: hanya UPDATE bila ada event sebelumnya
         # untuk session ini (turn sebelumnya), berdasarkan session_id yang persisten.
-        await self.auditor.check_correction(user_message, self.cfg.session_id)
+        corrected = await self.auditor.check_correction(user_message, self.cfg.session_id)
+
+        # 1b. Compounding (I2/I3): resolusi outcome skill turn SEBELUMNYA berdasarkan
+        # apakah turn ini mengoreksinya. Sukses → revive/promote; dikoreksi → reset/refine.
+        # Dijalankan di awal turn (sinyal koreksi baru diketahui sekarang).
+        await self.skill_feedback.resolve_previous(
+            self.cfg.session_id, corrected, correction_trace=user_message if corrected else ""
+        )
 
         # 2. Load skill aktif (belum decayed) [#2]
         active_skills = await self.decay.get_active_skills(query=user_message)
 
-        # 3. Memory context
+        # 3. Memory context (+ profil user I5 bila diaktifkan)
         memory_ctx = await self.memory.load_context(user_message, active_skills)
+        profile = await self.user_model.get_active_profile()
+        if profile:
+            memory_ctx["user_model"] = profile
 
         # 4. Build messages
         messages = self.compactor.build(
@@ -457,6 +478,19 @@ class AgentLoop:
             )
 
         await self.decay.maybe_run_decay_pass()
+
+        # Compounding (I2/I3): catat skill yang DIPAKAI turn ini agar turn berikutnya
+        # bisa menilai outcome-nya (sukses → revive/promote; dikoreksi → reset/refine).
+        used_ids = [s["id"] for s in active_skills if s.get("id") is not None]
+        await self.skill_feedback.record_usage(self.cfg.session_id, used_ids)
+
+        # Compounding (I1): konsolidasi skill mirip — throttled (1×/hari), mayoritas no-op.
+        await self.curator.maybe_run_curation_pass()
+        # Compounding (I4): router menyetel diri dalam rem — opt-in, throttled, default no-op.
+        await self.calibration.maybe_auto_apply(self.config)
+        # Compounding (I5, opsional): perbarui profil user — default nonaktif, throttled.
+        await self.user_model.maybe_update()
+
         if self.crystallizer.should_attempt(history_snapshot):
             await self.crystallizer.crystallize(
                 task=user_message,

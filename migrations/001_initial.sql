@@ -21,13 +21,17 @@ CREATE TABLE IF NOT EXISTS skills (
     id INTEGER PRIMARY KEY, role TEXT NOT NULL,
     skill_name TEXT NOT NULL, trigger_pattern TEXT, skill_content TEXT NOT NULL,
     visibility TEXT DEFAULT 'private',     -- private | shared | inherited
-    status TEXT DEFAULT 'active',          -- active | draft | archived
+    status TEXT DEFAULT 'active',          -- active | draft | archived | merged
     confidence REAL DEFAULT 0.0,
     generator_model TEXT,                  -- model yang menghasilkan [#3, untuk evaluator gating]
     use_count INTEGER DEFAULT 0,
     last_used_at TIMESTAMP,
     decay_score REAL DEFAULT 1.0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- Compounding intelligence: I1 curator (merge) + I3 refine (version).
+    merged_into INTEGER REFERENCES skills(id),  -- I1: skill yang menyerap isi ini (status='merged')
+    version INTEGER NOT NULL DEFAULT 1,          -- I3: dinaikkan tiap refine/merge
+    draft_success_count INTEGER NOT NULL DEFAULT 0,  -- I2: draft naik 'active' setelah N sukses
     UNIQUE(role, skill_name)
 );
 CREATE INDEX IF NOT EXISTS idx_skills_active ON skills(role, status, decay_score DESC);
@@ -210,3 +214,61 @@ CREATE TABLE IF NOT EXISTS autopilot_runs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_autopilot_runs ON autopilot_runs(autopilot_id, id DESC);
+
+-- ===================== SKILL CURATOR [I1: merge/dedup] =====================
+-- Compounding intelligence: gabungkan skill mirip agar library tak terfragmentasi.
+-- Anti kehilangan data (§1): loser TIDAK dihapus (status='merged', merged_into=winner);
+-- semua revertible. Setiap merge tercatat di sini → kasat mata & dapat dibatalkan.
+CREATE TABLE IF NOT EXISTS curation_log (
+    id INTEGER PRIMARY KEY,
+    role TEXT NOT NULL,
+    action TEXT NOT NULL,                    -- merge | revert_merge
+    winner_id INTEGER,                       -- skill yang bertahan / hasil sintesis
+    loser_ids TEXT,                          -- JSON array id yang diserap
+    similarity REAL,                         -- skor pre-filter leksikal (0..1)
+    judge_confidence INTEGER,                -- 1..5 dari LLM judge
+    reasoning TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_curation_role ON curation_log(role, created_at DESC);
+
+-- ===================== SKILL VERSIONS [I3: refine — revertible] =====================
+-- Riwayat konten skill sebelum tiap refine/merge, agar perubahan dapat ditinjau & dibatalkan.
+CREATE TABLE IF NOT EXISTS skill_versions (
+    id INTEGER PRIMARY KEY,
+    skill_id INTEGER NOT NULL REFERENCES skills(id),
+    version INTEGER NOT NULL,
+    skill_content TEXT NOT NULL,
+    reason TEXT,                             -- refine_on_correction | merge
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_skill_versions_skill ON skill_versions(skill_id, version DESC);
+
+-- ===================== SKILL USAGE PENDING [I2/I3: jembatan antar-turn] =====================
+-- AgentLoop dibuat baru tiap request → "skill apa yang dipakai turn lalu" harus
+-- dipersistenkan agar turn BERIKUTNYA (yang membawa sinyal had_correction) bisa
+-- menentukan outcome: sukses → promote draft / revive; dikoreksi → reset draft + refine.
+-- Satu baris per (session, turn): JSON daftar skill_id yang disuntik ke turn itu.
+CREATE TABLE IF NOT EXISTS skill_usage_pending (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    skill_ids TEXT NOT NULL,                 -- JSON array skill_id yang dipakai turn ini
+    resolved INTEGER NOT NULL DEFAULT 0,     -- 1 = sudah diproses outcome-nya
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_skill_usage_pending ON skill_usage_pending(session_id, resolved, id DESC);
+
+-- ===================== USER MODEL [I5: profil naratif lintas sesi] =====================
+-- Opsional (user_model_enabled). Ringkasan naratif tentang user dari L2 facts + transkrip,
+-- diperbarui throttled (1×/hari). Versioned + revertible (tak ada drift senyap). Lokal &
+-- dapat dihapus user (privasi §1). Per role agar tiap peran punya lensa sendiri.
+CREATE TABLE IF NOT EXISTS user_model (
+    id INTEGER PRIMARY KEY,
+    role TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    profile TEXT NOT NULL,                   -- ringkasan naratif singkat
+    active INTEGER NOT NULL DEFAULT 1,        -- 1 = versi aktif disuntik ke context
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_user_model_role ON user_model(role, active, version DESC);

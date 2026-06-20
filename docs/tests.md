@@ -226,6 +226,73 @@ Test untuk `core/skill_pack.py` (berbagi skill) + **4 lapis keamanan impor**.
 
 ---
 
+### `tests/test_skill_feedback.py`
+
+Compounding **I2** (draft promotion) + **I3** (refine on correction) + prasyarat (revive skill terpakai). `SkillFeedback` jembatan antar-turn.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_used_active_skill_revived_on_success` | Prasyarat: skill active dipakai+sukses → revive (use_count naik) |
+| `test_draft_promoted_after_n_successes` | I2: draft dipakai-sukses N× → naik `active` |
+| `test_draft_reset_on_correction` | I2: draft dikoreksi → counter reset, tetap draft |
+| `test_active_skill_unaffected_by_draft_logic` | `record_draft_outcome` no-op pada skill active |
+| `test_refine_applies_when_confident` | I3: koreksi + judge confident → konten ter-update, versi lama tersimpan |
+| `test_refine_skipped_when_low_confidence` | I3: confidence rendah → konten TIDAK berubah (fail-safe) |
+| `test_refine_disabled_by_config` | `refine_on_correction=False` → LLM tak dipanggil |
+| `test_resolve_noop_when_no_pending` | Tanpa pending → no-op |
+| `test_pending_marked_resolved_once` | Outcome diproses tepat sekali |
+
+---
+
+### `tests/test_calibration_auto.py`
+
+Compounding **I4** — guarded auto-apply kalibrasi.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_disabled_by_default` | `calibration_auto_apply=False` default → tak apply |
+| `test_auto_apply_shifts_offset` | Aktif + under-provisioned → offset -1, `source='auto'` |
+| `test_clamped_to_max_step` | Geser tak pernah > ±1 walau rekomendasi ekstrem |
+| `test_insufficient_data_skips` | Sampel < min → skip (jangan menyetel dari noise) |
+| `test_throttled_on_second_call` | Panggilan kedua langsung → throttled |
+| `test_auto_apply_is_revertible` | Auto-apply dapat di-revert ke 0 |
+| `test_timestamp_recorded` | Timestamp throttle tercatat |
+
+---
+
+### `tests/test_curator.py`
+
+Compounding **I1** — Skill Curator (merge/dedup, anti data-loss, revert).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_jaccard_identical_high` / `test_jaccard_disjoint_zero` | Similarity leksikal benar |
+| `test_finds_similar_pair` | Pre-filter menemukan pasangan mirip |
+| `test_no_pair_when_different` | Skill berbeda → tak ada kandidat |
+| `test_merge_when_judge_confident` | Judge ≥4 → merge: winner active+konten gabungan, loser `merged` |
+| `test_no_merge_when_judge_unsure` | Judge <4 → tak merge |
+| `test_merge_preserves_loser_and_logs` | Loser tak dihapus; `curation_log` + `skill_versions` terisi |
+| `test_revert_restores_loser` | Revert: loser → active, `merged_into` NULL |
+| `test_revert_noop_when_no_merge` | Tanpa merge → no-op |
+| `test_curation_throttled` | Pass kedua < interval → di-skip |
+
+---
+
+### `tests/test_user_model.py`
+
+Compounding **I5** (opsional) — dialectic user model.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_disabled_by_default` | Default nonaktif → profil kosong |
+| `test_builds_profile_when_enabled` | Aktif → profil naratif dari L2 facts |
+| `test_versioned_on_second_update` | Update kedua → versi 2, satu aktif |
+| `test_throttled` | Panggilan kedua → throttled |
+| `test_no_facts_skips` | Tanpa fakta → skip |
+| `test_clear_removes_profile` | `clear()` hapus profil (privasi §1) |
+
+---
+
 ### `tests/test_audit.py`
 
 Test untuk `core/audit.py`.
@@ -439,6 +506,9 @@ Smoke test untuk endpoints Web UI.
 | `test_skills_export_returns_markdown` | `/skills/export` → berkas Markdown (attachment) |
 | `test_skills_import_lands_as_draft` | `/skills/import` → skill draft, muncul di `/skills` |
 | `test_skills_import_blocks_injection` | Pack berpola injeksi ditolak, tak muncul |
+| `test_skills_page_shows_curation` | Jejak merge (I1) tampil + tombol Batalkan |
+| `test_skills_revert_merge_endpoint` | `/skills/revert-merge` kembalikan loser ke active |
+| `test_metrics_shows_auto_apply_badge` | `/metrics` tampilkan badge auto-tune (I4) |
 
 ---
 

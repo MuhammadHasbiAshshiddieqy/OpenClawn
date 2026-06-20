@@ -180,6 +180,43 @@
                 </tbody>
             </table>
             {% endif %}
+
+            <h2 style="margin-top:30px">Curation — konsolidasi skill (I1)</h2>
+            <p class="muted">
+                Skill mirip digabung (gated judge ≥ {{ confidence_threshold }}/5) agar library tak
+                terfragmentasi. Loser <b>tidak dihapus</b> (status <code>merged</code>) — setiap merge
+                <b>dapat dibatalkan</b>.
+            </p>
+            {% if not curation %}
+            <p class="muted">Belum ada konsolidasi. Berjalan otomatis (throttled ~1×/hari) saat ada skill tumpang tindih.</p>
+            {% else %}
+            <table>
+                <thead>
+                    <tr><th>Aksi</th><th>Role</th><th>Winner</th><th>Diserap</th><th>Similarity</th><th>Judge</th><th>Alasan</th><th></th></tr>
+                </thead>
+                <tbody>
+                    {% for c in curation %}
+                    <tr>
+                        <td><span class="tag">{{ c.action }}</span></td>
+                        <td><span class="role-dot role-{{ c.role }}"></span>{{ c.role }}</td>
+                        <td>#{{ c.winner_id }}</td>
+                        <td class="muted">{{ c.loser_ids }}</td>
+                        <td class="muted">{{ '%.2f'|format(c.similarity) if c.similarity else '—' }}</td>
+                        <td>{{ c.judge_confidence or '—' }}{% if c.judge_confidence %}/5{% endif %}</td>
+                        <td class="muted">{{ c.reasoning }}</td>
+                        <td>
+                            {% if c.action == 'merge' and loop.first %}
+                            <form method="post" action="/skills/revert-merge" style="margin:0">
+                                <input type="hidden" name="role" value="{{ c.role }}">
+                                <button type="submit" class="btn-ghost">Batalkan</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
         </div>
     </main>
 </div>

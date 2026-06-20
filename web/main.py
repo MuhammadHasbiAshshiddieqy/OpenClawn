@@ -19,6 +19,7 @@ from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
 from core.autopilot import AutopilotScheduler, AutopilotStore
 from core.skill_pack import SkillPack
+from memory.curator import SkillCuratorManager
 from core.calibration import CalibrationStore, RoutingCalibrator
 from core.router import Complexity, SmartRouter
 from core.router_config import RouterConfigStore
@@ -328,6 +329,8 @@ async def metrics(request: Request):
     calibration["current_offset"] = await store.get_offset()
     calibration["history"] = await store.history()
     tool_stats = await ToolAudit(db).summary()
+    # I4: tampilkan apakah auto-apply aktif (opt-in via config).
+    calibration["auto_apply"] = CONFIG.calibration_auto_apply
     return templates.TemplateResponse(
         request,
         "metrics.html",
@@ -407,6 +410,12 @@ async def skills_page(request: Request):
                   confidence, critical_gaps, status, reasoning, created_at
            FROM crystallization_log ORDER BY id DESC LIMIT 20"""
     )
+    # I1 observability: jejak merge skill (curation) — kasat mata & dapat di-revert.
+    curation = await db.fetchall(
+        """SELECT role, action, winner_id, loser_ids, similarity, judge_confidence,
+                  reasoning, created_at
+           FROM curation_log ORDER BY id DESC LIMIT 20"""
+    )
     return templates.TemplateResponse(
         request,
         "skills.html",
@@ -417,11 +426,27 @@ async def skills_page(request: Request):
             "threshold_pct": round(threshold * 100),
             "decay_base": base,
             "crystallization": crystallization,
+            "curation": curation,
             "confidence_threshold": CONFIG.confidence_threshold,
             "roles": available_roles(),
             "import_msg": request.query_params.get("import_msg"),
         },
     )
+
+
+@app.post("/skills/revert-merge")
+async def skills_revert_merge(request: Request):
+    """Batalkan merge skill terakhir untuk satu role (I1 revertible)."""
+    form = await request.form()
+    role = (form.get("role") or "").strip()
+    if role in available_roles():
+        result = await SkillCuratorManager(role, db, None, CONFIG).revert_last_merge()
+        log.info(
+            "skill_merge_reverted",
+            role=role,
+            **{k: v for k, v in result.items() if k != "restored"},
+        )
+    return RedirectResponse(url="/skills", status_code=303)
 
 
 @app.get("/skills/export")

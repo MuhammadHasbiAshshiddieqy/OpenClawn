@@ -104,6 +104,9 @@
                         <button type="submit" class="btn-ghost">Revert</button>
                     </form>
                     {% endif %}
+                    <span class="tag {{ 'status-active' if calibration.auto_apply else '' }}" title="Auto-apply opt-in (config). Tetap clamp ±1 & revertible.">
+                        auto-tune: {{ 'ON' if calibration.auto_apply else 'OFF' }}
+                    </span>
                 </div>
 
                 {% if not calibration.has_enough_data %}

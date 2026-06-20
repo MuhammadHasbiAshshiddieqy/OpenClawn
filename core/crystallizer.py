@@ -90,6 +90,73 @@ class ConfidenceCrystallizer:
             )
             return {"skill_name": skill_name, "status": "duplicate"}
 
+    async def refine_on_correction(self, skill_id: int, correction_trace: str) -> dict:
+        """I3 — perbaiki skill yang menyesatkan saat dipakai (gated + versioned).
+
+        Dipicu hanya bila sebuah skill ikut dipakai pada turn yang TURN-BERIKUTNYA
+        dikoreksi user. Evaluator ≥ generator (pola EVALUATOR_FOR) menulis ulang konten;
+        diterapkan HANYA bila improved && confidence ≥ threshold. Konten lama disimpan
+        ke skill_versions (revertible). Confidence rendah → konten TIDAK disentuh
+        (fail-safe — jangan belajar dari sinyal lemah, biarkan decay bekerja).
+        """
+        row = await self.db.fetchone(
+            "SELECT skill_name, skill_content, generator_model, version FROM skills WHERE id=?",
+            (skill_id,),
+        )
+        if not row:
+            return {"skill_id": skill_id, "action": "noop"}
+        gen_model = row["generator_model"] or "gemma4:e4b"
+        eval_provider, eval_model = EVALUATOR_FOR.get(gen_model, DEFAULT_EVALUATOR)
+
+        prompt = (
+            f"Sebuah skill agent ternyata MENYESATKAN saat dipakai (turn-nya dikoreksi user).\n\n"
+            f"SKILL SAAT INI:\n{row['skill_content'][:1500]}\n\n"
+            f"KOREKSI USER:\n{correction_trace[:500]}\n\n"
+            f"Perbaiki skill agar tak mengulang kesalahan. Jawab HANYA JSON valid:\n"
+            f'{{"improved": <true/false>, "confidence": <1-5>, '
+            f'"new_content": "<konten skill yang diperbaiki>", "reasoning": "<satu kalimat>"}}'
+        )
+        response = ""
+        async for chunk in self.llm.stream_with_fallback(
+            eval_provider, eval_model, [{"role": "user", "content": prompt}]
+        ):
+            if chunk.type == "text":
+                response += chunk.text
+        ev = self._parse_refine(response)
+
+        if not ev["improved"] or ev["confidence"] < CONFIDENCE_THRESHOLD or not ev["new_content"]:
+            return {"skill_id": skill_id, "action": "skipped", "confidence": ev["confidence"]}
+
+        # Simpan versi lama (revertible) lalu terapkan versi baru.
+        await self.db.execute(
+            """INSERT INTO skill_versions (skill_id, version, skill_content, reason)
+               VALUES (?,?,?, 'refine_on_correction')""",
+            (skill_id, row["version"], row["skill_content"]),
+        )
+        await self.db.execute(
+            "UPDATE skills SET skill_content=?, version=version+1 WHERE id=?",
+            (ev["new_content"], skill_id),
+        )
+        return {"skill_id": skill_id, "action": "refined", "confidence": ev["confidence"]}
+
+    def _parse_refine(self, raw: str) -> dict:
+        try:
+            cleaned = raw.strip().replace("```json", "").replace("```", "").strip()
+            data = json.loads(cleaned)
+            return {
+                "improved": bool(data.get("improved", False)),
+                "confidence": int(data.get("confidence", 1)),
+                "new_content": str(data.get("new_content", "")).strip(),
+                "reasoning": str(data.get("reasoning", "")),
+            }
+        except (json.JSONDecodeError, ValueError):
+            return {
+                "improved": False,
+                "confidence": 1,
+                "new_content": "",
+                "reasoning": "parse failed",
+            }
+
     async def _log_attempt(
         self, skill_name: str, generator_model: str, evaluator_model: str, status: str, ev: dict
     ) -> None:

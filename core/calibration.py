@@ -12,12 +12,15 @@ Dua bagian, sengaja dipisah:
    Apply tetap keputusan manusia (tombol di /metrics), bukan auto-apply (§8).
 """
 
+import time
 from dataclasses import dataclass
 
 from infra.database import DatabaseManager
 
 # Key di app_settings tempat offset threshold aktif disimpan (dibaca SmartRouter).
 ROUTER_OFFSET_KEY = "router_threshold_offset"
+# Timestamp percobaan auto-apply terakhir (I4 throttle).
+AUTO_APPLY_TS_KEY = "calibration_auto_last_ts"
 # Batasi offset agar kalibrasi tak pernah membuat router mustahil (semua trivial/critical).
 OFFSET_MIN, OFFSET_MAX = -3, 3
 
@@ -239,4 +242,58 @@ class CalibrationStore:
             """SELECT old_offset, new_offset, reason, source, active, created_at
                FROM calibration_log ORDER BY id DESC LIMIT ?""",
             (limit,),
+        )
+
+    async def maybe_auto_apply(self, config, calibrator: "RoutingCalibrator | None" = None) -> dict:
+        """I4 — guarded auto-apply: router menyetel diri DALAM rem (opt-in §8).
+
+        Tetap dalam rem yang sama dengan apply manual:
+          - Hanya jalan bila `config.calibration_auto_apply=True` (default False, §8).
+          - Throttled (`calibration_auto_interval_sec`) via timestamp di app_settings.
+          - Butuh data cukup (`calibration_auto_min_sample`) — jangan menyetel dari noise.
+          - delta dijepit ke ±`calibration_auto_max_step` (=1), tak pernah melompat.
+          - source='auto' di calibration_log; tetap REVERTIBLE lewat revert() yang sama.
+        Mengembalikan ringkasan keputusan (skipped/applied + alasan).
+        """
+        if not getattr(config, "calibration_auto_apply", False):
+            return {"applied": False, "reason": "disabled"}
+
+        # Throttle: jangan auto-apply lebih sering dari interval.
+        last = await self.db.fetchone(
+            "SELECT value FROM app_settings WHERE key=?", (AUTO_APPLY_TS_KEY,)
+        )
+        now = time.time()
+        if last and last["value"]:
+            try:
+                if now - float(last["value"]) < config.calibration_auto_interval_sec:
+                    return {"applied": False, "reason": "throttled"}
+            except (ValueError, TypeError):
+                pass
+
+        # Hitung rekomendasi dari report terkini.
+        from core.audit import RoutingAuditor
+
+        report = await RoutingAuditor(self.db).calibration_report()
+        total = sum((r.get("total", 0) or 0) for r in report)
+        if total < config.calibration_auto_min_sample:
+            return {"applied": False, "reason": "insufficient_data", "samples": total}
+
+        calibrator = calibrator or RoutingCalibrator()
+        summary = calibrator.summary(report)
+        net = summary.get("net_offset_delta", 0)
+        # Catat timestamp percobaan (sukses/tidak) agar throttle bekerja walau net=0.
+        await self._set_ts(AUTO_APPLY_TS_KEY, now)
+        if net == 0:
+            return {"applied": False, "reason": "no_recommendation"}
+
+        step = max(-config.calibration_auto_max_step, min(config.calibration_auto_max_step, net))
+        result = await self.apply(step, reason="auto-tune dari kalibrasi", source="auto")
+        return {"applied": True, "delta": step, **result}
+
+    async def _set_ts(self, key: str, ts: float) -> None:
+        await self.db.execute(
+            """INSERT INTO app_settings (key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value,
+               updated_at=CURRENT_TIMESTAMP""",
+            (key, str(ts)),
         )

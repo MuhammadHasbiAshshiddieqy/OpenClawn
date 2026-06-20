@@ -58,11 +58,14 @@ Skill yang dipelajari agent beserta metadata decay.
 | `last_used_at` | TIMESTAMP | Waktu terakhir dipakai |
 | `decay_score` | REAL | Skor decay saat ini (1.0 = fresh, 0.0 = habis) |
 | `created_at` | TIMESTAMP | |
+| `merged_into` | INTEGER | I1: bila skill ini diserap merge → id winner (status `merged`) |
+| `version` | INTEGER | I3: dinaikkan tiap refine/merge (riwayat di `skill_versions`) |
+| `draft_success_count` | INTEGER | I2: berapa kali draft dipakai-sukses (→ promote di ambang `draft_promote_uses`) |
 
 **Constraint:** `UNIQUE(role, skill_name)` — nama skill unik per role.  
 **Index:** `idx_skills_active` pada `(role, status, decay_score DESC)` — untuk query `get_active_skills`.
 
-Status lifecycle: `active` → (decay) → `archived` → (mark_used) → `active` lagi.
+Status lifecycle: `active` → (decay) → `archived` → (mark_used) → `active` lagi; `draft` → (I2 promote) → `active`; `active` → (I1 merge) → `merged` (revertible). Status `merged` = isi diserap skill lain, tidak dihapus.
 
 ---
 
@@ -343,6 +346,79 @@ Satu baris per run autopilot, untuk ditinjau di `/autopilots`.
 **Index:** `idx_autopilot_runs` pada `(autopilot_id, id DESC)`.
 
 **Catatan `approval_log`:** autopilot mengantri aksi destruktif dengan `decision='proposal:pending'` (bukan `pending:{id}` seperti approval interaktif). Ditampilkan di `/autopilots` sebagai proposal menunggu tinjauan.
+
+---
+
+### `curation_log` — Jejak Konsolidasi Skill (I1)
+
+Setiap merge/revert skill mirip dicatat oleh `SkillCuratorManager`. Loser tidak dihapus (revertible); tabel ini membuat keputusan merge kasat mata di `/skills`.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `role` | TEXT | Role pemilik skill |
+| `action` | TEXT | `merge` \| `revert_merge` |
+| `winner_id` | INTEGER | Skill yang bertahan (hasil sintesis) |
+| `loser_ids` | TEXT | JSON array id skill yang diserap (status `merged`) |
+| `similarity` | REAL | Skor pre-filter leksikal Jaccard (0..1) |
+| `judge_confidence` | INTEGER | 1..5 dari LLM judge |
+| `reasoning` | TEXT | Satu kalimat alasan judge |
+| `created_at` | TIMESTAMP | — |
+
+**Index:** `idx_curation_role` pada `(role, created_at DESC)`. Merge hanya bila judge ≥ `curation_judge_min_confidence`.
+
+---
+
+### `skill_versions` — Riwayat Versi Skill (I3/I1 — revertible)
+
+Konten skill SEBELUM tiap refine/merge, agar perubahan dapat ditinjau & dibatalkan.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `skill_id` | INTEGER | Skill yang berubah |
+| `version` | INTEGER | Versi konten yang disimpan (sebelum perubahan) |
+| `skill_content` | TEXT | Konten lama |
+| `reason` | TEXT | `refine_on_correction` \| `merge` |
+| `created_at` | TIMESTAMP | — |
+
+**Index:** `idx_skill_versions_skill` pada `(skill_id, version DESC)`.
+
+---
+
+### `skill_usage_pending` — Jembatan Outcome Antar-Turn (I2/I3)
+
+AgentLoop dibuat baru tiap request → "skill apa dipakai turn lalu" harus dipersistenkan agar turn berikutnya (yang membawa `had_correction`) bisa menentukan outcome: sukses → revive/promote; dikoreksi → reset/refine. Dikelola `SkillFeedback`.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `session_id` | TEXT | Sesi pemilik |
+| `role` | TEXT | Role agent |
+| `skill_ids` | TEXT | JSON array skill_id yang dipakai turn itu |
+| `resolved` | INTEGER | 1 = outcome sudah diproses |
+| `created_at` | TIMESTAMP | — |
+
+**Index:** `idx_skill_usage_pending` pada `(session_id, resolved, id DESC)`.
+
+---
+
+### `user_model` — Profil User Naratif (I5, opsional)
+
+Ringkasan naratif tentang user (dari L2 facts), disuntik sebagai blok stabil di context. Aktif hanya bila `user_model_enabled`. Versioned + revertible; dapat dihapus user (privasi §1). Dikelola `UserModel`.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `role` | TEXT | Role pemilik lensa |
+| `version` | INTEGER | Versi profil |
+| `profile` | TEXT | Ringkasan naratif (maks ~600 char) |
+| `active` | INTEGER | 1 = versi aktif yang disuntik |
+| `created_at` | TIMESTAMP | — |
+
+**Index:** `idx_user_model_role` pada `(role, active, version DESC)`.
+
+**Catatan `app_settings`:** key baru `calibration_auto_last_ts` (throttle I4), `curation_last_ts:{role}` & `user_model_last_ts:{role}` (throttle I1/I5), serta `calibration_log.source='auto'` (I4 auto-apply).
 
 ---
 

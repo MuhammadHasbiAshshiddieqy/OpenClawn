@@ -6,6 +6,27 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added — Compounding Intelligence (Sprint 6–8, Hermes-parity)
+Library skill kini **merapikan & memperbaiki dirinya** seiring pemakaian — efek
+compounding, tetap dalam rem: gated, versioned, revertible, auditable.
+- **Prasyarat — revive ter-wire:** `mark_used` dulu ada tapi tak pernah dipanggil
+  (revive dorman); kini di-wire via `SkillFeedback` + tabel `skill_usage_pending`.
+- **I1 Skill Curator** (`memory/curator.py`) — gabung/dedup skill mirip (pre-filter
+  Jaccard → LLM judge gated ≥4). Loser jadi `merged` (tak dihapus), revertible.
+  Panel "Curation" + tombol Batalkan di `/skills`; jejak di `curation_log`.
+- **I2 Draft auto-promotion** — draft yang dipakai-sukses N× naik `active`; dikoreksi
+  → reset. Draft dapat 1 slot percobaan di `get_active_skills`.
+- **I3 Skill refine-on-correction** — skill yang menyesatkan (turn-nya dikoreksi)
+  ditulis ulang oleh evaluator ≥ generator, hanya bila confident; versi lama di
+  `skill_versions` (revertible).
+- **I4 Guarded auto-apply** kalibrasi routing — opt-in (`calibration_auto_apply`,
+  default OFF §8), throttled, clamp ±1, `source='auto'`, tetap revertible. Badge
+  `auto-tune` di `/metrics`.
+- **I5 Dialectic user model** (opsional, `memory/user_model.py`) — profil user naratif
+  lintas sesi, default OFF, versioned, dapat dihapus (privasi §1).
+
+Semua pass throttled & post-turn (tak memblokir turn). +35 test (373→408).
+
 ### Added — fitur terinspirasi Multica (multica-ai/multica)
 - **Activity Timeline** (`/activity`) — linimasa kronologis aksi agent lintas tabel
   (routing · tool · handoff · conversation · crystallize · blocker), filter per role.

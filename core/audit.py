@@ -91,13 +91,16 @@ class RoutingAuditor:
             ),
         )
 
-    async def check_correction(self, user_message: str, session_id: str) -> None:
+    async def check_correction(self, user_message: str, session_id: str) -> bool:
         """
         Dipanggil di AWAL turn berikutnya. Deteksi apakah turn sebelumnya dikoreksi user.
+
+        Return True bila pesan ini mengoreksi turn sebelumnya (dipakai SkillFeedback
+        untuk memutuskan outcome skill turn lalu: refine/reset vs revive/promote).
         """
         msg = user_message.lower()
         if not any(sig in msg for sig in CORRECTION_SIGNALS):
-            return
+            return False
         await self.db.execute(
             """
             UPDATE routing_events SET had_correction=1, correction_detail=?
@@ -106,6 +109,7 @@ class RoutingAuditor:
             """,
             (user_message[:200], session_id),
         )
+        return True
 
     async def calibration_report(self) -> list[dict]:
         """Complexity label mana yang sering memicu koreksi → router under-provisioned."""
