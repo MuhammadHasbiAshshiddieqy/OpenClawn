@@ -49,6 +49,48 @@ class AppConfig:
     # I5 — Dialectic user model (opsional): profil user naratif lintas sesi.
     user_model_enabled: bool = False
     user_model_interval_sec: int = 86_400
+    # Keyword routing (§1.5: locale TIDAK boleh hardcoded di core). Default ID+EN;
+    # tambahkan keyword bahasa lain di sini atau lewat soul.toml [routing] tiap role
+    # (router menggabungkan default + soul). Query non-ID/EN tetap dirute oleh sinyal
+    # netral-bahasa (panjang query/history) walau keyword tak cocok — degrade anggun.
+    routing_tech_keywords: tuple = field(
+        default_factory=lambda: (
+            "code",
+            "debug",
+            "review",
+            "arsitektur",
+            "architecture",
+            "implement",
+            "refactor",
+            "query",
+            "database",
+            "api",
+            "deploy",
+            "bug",
+        )
+    )
+    routing_multistep_keywords: tuple = field(
+        default_factory=lambda: (
+            "analisis",
+            "analyze",
+            "bandingkan",
+            "compare",
+            "rencana",
+            "plan",
+            "langkah",
+            "step",
+            "strategi",
+            "strategy",
+            "breakdown",
+            "jelaskan detail",
+            "explain in detail",
+            "evaluasi",
+            "evaluate",
+        )
+    )
+    routing_urgency_keywords: tuple = field(
+        default_factory=lambda: ("urgent", "segera", "deadline", "asap", "penting", "important")
+    )
     # Workspace root: semua tool file (read/write/edit/glob/grep/list_dir) dibatasi
     # ke folder ini. Path di luar root ditolak (anti ../ & symlink escape). Keamanan #1.
     workspace_root: str = "."

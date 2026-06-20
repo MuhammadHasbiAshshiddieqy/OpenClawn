@@ -154,3 +154,47 @@ def test_complexity_enum_maps_all_levels():
         assert model  # tidak boleh kosong
         assert provider in ("ollama", "gemini", "anthropic")
         assert cost >= 0.0
+
+
+# ── Multibahasa: keyword routing dari config + soul (§1.5) ────────────────────
+
+
+def test_english_tech_keyword_detected(pm_router):
+    """Default config kini ID+EN: kata teknis Inggris terdeteksi."""
+    route = pm_router.decide(messages=[], query="please review and refactor this code")
+    assert route.dimensions["has_tech_kw"] == 1
+
+
+def test_english_multistep_keyword_detected(pm_router):
+    """Kata multi-langkah Inggris (analyze/compare) terdeteksi."""
+    route = pm_router.decide(messages=[], query="analyze and compare two approaches")
+    assert route.dimensions["needs_multistep"] == 1
+
+
+def test_soul_can_add_locale_keywords(tmp_path):
+    """soul.toml [routing] dapat menambah keyword bahasa lain tanpa edit core (§1.5).
+
+    Bahasa Spanyol 'analizar' tak ada di default → tambah lewat soul → terdeteksi.
+    """
+    soul = tmp_path / "soul.toml"
+    soul.write_text(
+        "[routing]\nprefer_local = false\n"
+        'multistep_keywords = ["analizar", "comparar"]\n'
+        'tech_keywords = ["codigo"]\n'
+    )
+    router = SmartRouter(role="dev", soul_path=str(soul))
+    route = router.decide(messages=[], query="analizar el codigo del sistema")
+    assert route.dimensions["needs_multistep"] == 1
+    assert route.dimensions["has_tech_kw"] == 1
+
+
+def test_unknown_language_falls_back_to_neutral_signal(tmp_path):
+    """Bahasa tanpa keyword cocok tetap dirute oleh sinyal netral (panjang query)."""
+    soul = tmp_path / "soul.toml"
+    soul.write_text("[routing]\nprefer_local = false\nupgrade_keywords = []\n")
+    router = SmartRouter(role="dev", soul_path=str(soul))
+    # Query Jepang tanpa keyword cocok → has_tech_kw=0, tapi tetap dapat skor dari panjang.
+    short = router.decide(messages=[], query="こんにちは")
+    long = router.decide(messages=[], query="システム " * 60)
+    assert short.dimensions["has_tech_kw"] == 0  # keyword tak cocok
+    assert long.complexity_score > short.complexity_score  # sinyal netral tetap jalan

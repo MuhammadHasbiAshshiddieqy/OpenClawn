@@ -2,6 +2,8 @@ import tomllib
 from dataclasses import dataclass
 from enum import Enum
 
+from infra.config import CONFIG, AppConfig
+
 
 class Complexity(Enum):
     TRIVIAL = "trivial"
@@ -42,37 +44,28 @@ class SmartRouter:
         Complexity.CRITICAL: ("gemini-2.5-pro", "gemini", 0.0),
     }
 
-    BASE_TECH_KW = [
-        "code",
-        "debug",
-        "review",
-        "arsitektur",
-        "implement",
-        "refactor",
-        "query",
-        "database",
-        "api",
-        "deploy",
-        "bug",
-    ]
-    MULTI_KW = [
-        "analisis",
-        "bandingkan",
-        "rencana",
-        "langkah",
-        "strategi",
-        "breakdown",
-        "jelaskan detail",
-        "evaluasi",
-    ]
-    URGENCY_KW = ["urgent", "segera", "deadline", "asap", "penting"]
-
-    def __init__(self, role: str, soul_path: str | None = None, threshold_offset: int = 0):
+    def __init__(
+        self,
+        role: str,
+        soul_path: str | None = None,
+        threshold_offset: int = 0,
+        config: AppConfig = CONFIG,
+    ):
         self.role = role
         soul = self._load_soul(role, soul_path)
         routing_cfg = soul.get("routing", {})
         self.prefer_local: bool = routing_cfg.get("prefer_local", False)
         self.soul_upgrade_kw: list[str] = routing_cfg.get("upgrade_keywords", [])
+        # Keyword routing dari config (§1.5: tak hardcoded locale di core) + ekstra
+        # locale-spesifik dari soul.toml [routing] (tech_keywords/multistep_keywords/
+        # urgency_keywords). Digabung & di-lowercase sekali agar deteksi multibahasa.
+        self.tech_kw = self._merge_kw(config.routing_tech_keywords, routing_cfg, "tech_keywords")
+        self.multi_kw = self._merge_kw(
+            config.routing_multistep_keywords, routing_cfg, "multistep_keywords"
+        )
+        self.urgency_kw = self._merge_kw(
+            config.routing_urgency_keywords, routing_cfg, "urgency_keywords"
+        )
         # Audit #1 (loop tertutup): offset global hasil kalibrasi. Negatif = router
         # naik tier lebih cepat (perbaiki under-provisioning); positif = bertahan di
         # tier murah lebih lama (perbaiki over-provisioning). Default 0 = router asli.
@@ -83,6 +76,12 @@ class SmartRouter:
         # model tiap tier lewat /router tanpa mengubah kode. Router tetap memutuskan
         # TIER; peta ini hanya menentukan MODEL untuk tier itu.
         self.model_map: dict[Complexity, tuple[str, str, float]] = dict(self.MODELS)
+
+    @staticmethod
+    def _merge_kw(defaults: tuple, routing_cfg: dict, soul_key: str) -> list[str]:
+        """Gabung keyword default (config) + ekstra locale dari soul, lowercase, dedup."""
+        extra = routing_cfg.get(soul_key, []) or []
+        return sorted({str(k).lower() for k in (*defaults, *extra)})
 
     def _load_soul(self, role: str, soul_path: str | None) -> dict:
         path = soul_path or f"roles/{role}/soul.toml"
@@ -127,11 +126,11 @@ class SmartRouter:
         q = query.lower()
         return {
             "query_tokens": int(len(query.split()) * 1.3),
-            "has_tech_kw": int(any(k in q for k in self.BASE_TECH_KW)),
-            "needs_multistep": int(any(k in q for k in self.MULTI_KW)),
+            "has_tech_kw": int(any(k in q for k in self.tech_kw)),
+            "needs_multistep": int(any(k in q for k in self.multi_kw)),
             "history_len": len(messages),
             "role": self.role,
-            "has_urgency": int(any(k in q for k in self.URGENCY_KW)),
+            "has_urgency": int(any(k in q for k in self.urgency_kw)),
             "needs_stream": 1,
             "is_continuation": int(len(messages) > 2),
         }

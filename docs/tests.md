@@ -32,6 +32,10 @@ Test untuk `core/router.py` (Inovasi 1 — routing).
 | `test_trivial_query_routes_to_e2b` | Query pendek → gemma4:e2b |
 | `test_tech_keyword_raises_score` | Kata teknis menaikkan skor |
 | `test_all_dimensions_in_route_decision` | Semua 8 dimensi ada di `RouteDecision.dimensions` |
+| `test_english_tech_keyword_detected` | Keyword teknis Inggris terdeteksi (default config ID+EN) |
+| `test_english_multistep_keyword_detected` | Keyword multi-langkah Inggris (analyze/compare) terdeteksi |
+| `test_soul_can_add_locale_keywords` | soul.toml dapat menambah keyword bahasa lain (Spanyol) tanpa edit core (§1.5) |
+| `test_unknown_language_falls_back_to_neutral_signal` | Bahasa tanpa keyword cocok tetap dirute oleh sinyal netral (panjang) |
 
 ---
 

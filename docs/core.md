@@ -264,8 +264,10 @@ Keputusan routing yang dikembalikan `SmartRouter.decide()`.
 
 ### Kelas: `SmartRouter`
 
-**`__init__(role, soul_path=None, threshold_offset=0)`**  
+**`__init__(role, soul_path=None, threshold_offset=0, config=CONFIG)`**  
 Baca `soul.toml` sekali dan ekstrak `prefer_local` serta `upgrade_keywords`. `threshold_offset` = offset kalibrasi global (loop tertutup #1): negatif → router naik tier lebih cepat, positif → bertahan tier murah lebih lama, `0` → perilaku asli. `AgentLoop` menyetel `router.threshold_offset = await CalibrationStore.get_offset()` sebelum tiap `decide()`.
+
+**Keyword routing multibahasa (§1.5).** Keyword deteksi kompleksitas (tech/multistep/urgency) TIDAK lagi hardcoded di core — dibaca dari `config.routing_*_keywords` (default ID+EN), dan `soul.toml [routing]` dapat menambah keyword locale-spesifik per role (`tech_keywords`, `multistep_keywords`, `urgency_keywords`) via `_merge_kw` (digabung, lowercase, dedup). Query dalam bahasa tanpa keyword cocok tetap dirute oleh sinyal **netral-bahasa** (panjang query, panjang history, continuation) — degrade anggun, bukan gagal.
 
 **`decide(messages, query) → RouteDecision`**  
 Hitung dimensi → skor → label → pilih model. Soul upgrade_keyword menambah +3 ke skor dan **bypass** `prefer_local`. `threshold_offset` kalibrasi selalu berlaku (termasuk saat soul hit). Model untuk tier diambil dari `self.model_map` (default = `MODELS`, bisa di-override per-turn dari `RouterConfigStore`); fallback ke `MODELS` bila tier tak ada di peta override.

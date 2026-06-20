@@ -6,6 +6,14 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Changed — routing multibahasa (§1.5)
+- Keyword deteksi kompleksitas router (tech/multistep/urgency) tak lagi hardcoded di
+  `core/router.py` — pindah ke `AppConfig.routing_*_keywords` (default ID+EN, kini
+  termasuk padanan Inggris). `soul.toml [routing]` dapat menambah keyword locale per
+  role (`tech_keywords`/`multistep_keywords`/`urgency_keywords`). Memperbaiki
+  pelanggaran §1.5 (Bahasa Indonesia hardcoded di core). Query bahasa lain tetap
+  dirute oleh sinyal netral-bahasa (panjang query/history) — degrade anggun. +4 test.
+
 ### Added — Compounding Intelligence (Sprint 6–8, Hermes-parity)
 Library skill kini **merapikan & memperbaiki dirinya** seiring pemakaian — efek
 compounding, tetap dalam rem: gated, versioned, revertible, auditable.

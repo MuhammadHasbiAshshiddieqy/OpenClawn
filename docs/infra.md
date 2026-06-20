@@ -33,6 +33,9 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `max_active_skills` | `8` | Maksimum skill aktif yang di-load per turn |
 | `confidence_threshold` | `4` | Batas bawah confidence crystallizer (1–5) |
 | `archive_after_turns` | `6` | Jumlah turn sebelum sesi diarsipkan ke L4 |
+| `routing_tech_keywords` | ID+EN | Keyword teknis untuk skor routing (§1.5: tak hardcoded locale; soul.toml dapat menambah per role) |
+| `routing_multistep_keywords` | ID+EN | Keyword multi-langkah (analyze/compare/analisis/bandingkan…) |
+| `routing_urgency_keywords` | ID+EN | Keyword urgensi (urgent/segera/deadline…) |
 | `fallback_chain` | lihat di bawah | Urutan model jika provider utama gagal |
 
 **Fallback chain default:**
