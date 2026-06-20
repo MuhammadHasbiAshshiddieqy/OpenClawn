@@ -15,7 +15,7 @@
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
     <img src="https://img.shields.io/badge/LLM-Ollama%20%2B%20Gemini%20%2B%20Claude-purple" alt="Hybrid LLM">
     <img src="https://img.shields.io/badge/tools-26-orange" alt="26 Tools">
-    <img src="https://img.shields.io/badge/tests-325%20passing-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-420%20passing-brightgreen" alt="Tests">
   </p>
 </div>
 
@@ -32,8 +32,17 @@ OpenCLAWN is an agent framework built around **4 core innovations** that most ag
 | **Confidence-gated crystallization** | Self-evolving agents store skills from bad solutions |
 | **Role output contracts** | Multi-agent handoffs without typed contracts are fragile |
 
-Plus a **multi-agent conversation layer** (pipeline / debate / orchestrator) where roles hand off
-to each other, with live stop and interject.
+Built on top of those, the agent **compounds** — the skill library tidies and improves itself
+as it's used, all gated and reversible:
+
+| Capability | What it does |
+|---|---|
+| **Multi-agent conversation** | Pipeline / debate / orchestrator where roles hand off with validated contracts; live stop & interject |
+| **Skill compounding** | Skills get promoted when proven, refined when corrected, and merged when duplicate (all versioned & revertible) |
+| **Autopilots** | Scheduled agent runs — read-only; actions needing approval become *proposals*, never silent execution |
+| **Skill packs** | Export/import skills between installs (Markdown + hash), imported as `draft` behind SSRF + injection guards |
+| **Activity timeline** | Chronological view of every agent action across routing, tools, handoffs, conversations |
+| **Multilingual routing** | Language-agnostic complexity signals + optional script-aware tier bump |
 
 **Stack:** Python 3.12 · FastAPI · HTMX · SQLite (aiosqlite) · Ollama + Gemini + Claude · httpx · Pydantic · structlog · tenacity
 
@@ -406,17 +415,34 @@ audit DB.
 
 ```
 openclawn/
-├── core/           # agent_loop · llm_client · router · audit · calibration
+├── core/           # agent_loop · llm_client · router (multilingual) · audit · calibration
 │                   # crystallizer · compactor · conversation (multi-agent)
+│                   # activity (timeline) · autopilot (scheduler) · skill_pack · tool_audit
 ├── infra/          # config · database (WAL, POWER()) · logging · env · workspace
-├── memory/         # layers (L1–L4) · skill_decay · search (FTS5)
-├── roles/          # pm/qa/dev soul.toml · contracts (Pydantic) · registry
+├── memory/         # layers (L1–L4) · skill_decay · curator (merge) · skill_feedback
+│                   # user_model · search (FTS5)
+├── roles/          # pm/qa/dev/data/security soul.toml · contracts (Pydantic) · registry
 ├── tools/          # 26 tools: file_ops · read_many · search · shell · code · web · git
-│                   # document (pdf_read · doc_write · pdf_write) · data · todo · interaction
-├── security/       # vault · shield (NFKD) · approval (HITL gate)
-├── web/            # FastAPI app · HTMX templates · SSE streaming
+│                   # document (pdf_read · doc_write · pdf_write) · todo · report_blocker
+├── security/       # vault · shield (NFKD) · approval (HITL + proposal queue) · question
+├── web/            # FastAPI app · HTMX templates · SSE · /activity /autopilots /skills
 ├── migrations/     # 001_initial.sql
-└── tests/          # 17 files, 194 tests — one per innovation + tools + web
+└── tests/          # 30 files, 420 tests — innovations, tools, web, compounding
+```
+
+The 4 core innovations are stable; everything above (multi-agent, autopilots, skill
+compounding, skill packs) builds on them. See [CHANGELOG.md](CHANGELOG.md) for the full
+feature history.
+
+```text
+(structure continued — key runtime pages)
+/                  chat · single & multi-agent modes
+/activity          timeline of agent actions + open blockers
+/autopilots        scheduled runs + pending proposals
+/skills            decay curves · crystallization · curation · skill packs
+/metrics           routing calibration · tool telemetry
+/conversations     multi-agent transcripts
+/router · /settings  tier→model map · model override
 ```
 
 ---
@@ -438,8 +464,8 @@ Detailed reference for every module, class, and function:
 | Folder | Doc |
 |---|---|
 | `infra/` | [docs/infra.md](docs/infra.md) — config, database, logging |
-| `core/` | [docs/core.md](docs/core.md) — agent loop, LLM client, router, audit, crystallizer, calibration, conversation |
-| `memory/` | [docs/memory.md](docs/memory.md) — L1–L4 layers, skill decay, FTS5 search |
+| `core/` | [docs/core.md](docs/core.md) — agent loop, LLM client, router (multilingual), audit, crystallizer, calibration, conversation, activity, autopilot, skill packs |
+| `memory/` | [docs/memory.md](docs/memory.md) — L1–L4 layers, skill decay, curator (merge), skill feedback (promote/refine), user model, FTS5 search |
 | `roles/` | [docs/roles.md](docs/roles.md) — contracts, role registry, soul.toml format |
 | `security/` | [docs/security.md](docs/security.md) — vault, shield, approval gate HITL |
 | `tools/` | [docs/tools.md](docs/tools.md) — 26 tools, permission matrix, Docker sandbox |
@@ -458,18 +484,23 @@ Detailed reference for every module, class, and function:
 | 2 | Tools · Docker sandbox · Crystallizer · Skill decay | Done |
 | 3 | Role contracts · Vault · Shield · ApprovalGate (HITL) | Done |
 | 4 | Coverage · Calibration advisor · (router tuning needs live data) | Ongoing |
-| 5 | Multi-agent conversation · 18-tool suite · Gemini provider · UI redesign | Done |
+| 5 | Multi-agent conversation · Gemini provider · UI redesign | Done |
+| 5+ | Tooling to 26 (git · todo · docs · pdf · blocker) · SSRF guard · CI + uv.lock | Done |
+| 5++ | Autopilots (scheduled, proposal-gated) · Activity timeline · Skill packs | Done |
+| 6–8 | Compounding intelligence: skill curator · draft promotion · refine · guarded auto-apply · user model | Done |
+| — | Multilingual routing (structural + script-aware signals) | Done |
 
 ---
 
 ## Design Principles
 
-- **Security first** — `code_run` and `shell_run` only run inside Docker (`network none`, `read-only`, non-root, timeout); they never touch the host
+- **Security first** — `code_run` and `shell_run` only run inside Docker (`network none`, `read-only`, non-root, timeout); they never touch the host. Web tools have an anti-SSRF guard; autopilots never execute approval-gated actions (they queue proposals)
 - **Workspace-bounded** — every file tool resolves paths and rejects escapes outside the workspace root
 - **No SDK** — raw `httpx` for all LLM calls, intentional for audit transparency
 - **Token-first** — context budget tracked; prompt caching on stable system blocks
-- **No hardcoded domain/locale** — locale via field, not in code
-- **Every innovation = extractable module** — `skill_decay`, `audit`, `crystallizer`, `contracts` have clean interfaces
+- **No hardcoded domain/locale** — locale via field & config, not in code (routing keywords moved out of core)
+- **Gated, versioned, reversible** — self-improvement (merge/refine/promote/auto-tune) always behind confidence gates, with audit trails and revert
+- **Every innovation = extractable module** — `skill_decay`, `audit`, `crystallizer`, `contracts`, `curator`, `activity` have clean interfaces
 
 ---
 

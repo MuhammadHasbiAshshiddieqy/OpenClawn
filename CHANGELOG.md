@@ -6,6 +6,14 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.4.0-alpha] — 2026-06-20
+
+Pre-release kedua. Membangun di atas 4 inovasi inti: multi-agent conversation matang,
+**autopilots** terjadwal (proposal-gated), **skill packs** (export/import), **compounding
+intelligence** (skill yang merapikan & memperbaiki dirinya), **activity timeline**,
+**blocker reporting**, **routing multibahasa**, dan pengerasan keamanan (SSRF guard).
+Masih fase research — single-user, API dapat berubah, test memakai mock LLM.
+
 ### Changed — routing multibahasa (§1.5), tiga lapis sinyal
 Routing kini menangani dua masalah multibahasa secara eksplisit (deterministik, tanpa LLM):
 - **Keyword config+soul (§1.5):** keyword tech/multistep/urgency tak lagi hardcoded di
