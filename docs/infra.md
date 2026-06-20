@@ -36,6 +36,8 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `routing_tech_keywords` | ID+EN | Keyword teknis untuk skor routing (§1.5: tak hardcoded locale; soul.toml dapat menambah per role) |
 | `routing_multistep_keywords` | ID+EN | Keyword multi-langkah (analyze/compare/analisis/bandingkan…) |
 | `routing_urgency_keywords` | ID+EN | Keyword urgensi (urgent/segera/deadline…) |
+| `routing_language_bump` | `False` | Multibahasa lapis 2 (opt-in): naikkan tier bila script query di luar `routing_local_scripts` (model cloud lebih multibahasa). Default OFF agar tak menambah biaya |
+| `routing_local_scripts` | `("latin",)` | Script (sistem tulisan) yang dianggap kuat di tier lokal — query di luar ini di-bump bila `routing_language_bump` aktif |
 | `fallback_chain` | lihat di bawah | Urutan model jika provider utama gagal |
 
 **Fallback chain default:**

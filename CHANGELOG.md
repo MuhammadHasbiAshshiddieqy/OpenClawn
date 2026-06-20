@@ -6,13 +6,19 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 
 ## [Unreleased]
 
-### Changed — routing multibahasa (§1.5)
-- Keyword deteksi kompleksitas router (tech/multistep/urgency) tak lagi hardcoded di
-  `core/router.py` — pindah ke `AppConfig.routing_*_keywords` (default ID+EN, kini
-  termasuk padanan Inggris). `soul.toml [routing]` dapat menambah keyword locale per
-  role (`tech_keywords`/`multistep_keywords`/`urgency_keywords`). Memperbaiki
-  pelanggaran §1.5 (Bahasa Indonesia hardcoded di core). Query bahasa lain tetap
-  dirute oleh sinyal netral-bahasa (panjang query/history) — degrade anggun. +4 test.
+### Changed — routing multibahasa (§1.5), tiga lapis sinyal
+Routing kini menangani dua masalah multibahasa secara eksplisit (deterministik, tanpa LLM):
+- **Keyword config+soul (§1.5):** keyword tech/multistep/urgency tak lagi hardcoded di
+  core → `AppConfig.routing_*_keywords` (default ID+EN) + ekstra per role via
+  `soul.toml [routing]`. Memperbaiki pelanggaran §1.5.
+- **Sinyal struktural bahasa-agnostik** (`has_code_signal`): deteksi code fence/URL/
+  simbol kode → query teknis pendek dalam bahasa APA PUN naik tier tanpa keyword.
+- **Language bump (Masalah B, opt-in `routing_language_bump`, default OFF):** deteksi
+  script query via Unicode (`_detect_script`); bila di luar `routing_local_scripts`
+  (default `latin`), naikkan tier ke model cloud yang umumnya lebih multibahasa —
+  menjawab "model belum tentu kuat di semua bahasa".
+- Didokumentasikan lengkap di `docs/core.md` (cara kerja, keterbatasan jujur, cara
+  perluas). +12 test (router 16→28, total 408→420).
 
 ### Added — Compounding Intelligence (Sprint 6–8, Hermes-parity)
 Library skill kini **merapikan & memperbaiki dirinya** seiring pemakaian — efek

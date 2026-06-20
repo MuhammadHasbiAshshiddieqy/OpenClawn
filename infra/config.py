@@ -91,6 +91,12 @@ class AppConfig:
     routing_urgency_keywords: tuple = field(
         default_factory=lambda: ("urgent", "segera", "deadline", "asap", "penting", "important")
     )
+    # Multibahasa lapis 2 — kapabilitas bahasa model (bukan kompleksitas):
+    # script (sistem tulisan) yang DIANGGAP kuat di tier lokal kecil. Query di luar
+    # daftar ini → naikkan tier (model cloud umumnya lebih multibahasa). Opt-in:
+    # default OFF agar tak menaikkan biaya tanpa diminta. `latin` mencakup ID/EN/ES/dst.
+    routing_language_bump: bool = False
+    routing_local_scripts: tuple = field(default_factory=lambda: ("latin",))
     # Workspace root: semua tool file (read/write/edit/glob/grep/list_dir) dibatasi
     # ke folder ini. Path di luar root ditolak (anti ../ & symlink escape). Keamanan #1.
     workspace_root: str = "."

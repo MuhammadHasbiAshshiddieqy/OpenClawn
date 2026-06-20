@@ -76,6 +76,9 @@ class SmartRouter:
         # model tiap tier lewat /router tanpa mengubah kode. Router tetap memutuskan
         # TIER; peta ini hanya menentukan MODEL untuk tier itu.
         self.model_map: dict[Complexity, tuple[str, str, float]] = dict(self.MODELS)
+        # Multibahasa lapis 2: kapabilitas bahasa model (opt-in).
+        self.language_bump: bool = config.routing_language_bump
+        self.local_scripts: set[str] = {s.lower() for s in config.routing_local_scripts}
 
     @staticmethod
     def _merge_kw(defaults: tuple, routing_cfg: dict, soul_key: str) -> list[str]:
@@ -106,6 +109,17 @@ class SmartRouter:
         # perilaku router secara global berdasar bukti correction-rate, bukan keyword.
         threshold_shift += self.threshold_offset
 
+        # Multibahasa lapis 2 (opt-in): bila script query DI LUAR yang kuat di tier
+        # lokal, geser threshold turun (-1) → naik tier ke model cloud yang umumnya
+        # lebih multibahasa. Menjawab "model belum tentu support semua bahasa".
+        script = self._detect_script(query)
+        dims["query_script"] = script
+        language_bumped = False
+        if self.language_bump and script not in self.local_scripts:
+            threshold_shift -= 1
+            language_bumped = True
+        dims["language_bumped"] = int(language_bumped)
+
         complexity = self._label(score, threshold_shift)
         # Pakai peta aktif (default MODELS, atau override dari /router); fallback ke
         # MODELS bila tier tak ada di peta override (jaga-jaga peta korup/parsial).
@@ -133,7 +147,54 @@ class SmartRouter:
             "has_urgency": int(any(k in q for k in self.urgency_kw)),
             "needs_stream": 1,
             "is_continuation": int(len(messages) > 2),
+            # Sinyal struktural BAHASA-AGNOSTIK: "tulis fungsi" dalam bahasa apa pun
+            # biasanya membawa code block / simbol kode / URL. Menutup kelemahan keyword
+            # (query teknis pendek non-ID/EN tak terdeteksi) tanpa daftar keyword.
+            "has_code_signal": int(self._has_code_signal(query)),
         }
+
+    @staticmethod
+    def _has_code_signal(query: str) -> bool:
+        """Deteksi sinyal kode/teknis lintas bahasa (heuristik, deterministik, tanpa LLM).
+
+        Positif bila ada: code fence (```), URL, ATAU ≥2 simbol khas kode. Universal —
+        tak bergantung kata bahasa tertentu.
+        """
+        if "```" in query or "http://" in query or "https://" in query:
+            return True
+        code_symbols = sum(
+            query.count(c) for c in ("{", "}", "(", ")", ";", "=>", "[]", "==", "()")
+        )
+        return code_symbols >= 2
+
+    def _detect_script(self, query: str) -> str:
+        """Deteksi sistem tulisan dominan (coarse, via Unicode block). Bukan deteksi
+        bahasa penuh — cukup untuk memutuskan apakah tier lokal kemungkinan menanganinya.
+
+        Mengembalikan label script: 'latin' | 'cjk' | 'arabic' | 'cyrillic' |
+        'devanagari' | 'other'. Karakter ASCII/whitespace/angka diabaikan.
+        """
+        counts: dict[str, int] = {}
+        for ch in query:
+            if ch.isascii() or not ch.isalpha():
+                continue
+            code = ord(ch)
+            if 0x4E00 <= code <= 0x9FFF or 0x3040 <= code <= 0x30FF or 0xAC00 <= code <= 0xD7AF:
+                script = "cjk"
+            elif 0x0600 <= code <= 0x06FF:
+                script = "arabic"
+            elif 0x0400 <= code <= 0x04FF:
+                script = "cyrillic"
+            elif 0x0900 <= code <= 0x097F:
+                script = "devanagari"
+            elif 0x00C0 <= code <= 0x024F:
+                script = "latin"  # latin diakritik (é, ñ, ü, ç, dst.)
+            else:
+                script = "other"
+            counts[script] = counts.get(script, 0) + 1
+        if not counts:
+            return "latin"  # murni ASCII → anggap latin (ID/EN/dll.)
+        return max(counts, key=counts.get)
 
     def _score(self, d: dict) -> int:
         s = 0
@@ -149,6 +210,10 @@ class SmartRouter:
             s += 1
         if d["has_urgency"]:
             s += 1
+        # Sinyal struktural bahasa-agnostik: kode/URL → +2 (setara has_tech_kw) agar
+        # query teknis pendek dalam bahasa apa pun naik tier walau keyword tak cocok.
+        if d.get("has_code_signal"):
+            s += 2
         return s
 
     def _label(self, score: int, threshold_shift: int) -> Complexity:

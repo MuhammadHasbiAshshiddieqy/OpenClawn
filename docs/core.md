@@ -267,7 +267,26 @@ Keputusan routing yang dikembalikan `SmartRouter.decide()`.
 **`__init__(role, soul_path=None, threshold_offset=0, config=CONFIG)`**  
 Baca `soul.toml` sekali dan ekstrak `prefer_local` serta `upgrade_keywords`. `threshold_offset` = offset kalibrasi global (loop tertutup #1): negatif → router naik tier lebih cepat, positif → bertahan tier murah lebih lama, `0` → perilaku asli. `AgentLoop` menyetel `router.threshold_offset = await CalibrationStore.get_offset()` sebelum tiap `decide()`.
 
-**Keyword routing multibahasa (§1.5).** Keyword deteksi kompleksitas (tech/multistep/urgency) TIDAK lagi hardcoded di core — dibaca dari `config.routing_*_keywords` (default ID+EN), dan `soul.toml [routing]` dapat menambah keyword locale-spesifik per role (`tech_keywords`, `multistep_keywords`, `urgency_keywords`) via `_merge_kw` (digabung, lowercase, dedup). Query dalam bahasa tanpa keyword cocok tetap dirute oleh sinyal **netral-bahasa** (panjang query, panjang history, continuation) — degrade anggun, bukan gagal.
+### Dukungan multibahasa (penting — dibaca lengkap)
+
+Routing multibahasa OpenCLAWN menangani **dua masalah berbeda**, dengan tiga lapis sinyal yang saling melengkapi. Sengaja **deterministik & tanpa LLM** (routing harus cepat & dapat diaudit) — jadi semuanya heuristik, bukan klasifikasi sempurna.
+
+**Masalah A — menilai KOMPLEKSITAS query lintas bahasa.** Apakah query bahasa X itu rumit?
+
+| Lapis | Sinyal | Multibahasa? | Catatan |
+|---|---|---|---|
+| 1. Netral-bahasa | `query_tokens` (panjang), `history_len`, `is_continuation` | ✅ universal | **Lantai** yang selalu jalan untuk bahasa apa pun, tapi kasar — tak bedakan "tulis quicksort" (pendek tapi kompleks) dari "halo" (pendek trivial). |
+| 2. Keyword | `has_tech_kw`, `needs_multistep`, `has_urgency` | ⚠️ per-bahasa | Dari `config.routing_*_keywords` (default ID+EN) + ekstra soul (`tech_keywords`/`multistep_keywords`/`urgency_keywords`). Tajam, tapi **hanya untuk bahasa yang keyword-nya diisi**. |
+| 3. Struktural | `has_code_signal` (`_has_code_signal`) | ✅ universal | Deteksi code fence ` ``` `, URL, ≥2 simbol kode (`{}();=>` dst). "Tulis fungsi" dalam bahasa apa pun membawa sinyal ini → **menutup kelemahan lapis 2** tanpa daftar keyword. +2 skor. |
+
+**Masalah B — apakah MODEL yang dipilih kuat di bahasa itu?** (`routing_language_bump`, **opt-in, default OFF**). Router mendeteksi *script* (sistem tulisan) query via Unicode block (`_detect_script` → `latin`/`cjk`/`arabic`/`cyrillic`/`devanagari`/`other`). Bila script **di luar** `config.routing_local_scripts` (default `("latin",)` — mencakup ID/EN/ES/dll), threshold digeser −1 → **naik tier** ke model cloud yang umumnya lebih multibahasa. Dimensi `query_script` & `language_bumped` dicatat untuk audit.
+
+**Keterbatasan jujur (by design):**
+- Lapis 2 keyword **per-bahasa** — bahasa baru perlu keyword diisi (config/soul). Tanpa itu, hanya lapis 1+3 yang jalan (masih fungsional, kurang tajam untuk query non-teknis).
+- `_detect_script` deteksi **sistem tulisan, bukan bahasa** — tak bisa bedakan Jepang vs Cina (sama-sama `cjk`), atau Inggris vs Spanyol (sama-sama `latin`). Cukup untuk keputusan tier, tak cukup untuk hal lain.
+- Asumsi "cloud lebih multibahasa" tidak selalu benar untuk SEMUA bahasa — karenanya `routing_language_bump` **opt-in** (menaikkan tier = lebih mahal). Aktifkan bila menargetkan user multibahasa & model lokal Anda lemah di bahasa mereka.
+
+**Cara memperluas:** (1) tambah keyword bahasa target di `config.routing_*_keywords` atau `soul.toml [routing]` per role; (2) bila tier lokal Anda kuat di script tertentu, masukkan ke `routing_local_scripts` agar tak di-bump; (3) aktifkan `routing_language_bump` untuk auto-naik-tier pada bahasa di luar kapasitas lokal.
 
 **`decide(messages, query) → RouteDecision`**  
 Hitung dimensi → skor → label → pilih model. Soul upgrade_keyword menambah +3 ke skor dan **bypass** `prefer_local`. `threshold_offset` kalibrasi selalu berlaku (termasuk saat soul hit). Model untuk tier diambil dari `self.model_map` (default = `MODELS`, bisa di-override per-turn dari `RouterConfigStore`); fallback ke `MODELS` bila tier tak ada di peta override.

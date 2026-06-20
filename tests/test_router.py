@@ -198,3 +198,77 @@ def test_unknown_language_falls_back_to_neutral_signal(tmp_path):
     long = router.decide(messages=[], query="システム " * 60)
     assert short.dimensions["has_tech_kw"] == 0  # keyword tak cocok
     assert long.complexity_score > short.complexity_score  # sinyal netral tetap jalan
+
+
+# ── Sinyal struktural bahasa-agnostik (Masalah A: kompleksitas lintas bahasa) ──
+
+
+def test_code_signal_detected_without_keywords(tmp_path):
+    """Query teknis pendek TANPA keyword (bahasa apa pun) terdeteksi via sinyal kode."""
+    soul = tmp_path / "soul.toml"
+    soul.write_text("[routing]\nprefer_local = false\nupgrade_keywords = []\n")
+    router = SmartRouter(role="dev", soul_path=str(soul))
+    route = router.decide(messages=[], query="def f(x): return x == y;")
+    assert route.dimensions["has_code_signal"] == 1
+
+
+def test_code_fence_raises_score(tmp_path):
+    """Code fence (```), universal, menaikkan skor walau tanpa keyword."""
+    soul = tmp_path / "soul.toml"
+    soul.write_text("[routing]\nprefer_local = false\nupgrade_keywords = []\n")
+    router = SmartRouter(role="dev", soul_path=str(soul))
+    plain = router.decide(messages=[], query="こんにちは")
+    coded = router.decide(messages=[], query="```python\nprint(1)\n```")
+    assert coded.complexity_score > plain.complexity_score
+
+
+def test_plain_text_no_code_signal(pm_router):
+    """Teks biasa tanpa simbol kode → has_code_signal=0 (tak false-positive)."""
+    route = pm_router.decide(messages=[], query="apa kabar hari ini")
+    assert route.dimensions["has_code_signal"] == 0
+
+
+# ── Deteksi script (Masalah B: kapabilitas bahasa model) ──────────────────────
+
+
+def test_detect_script_cjk(pm_router):
+    assert pm_router._detect_script("システムをデバッグする") == "cjk"
+
+
+def test_detect_script_latin_ascii(pm_router):
+    assert pm_router._detect_script("hello world") == "latin"
+
+
+def test_detect_script_arabic(pm_router):
+    assert pm_router._detect_script("مرحبا بالعالم") == "arabic"
+
+
+def test_language_bump_off_by_default(tmp_path):
+    """Default: bahasa non-latin TIDAK menaikkan tier (opt-in, tak menambah biaya)."""
+    soul = tmp_path / "soul.toml"
+    soul.write_text("[routing]\nprefer_local = false\nupgrade_keywords = []\n")
+    router = SmartRouter(role="dev", soul_path=str(soul))
+    route = router.decide(messages=[], query="こんにちは")
+    assert route.dimensions["language_bumped"] == 0
+
+
+def test_language_bump_raises_tier_when_enabled(tmp_path):
+    """Opt-in: script di luar tier lokal → tier naik (threshold turun)."""
+    import dataclasses
+    from infra.config import CONFIG
+
+    cfg = dataclasses.replace(CONFIG, routing_language_bump=True, routing_local_scripts=("latin",))
+    soul = tmp_path / "soul.toml"
+    soul.write_text("[routing]\nprefer_local = false\nupgrade_keywords = []\n")
+    router = SmartRouter(role="dev", soul_path=str(soul), config=cfg)
+    # Query CJK pendek: tanpa bump → trivial; dengan bump → naik minimal satu tier.
+    cjk = router.decide(messages=[], query="こんにちは")
+    assert cjk.dimensions["query_script"] == "cjk"
+    assert cjk.dimensions["language_bumped"] == 1
+
+    # Latin pendek serupa TIDAK di-bump (script lokal).
+    latin = router.decide(messages=[], query="halo")
+    assert latin.dimensions["language_bumped"] == 0
+    # Bump CJK menghasilkan tier ≥ latin (skor sama, threshold lebih rendah).
+    order = list(Complexity)
+    assert order.index(cjk.complexity) >= order.index(latin.complexity)

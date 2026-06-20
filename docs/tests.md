@@ -36,6 +36,12 @@ Test untuk `core/router.py` (Inovasi 1 — routing).
 | `test_english_multistep_keyword_detected` | Keyword multi-langkah Inggris (analyze/compare) terdeteksi |
 | `test_soul_can_add_locale_keywords` | soul.toml dapat menambah keyword bahasa lain (Spanyol) tanpa edit core (§1.5) |
 | `test_unknown_language_falls_back_to_neutral_signal` | Bahasa tanpa keyword cocok tetap dirute oleh sinyal netral (panjang) |
+| `test_code_signal_detected_without_keywords` | Sinyal struktural: kode terdeteksi tanpa keyword (lintas bahasa) |
+| `test_code_fence_raises_score` | Code fence ` ``` ` menaikkan skor (universal) |
+| `test_plain_text_no_code_signal` | Teks biasa → `has_code_signal=0` (tanpa false-positive) |
+| `test_detect_script_cjk` / `_latin_ascii` / `_arabic` | `_detect_script` mengenali sistem tulisan via Unicode |
+| `test_language_bump_off_by_default` | Language bump OFF default (opt-in, tak menambah biaya) |
+| `test_language_bump_raises_tier_when_enabled` | Aktif: script di luar tier lokal → naik tier; latin tak di-bump |
 
 ---
 
