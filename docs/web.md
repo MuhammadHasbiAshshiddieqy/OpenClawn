@@ -277,6 +277,14 @@ Tandai blocker `resolved` (`agent_blockers.status`, set `resolved_at`). Form: `b
 
 ---
 
+#### `GET /mcp` + `POST /mcp/add` · `/mcp/toggle` · `/mcp/delete`
+
+**Kelola server MCP eksternal** (tool ekosistem Model Context Protocol). Template: `web/templates/mcp.html`.
+
+`GET /mcp` → daftar server (`mcp_servers`) + tool yang ditemukan (`MCPRegistry.discovered_tools`). `POST /mcp/add` → tambah server (`name`, `transport` stdio|http, `command` dipisah spasi, atau `url`) lalu `load_all()` untuk discover segera. `toggle`/`delete` mengubah status & reload. **Keamanan (§1):** tool MCP selalu butuh approval; remote di-guard SSRF; role harus opt-in via `soul.toml` (`mcp__*`). Server dimuat saat lifespan startup (fail-safe).
+
+---
+
 #### `GET /autopilots` & `POST /autopilots`
 
 **Kelola tugas agent terjadwal** (terinspirasi Autopilots Multica). Template: `web/templates/autopilots.html`.

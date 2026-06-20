@@ -418,6 +418,25 @@ Ringkasan naratif tentang user (dari L2 facts), disuntik sebagai blok stabil di 
 
 **Index:** `idx_user_model_role` pada `(role, active, version DESC)`.
 
+---
+
+### `mcp_servers` — Server MCP Eksternal
+
+Definisi server Model Context Protocol yang disambungkan agar agent memakai tool dari ekosistem MCP. Dikelola `MCPRegistry`; tool yang ditemukan dibungkus `MCPTool` (selalu butuh approval, §1) & didaftarkan ke `TOOL_REGISTRY` saat startup.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `name` | TEXT UNIQUE | Nama unik (dipakai di prefix `mcp__<name>__tool`) |
+| `transport` | TEXT | `stdio` (subprocess lokal) \| `http` (remote, SSRF-guarded) |
+| `command` | TEXT | stdio: argv sebagai JSON array |
+| `url` | TEXT | http: endpoint server MCP |
+| `env` | TEXT | stdio: env tambahan sebagai JSON object |
+| `enabled` | INTEGER | 1 = dimuat saat startup |
+| `created_at` | TIMESTAMP | — |
+
+Tool MCP TIDAK mendapat jalur istimewa: lewat pagar yang sama (izin per-role via `mcp__*` di soul.toml, validasi schema, telemetri, approval).
+
 **Catatan `app_settings`:** key baru `calibration_auto_last_ts` (throttle I4), `curation_last_ts:{role}` & `user_model_last_ts:{role}` (throttle I1/I5), serta `calibration_log.source='auto'` (I4 auto-apply).
 
 ---

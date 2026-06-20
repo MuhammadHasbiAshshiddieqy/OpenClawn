@@ -453,12 +453,21 @@ class AgentLoop:
         return out
 
     def _tool_allowed(self, name: str) -> bool:
-        return name in self._soul.get("tools", {}).get("allowed", [])
+        allowed = self._soul.get("tools", {}).get("allowed", [])
+        if name in allowed:
+            return True
+        # Izin MCP via wildcard agar role tak perlu mendaftar tiap tool yang
+        # di-discover dinamis: "mcp__*" (semua MCP) atau "mcp__<server>__*" (satu server).
+        # Tetap OPT-IN eksplisit (§1) — tanpa wildcard di soul, MCP tool ditolak.
+        if name.startswith("mcp__"):
+            for pat in allowed:
+                if pat == "mcp__*" or (pat.endswith("*") and name.startswith(pat[:-1])):
+                    return True
+        return False
 
     def _tools_for_role(self) -> list:
         """Nit #1: hanya kirim schema tool yang diizinkan ke LLM."""
-        allowed = set(self._soul.get("tools", {}).get("allowed", []))
-        return [t.schema() for n, t in TOOL_REGISTRY.items() if n in allowed]
+        return [t.schema() for n, t in TOOL_REGISTRY.items() if self._tool_allowed(n)]
 
     async def _post_turn(
         self, user_message: str, turn: Turn, active_skills: list, history_snapshot: list

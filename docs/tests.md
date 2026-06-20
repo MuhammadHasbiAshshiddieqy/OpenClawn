@@ -236,6 +236,30 @@ Test untuk `core/skill_pack.py` (berbagi skill) + **4 lapis keamanan impor**.
 
 ---
 
+### `tests/test_mcp.py`
+
+Test integrasi MCP: client (SDK di-mock), wrapper `Tool`, SSRF, registry, izin wildcard.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_mcp_tool_always_requires_approval` | **§1:** tool MCP selalu `requires_approval=True` |
+| `test_mcp_tool_name_prefixed` | Nama `mcp__<server>__<tool>` |
+| `test_mcp_tool_schema_from_server` | Schema dari server, deskripsi bertanda `[MCP:..]` |
+| `test_mcp_tool_execute_strips_internal_fields` | Field `_*` tak diteruskan ke server |
+| `test_http_transport_blocks_internal_host` | Remote ke host internal ditolak SSRF |
+| `test_call_tool_failsafe_on_exception` | Exception → `{"error"}`, tak meledak |
+| `test_list_tools_failsafe_returns_empty` | Discover gagal → `[]` |
+| `test_extract_text_from_content_blocks` | Ekstraksi teks dari content blocks MCP |
+| `test_add_and_list_server` | Registry CRUD: tambah & daftar server |
+| `test_add_server_validates_transport` | Validasi transport/command/url |
+| `test_toggle_and_delete_server` | Enable/disable & hapus server |
+| `test_load_registers_discovered_tools` | `load_all` daftarkan tool ke `TOOL_REGISTRY` (prefix, approval) |
+| `test_load_failsafe_on_bad_server` | Server gagal di-skip, startup tak jatuh |
+| `test_load_idempotent_clears_old` | Reload tak menggandakan tool |
+| `test_soul_wildcard_allows_mcp` | `mcp__*`/`mcp__server__*` mengizinkan; tanpa wildcard ditolak (opt-in) |
+
+---
+
 ### `tests/test_skill_feedback.py`
 
 Compounding **I2** (draft promotion) + **I3** (refine on correction) + prasyarat (revive skill terpakai). `SkillFeedback` jembatan antar-turn.
@@ -513,6 +537,10 @@ Smoke test untuk endpoints Web UI.
 | `test_autopilots_page_renders_empty` | `/autopilots` → 200 + form + catatan keamanan |
 | `test_autopilots_create_then_listed` | Buat autopilot → muncul; role tak dikenal ditolak |
 | `test_autopilots_toggle_and_delete` | Toggle menjeda, delete menghapus |
+| `test_mcp_page_renders_empty` | `/mcp` → 200 + form + catatan keamanan |
+| `test_mcp_add_stdio_server` | Tambah server stdio → muncul (discover fail-safe) |
+| `test_mcp_add_http_rejects_internal` | Server http internal: tersimpan tapi tool tak ter-discover (SSRF) |
+| `test_mcp_toggle_and_delete` | Toggle & hapus server MCP |
 | `test_skills_export_returns_markdown` | `/skills/export` → berkas Markdown (attachment) |
 | `test_skills_import_lands_as_draft` | `/skills/import` → skill draft, muncul di `/skills` |
 | `test_skills_import_blocks_injection` | Pack berpola injeksi ditolak, tak muncul |

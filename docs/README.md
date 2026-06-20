@@ -13,6 +13,7 @@ Referensi teknis lengkap untuk semua modul dan fungsi dalam OpenCLAWN. Dibaca be
 | **Multi-agent conversation** (pipeline/debate/orchestrator) | [core.md](core.md) · [web.md](web.md) |
 | **Autopilots** (tugas terjadwal, proposal-gated) · **Activity timeline** | [core.md](core.md) · [web.md](web.md) |
 | **Skill packs** (export/import antar-instalasi) | [core.md](core.md) · [web.md](web.md) |
+| **MCP** — tool dari server MCP eksternal (stdio/HTTP, approval-gated) | [core.md](core.md) · [tools.md](tools.md) · [web.md](web.md) |
 | Sistem memori L1–L4, skill decay, FTS5 search | [memory.md](memory.md) |
 | **Compounding**: curator (merge), draft promotion, refine, user model | [memory.md](memory.md) · [core.md](core.md) |
 | Role PM/QA/Dev/Data/Security, handoff contract, soul.toml | [roles.md](roles.md) |

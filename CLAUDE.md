@@ -190,6 +190,7 @@ Hal-hal ini sudah diputuskan. Jangan tanya ulang atau ubah tanpa instruksi ekspl
 
 - **Stack:** Python 3.12, FastAPI, HTMX, SQLite (aiosqlite), Pydantic, httpx, tenacity, structlog. Final.
   - **Pengecualian sadar (disetujui owner):** `pypdf` (tool `pdf_read`); `python-docx`, `python-pptx`, `openpyxl` (tool `doc_write` — docx/pptx/xlsx); `reportlab` (tool `pdf_write` — PDF). Semua murni-Python, tanpa dependency sistem. Owner memutuskan "kecanggihan & keamanan di atas minimalis"; penambahan ini di luar default §8 dan dilakukan atas persetujuan eksplisit, bukan inisiatif agent.
+  - **Pengecualian sadar #2 (disetujui owner):** `mcp` (SDK resmi Model Context Protocol) untuk menyambung server MCP eksternal (tool dari ekosistem MCP). Owner memilih SDK resmi atas raw-JSON-RPC karena cakupan penuh (resources/prompts/SSE/OAuth/versi) & ditambal upstream — MCP adalah protokol tool terbuka, BUKAN SDK vendor-LLM, jadi tak melanggar prinsip "no SDK Anthropic/OpenAI" yang menjaga transparansi jalur LLM. Tool MCP SELALU `requires_approval=True` (§1, server tak terkendali); remote di-guard SSRF.
 - **LLM:** Hybrid. Ollama (`gemma4:e2b/e4b/12b`) untuk ringan, Claude (`claude-haiku-4-5-20251001`, `claude-sonnet-4-6`) untuk berat. Final.
 - **Interface:** Web UI dengan SSE streaming. Final untuk research phase.
 - **Fase:** Research/eksperimen. Single-user. Belum perlu auth, multi-tenant, atau scaling horizontal.

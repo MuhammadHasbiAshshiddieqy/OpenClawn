@@ -6,6 +6,19 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added — MCP (Model Context Protocol) client
+OpenCLAWN kini dapat memakai tool dari **server MCP eksternal** (GitHub, filesystem,
+dll) — sebelumnya hanya 26 tool bawaan. Via SDK resmi `mcp` (CLAUDE.md §7: MCP bukan
+SDK vendor-LLM, jadi tak melanggar transparansi jalur LLM).
+- **Transport:** stdio (subprocess lokal) + HTTP streamable (remote).
+- **Keamanan (§1):** tool MCP **SELALU butuh approval** (HITL; di autopilot jadi
+  proposal) — server eksternal tak terkendali. Remote di-guard SSRF sebelum konek.
+  Role harus **opt-in** via `soul.toml` wildcard `mcp__*` / `mcp__<server>__*`.
+- Tool MCP tak dapat jalur istimewa: dibungkus `MCPTool` (subclass `Tool`), lewat
+  pagar yang sama (izin/validasi/telemetri/timeout). Discover fail-safe (server error
+  di-skip, tak jatuhkan startup). Kelola via halaman `/mcp` (tabel `mcp_servers`).
+- `core/mcp_client.py` · `core/mcp_registry.py` · `tools/mcp_tool.py`. +19 test (420→439).
+
 ## [0.4.0-alpha] — 2026-06-20
 
 Pre-release kedua. Membangun di atas 4 inovasi inti: multi-agent conversation matang,

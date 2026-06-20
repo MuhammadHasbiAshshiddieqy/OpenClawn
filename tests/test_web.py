@@ -486,6 +486,59 @@ def test_autopilots_toggle_and_delete(client):
     assert "Belum ada autopilot" in resp.text
 
 
+def test_mcp_page_renders_empty(client):
+    """/mcp tanpa server → 200 + form + catatan keamanan."""
+    resp = client.get("/mcp")
+    assert resp.status_code == 200
+    assert "MCP Servers" in resp.text
+    assert "Aman by design" in resp.text
+    assert "Belum ada server MCP" in resp.text
+
+
+def test_mcp_add_stdio_server(client):
+    """Tambah server stdio → muncul di daftar (discover gagal-aman tanpa binary nyata)."""
+    resp = client.post(
+        "/mcp/add",
+        data={"name": "fs", "transport": "stdio", "command": "nonexistent-binary-xyz"},
+    )
+    assert resp.status_code == 200
+    assert "fs" in resp.text
+
+
+def test_mcp_add_http_rejects_internal(client):
+    """Server http ke host internal: tetap tersimpan, tapi tool tak ter-discover (SSRF)."""
+    resp = client.post(
+        "/mcp/add",
+        data={"name": "evil", "transport": "http", "url": "http://localhost:9000/mcp"},
+    )
+    assert resp.status_code == 200
+    # Server tercatat, tapi tak ada tool (SSRF memblokir discover).
+    assert "evil" in resp.text
+    assert "Belum ada tool MCP" in resp.text
+
+
+def test_mcp_toggle_and_delete(client):
+    import os
+    import sqlite3
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    cur = conn.execute(
+        """INSERT INTO mcp_servers (name, transport, command, enabled)
+           VALUES ('fs','stdio','[\"x\"]',1)"""
+    )
+    sid = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    resp = client.post("/mcp/toggle", data={"server_id": str(sid), "enabled": "0"})
+    assert resp.status_code == 200
+    assert "Aktifkan" in resp.text
+
+    resp = client.post("/mcp/delete", data={"server_id": str(sid)})
+    assert resp.status_code == 200
+    assert "Belum ada server MCP" in resp.text
+
+
 def test_router_page_renders_tiers(client):
     """/router menampilkan 5 tier dengan dropdown model + tanda default."""
     html = client.get("/router").text

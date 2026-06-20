@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCLAWN · MCP</title>
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+    <aside class="sidebar">
+        <div class="brand">
+            <img src="/static/logo.png" alt="OpenCLAWN">
+            <div>
+                <div class="name">Open<b>CLAWN</b></div>
+                <div class="tag">playful · sharp</div>
+            </div>
+        </div>
+        <div>
+            <div class="side-label">Workspace</div>
+            <nav class="nav-links">
+                <a href="/" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v7a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm4 8v2m4-2v2M0 4h16"/></svg>
+                    Chat
+                </a>
+                <a href="/activity" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg>
+                    Activity
+                </a>
+                <a href="/autopilots" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5V8l2.5 1.5"/></svg>
+                    Autopilots
+                </a>
+                <a href="/mcp" class="nav-link active">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="5.5" y="9" width="5" height="5" rx="1"/><path d="M4.5 7v2h7V7"/></svg>
+                    MCP
+                </a>
+                <a href="/skills" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3-6 3-6-3 6-3z"/><path d="M2 8l6 3 6-3M2 11.5l6 3 6-3"/></svg>
+                    Skills
+                </a>
+                <a href="/metrics" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="9" width="3" height="6" rx=".5"/><rect x="6.5" y="5" width="3" height="10" rx=".5"/><rect x="12" y="1" width="3" height="14" rx=".5"/></svg>
+                    Metrics
+                </a>
+                <a href="/conversations" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 3h12v8H6l-3 3V3z"/></svg>
+                    Conversations
+                </a>
+                <a href="/router" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="3.5" r="1.5"/><circle cx="12.5" cy="12.5" r="1.5"/><path d="M5 8h3l3-4.5M8 8l3 4.5"/></svg>
+                    Router
+                </a>
+                <a href="/settings" class="nav-link">
+                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
+                    Settings
+                </a>
+            </nav>
+        </div>
+        <div class="spacer"></div>
+    </aside>
+
+    <main class="main">
+        <div class="topbar">
+            <div>
+                <h1>MCP Servers</h1>
+                <div class="sub">tool eksternal via Model Context Protocol — selalu butuh approval</div>
+            </div>
+        </div>
+
+        <div class="page">
+            <div class="card autopilot-safety">
+                🔒 <b>Aman by design:</b> server MCP adalah kode pihak ketiga tak terkendali.
+                Tool yang ditemukan <b>selalu butuh persetujuan</b> (HITL); server remote
+                di-guard anti-SSRF. Role harus mengizinkan via <code>soul.toml</code>
+                (<code>mcp__*</code> atau <code>mcp__&lt;server&gt;__*</code>) — opt-in eksplisit.
+            </div>
+
+            <h2>Tambah server</h2>
+            <form method="post" action="/mcp/add" class="autopilot-form">
+                <input type="text" name="name" placeholder="Nama unik (mis. github, filesystem)" required>
+                <select name="transport">
+                    <option value="stdio">stdio (subprocess lokal)</option>
+                    <option value="http">http (server remote)</option>
+                </select>
+                <input type="text" name="command" placeholder="stdio: command + args (mis. npx -y @modelcontextprotocol/server-filesystem /path)">
+                <input type="text" name="url" placeholder="http: URL server MCP (https://…)">
+                <button type="submit" class="btn-primary">Tambah &amp; muat</button>
+            </form>
+
+            <h2>Server terdaftar</h2>
+            {% if not servers %}
+            <p class="muted">Belum ada server MCP. Tambah di atas (mis. server filesystem/GitHub resmi).</p>
+            {% else %}
+            <div class="autopilot-list">
+                {% for s in servers %}
+                <div class="autopilot-row {{ 'on' if s.enabled else 'off' }}">
+                    <div class="ap-main">
+                        <div class="ap-head">
+                            <span class="ap-name">{{ s.name }}</span>
+                            <span class="tag">{{ s.transport }}</span>
+                            <span class="ap-status">{{ 'aktif' if s.enabled else 'jeda' }}</span>
+                        </div>
+                        <div class="ap-prompt">{% if s.transport == 'stdio' %}{{ s.command }}{% else %}{{ s.url }}{% endif %}</div>
+                    </div>
+                    <div class="ap-actions">
+                        <form method="post" action="/mcp/toggle">
+                            <input type="hidden" name="server_id" value="{{ s.id }}">
+                            <input type="hidden" name="enabled" value="{{ '0' if s.enabled else '1' }}">
+                            <button type="submit" class="btn-ghost">{{ 'Jeda' if s.enabled else 'Aktifkan' }}</button>
+                        </form>
+                        <form method="post" action="/mcp/delete" onsubmit="return confirm('Hapus server MCP ini?')">
+                            <input type="hidden" name="server_id" value="{{ s.id }}">
+                            <button type="submit" class="btn-ghost danger">Hapus</button>
+                        </form>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <h2>Tool ditemukan ({{ discovered|length }})</h2>
+            {% if not discovered %}
+            <p class="muted">Belum ada tool MCP yang dimuat. Tambah server aktif yang dapat dijangkau.</p>
+            {% else %}
+            <div class="run-list">
+                {% for t in discovered %}
+                <div class="run-row">
+                    <span class="tag">approval</span>
+                    <span class="run-name">{{ t.name }}</span>
+                    <span class="muted">{{ t.schema.description }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+    </main>
+</div>
+</body>
+</html>

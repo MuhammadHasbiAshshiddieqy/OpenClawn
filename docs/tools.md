@@ -314,6 +314,20 @@ Agent menandai hambatan secara **terstruktur** (terinspirasi *proactive blocker 
 
 ---
 
+## `tools/mcp_tool.py`
+
+### `MCPTool` — `mcp__<server>__<tool>`
+
+Adapter: satu tool dari server MCP eksternal → antarmuka `Tool` OpenCLAWN. Kunci integrasi aman: tool MCP **tidak mendapat jalur istimewa** — ia jadi `Tool` biasa di `TOOL_REGISTRY` yang sama, melewati SEMUA pagar (izin per-role, validasi schema, telemetri, timeout, approval).
+
+- `requires_approval = True` **SELALU** (§1: server eksternal tak terkendali; tak bisa di-override). Di autopilot otomatis jadi proposal.
+- Nama: `mcp__<server>__<tool>` (prefix `mcp__`) agar tak bentrok & jelas asalnya.
+- `execute()`: buang field internal (`_*`), teruskan argumen ke `MCPClient.call_tool`.
+- `schema()`: dari server MCP (`input_schema`), deskripsi diberi tanda `[MCP:<server>]`.
+- **Izin:** role harus opt-in via `soul.toml [tools] allowed` dengan wildcard `mcp__*` (semua) atau `mcp__<server>__*` (satu server). Tanpa wildcard → ditolak (opt-in eksplisit).
+
+---
+
 ## `tools/code.py`
 
 ### `CodeRunTool`

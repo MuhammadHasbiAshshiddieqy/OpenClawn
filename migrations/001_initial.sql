@@ -272,3 +272,19 @@ CREATE TABLE IF NOT EXISTS user_model (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_user_model_role ON user_model(role, active, version DESC);
+
+-- ===================== MCP SERVERS [tool eksternal via Model Context Protocol] =====================
+-- Server MCP yang disambungkan agar agent memakai tool ekosistem MCP. KEAMANAN (§1):
+-- server = kode pihak ketiga tak terkendali → tool yang ditemukan SELALU butuh approval
+-- (HITL); remote (http) di-guard SSRF sebelum konek. Definisi disimpan di sini agar
+-- dapat dikelola lewat /mcp tanpa edit kode. command/env/url disimpan sebagai teks/JSON.
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,                -- nama unik (dipakai di prefix mcp__<name>__tool)
+    transport TEXT NOT NULL,                  -- stdio | http
+    command TEXT,                             -- stdio: argv sebagai JSON array
+    url TEXT,                                 -- http: endpoint server MCP
+    env TEXT,                                 -- stdio: env tambahan sebagai JSON object
+    enabled INTEGER NOT NULL DEFAULT 1,       -- 1 = dimuat saat startup
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

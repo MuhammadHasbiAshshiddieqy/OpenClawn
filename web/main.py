@@ -19,6 +19,7 @@ from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
 from core.autopilot import AutopilotScheduler, AutopilotStore
 from core.skill_pack import SkillPack
+from core.mcp_registry import MCPRegistry
 from memory.curator import SkillCuratorManager
 from core.calibration import CalibrationStore, RoutingCalibrator
 from core.router import Complexity, SmartRouter
@@ -108,6 +109,14 @@ def available_roles() -> list[str]:
 async def lifespan(app: FastAPI):
     setup_logging()
     await db.run_migration("migrations/001_initial.sql")
+    # Muat tool dari server MCP eksternal yang enabled → TOOL_REGISTRY (fail-safe).
+    # Server tak terjangkau di-skip; tool MCP selalu requires_approval (§1).
+    try:
+        mcp_summary = await MCPRegistry(db).load_all()
+        if mcp_summary["servers"]:
+            log.info("mcp_loaded", **mcp_summary)
+    except Exception as e:  # noqa: BLE001 — MCP gagal jangan jatuhkan startup
+        log.warning("mcp_load_failed", error=str(e))
     # Scheduler autopilot hidup selama server hidup (loop asyncio in-process).
     autopilot_scheduler.start()
     yield
@@ -638,6 +647,70 @@ async def autopilots_delete(request: Request):
     if ap_id:
         await autopilot_store.delete(ap_id)
     return RedirectResponse(url="/autopilots", status_code=303)
+
+
+@app.get("/mcp", response_class=HTMLResponse)
+async def mcp_page(request: Request):
+    """Kelola server MCP eksternal + lihat tool yang ditemukan.
+
+    Tool MCP selalu butuh approval (§1); remote di-guard SSRF. Role harus opt-in via
+    soul.toml (`mcp__*` atau `mcp__<server>__*`) agar tool MCP boleh dipakai.
+    """
+    reg = MCPRegistry(db)
+    servers = await reg.list_servers()
+    discovered = await reg.discovered_tools()
+    return templates.TemplateResponse(
+        request,
+        "mcp.html",
+        {"servers": servers, "discovered": discovered},
+    )
+
+
+@app.post("/mcp/add")
+async def mcp_add(request: Request):
+    """Tambah server MCP (stdio: command; http: url), lalu reload tool."""
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    transport = (form.get("transport") or "stdio").strip()
+    command_raw = (form.get("command") or "").strip()
+    url = (form.get("url") or "").strip()
+    # command dipisah spasi (argv sederhana); env tidak diisi lewat UI dasar ini.
+    command = command_raw.split() if command_raw else []
+    reg = MCPRegistry(db)
+    result = await reg.add_server(name, transport, command=command, url=url)
+    if result.get("ok"):
+        await reg.load_all()  # discover tool server baru segera
+        log.info("mcp_server_added", name=name, transport=transport)
+    return RedirectResponse(url="/mcp", status_code=303)
+
+
+@app.post("/mcp/toggle")
+async def mcp_toggle(request: Request):
+    form = await request.form()
+    try:
+        sid = int(form.get("server_id") or 0)
+    except (ValueError, TypeError):
+        sid = 0
+    enabled = (form.get("enabled") or "") == "1"
+    if sid:
+        reg = MCPRegistry(db)
+        await reg.set_enabled(sid, enabled)
+        await reg.load_all()  # reload agar tool server yang di-disable hilang
+    return RedirectResponse(url="/mcp", status_code=303)
+
+
+@app.post("/mcp/delete")
+async def mcp_delete(request: Request):
+    form = await request.form()
+    try:
+        sid = int(form.get("server_id") or 0)
+    except (ValueError, TypeError):
+        sid = 0
+    if sid:
+        reg = MCPRegistry(db)
+        await reg.delete(sid)
+        await reg.load_all()
+    return RedirectResponse(url="/mcp", status_code=303)
 
 
 @app.get("/router", response_class=HTMLResponse)

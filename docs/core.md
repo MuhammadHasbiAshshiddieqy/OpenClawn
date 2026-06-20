@@ -587,3 +587,31 @@ Impor dari URL publik. **Lapis 1:** `_ssrf_guard` (tolak host internal) + scheme
 
 **`_record_lock(name, digest)`** *(async, private)*  
 Catat hash skill impor ke `skills-lock.json` di `workspace_root` (integritas, fail-soft). Lockfile di-gitignore (state lokal); commit sengaja bila ingin men-pin pack bersama.
+
+---
+
+## `core/mcp_client.py` — Klien MCP (Model Context Protocol)
+
+Menyambungkan agent ke server MCP eksternal (tool ekosistem MCP: GitHub, filesystem, dll). Wrapper tipis di atas **SDK resmi `mcp`** (CLAUDE.md §7 — bukan SDK vendor-LLM, jadi tak melanggar transparansi). **Keamanan (§1):** server = kode tak terkendali → remote di-guard SSRF sebelum konek; koneksi per-panggilan (connect→act→disconnect) agar fail-safe & tak ada proses menggantung.
+
+### Dataclass: `MCPServerConfig`
+`name`, `transport` (`stdio`|`http`), `command` (argv stdio), `url` (http), `env`.
+
+### Dataclass: `MCPToolSpec`
+Tool yang ditemukan: `server`, `name`, `description`, `input_schema`.
+
+### Kelas: `MCPClient`
+- **`list_tools() → list[MCPToolSpec]`** *(async)* — discover tool (initialize→list_tools). Gagal → `[]` (fail-safe).
+- **`call_tool(tool_name, arguments) → dict`** *(async)* — panggil tool (tools/call). Error apa pun → `{"error": ...}`. Hasil dinormalkan ke `{"content": text}` (dipotong `MAX_RESULT_CHARS`). Remote ke host internal ditolak SSRF.
+
+---
+
+## `core/mcp_registry.py` — Registry Server MCP
+
+CRUD definisi server (tabel `mcp_servers`) + muat tool-nya ke `TOOL_REGISTRY`.
+
+### Kelas: `MCPRegistry`
+- **`add_server(name, transport, command, url, env) → dict`** *(async)* — validasi sesuai transport (stdio butuh command, http butuh url).
+- **`list_servers` / `set_enabled` / `delete`** *(async)* — kelola server.
+- **`load_all() → dict`** *(async)* — discover & daftarkan tool dari semua server enabled ke `TOOL_REGISTRY` dengan nama `mcp__<server>__<tool>`. **Idempoten** (buang tool MCP lama dulu); **fail-safe per server** (server error di-skip, startup tak jatuh). Dipanggil di lifespan + setelah perubahan via `/mcp`.
+- **`discovered_tools() → list`** *(async)* — daftar tool MCP yang terdaftar (untuk `/mcp`).
