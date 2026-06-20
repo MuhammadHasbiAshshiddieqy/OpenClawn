@@ -4,7 +4,7 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/) with pre-release suffixes during the research phase.
 
-## [Unreleased]
+## [0.5.0-alpha] — 2026-06-21
 
 ### Added — skill scanner (terinspirasi nvidia/skillspector)
 Skill packs sudah membuka jalur "terima skill dari URL/file eksternal", tapi scanner-nya
