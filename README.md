@@ -95,8 +95,11 @@ graph TB
     subgraph UI["Web UI — FastAPI + HTMX + SSE"]
         CHAT["/chat/stream · single agent"]
         CONVERSE["/converse/stream · multi-agent"]
-        METRICS["/metrics · calibration dashboard"]
-        SETTINGS["/settings · model override"]
+        ACTIVITY["/activity · timeline + blockers"]
+        AUTOPAGE["/autopilots · scheduled runs"]
+        SKILLS["/skills · decay · curation · packs"]
+        METRICS["/metrics · calibration · telemetry"]
+        SETTINGS["/router · /settings · model map"]
     end
 
     subgraph CONVO["Multi-Agent Layer"]
@@ -106,35 +109,45 @@ graph TB
         LEAD["OrchestratorStrategy · dynamic delegation"]
     end
 
+    subgraph SCHED["Autopilots — scheduled, proposal-gated"]
+        SCHEDULER["AutopilotScheduler · asyncio loop"]
+        PROPOSAL["Approval-gated actions &rarr; proposals (never silent)"]
+    end
+
     subgraph AGENT["Agent Loop — iterative, not recursive"]
         direction TB
         SHIELD["Shield · NFKD scan"]
-        ROUTE["SmartRouter · soul-aware"]
+        ROUTE["SmartRouter · soul-aware · multilingual"]
         LLMCALL["LLM Client · stream + fallback"]
         TOOLLOOP["Tool Loop · max 5 hops + loop guard"]
-        POST["Post-Turn · memory + decay + crystallize"]
+        POST["Post-Turn · memory + decay + compounding"]
     end
 
-    subgraph MODULES["Core Modules"]
-        AUDITOR["RoutingAuditor · innovation #1"]
-        CALIB["RoutingCalibrator · tuning advisor"]
+    subgraph MODULES["Core Modules — 4 innovations + compounding"]
+        AUDITOR["RoutingAuditor + Calibration · innovation #1"]
         MEMORY["MemoryManager · L1–L4 + FTS5"]
         DECAY["SkillDecay · innovation #2"]
-        CRYSTAL["Crystallizer · innovation #3"]
+        CRYSTAL["Crystallizer (+ refine) · innovation #3"]
         CONTRACTS["RoleNegotiator · innovation #4"]
+        CURATOR["SkillCurator · merge/dedup (I1)"]
+        FEEDBACK["SkillFeedback · promote/refine (I2/I3)"]
+        USERMODEL["UserModel · dialectic profile (I5, opt-in)"]
+        ACTIVITYMOD["ActivityTimeline · SkillPack"]
         COMPACTOR["ContextCompactor · token budget"]
     end
 
     subgraph TOOLS["Tools — 26 total, all workspace-bounded"]
-        FS["Filesystem · read/write/edit/append/patch/glob/grep/list_dir"]
+        FS["Filesystem · read/write/edit/append/patch/glob/grep/list_dir · read_many"]
         EXEC["Execution · code_run · shell_run (both sandboxed)"]
-        NET["Network · web_fetch · web_search · http_request"]
-        DATA["Data · db_query (SELECT) · memory_search · json_query · pdf_read"]
+        NET["Network · web_fetch · web_search · http_request (SSRF-guarded)"]
+        DATA["Data/docs · db_query · json_query · pdf_read · doc_write · pdf_write"]
+        DEVT["Dev/agent · git_status/diff/log · todo_write · report_blocker"]
     end
 
     subgraph SECURITY["Security"]
         VAULT["Vault · API keys, never in context"]
-        APPROVAL["ApprovalGate · human-in-the-loop"]
+        APPROVAL["ApprovalGate · HITL + proposal queue"]
+        SHIELD2["Shield · injection scan · SSRF guard"]
     end
 
     subgraph INFRA["Infrastructure"]
@@ -144,7 +157,10 @@ graph TB
 
     UI --> CONVO
     UI --> AGENT
+    UI --> SCHED
     CONVO --> AGENT
+    SCHED --> AGENT
+    SCHED --> PROPOSAL
     AGENT --> MODULES
     AGENT --> TOOLS
     AGENT --> SECURITY
@@ -165,13 +181,15 @@ flowchart TD
         SHIELD -->|blocked| REJECT["Rejected"]
         SHIELD -->|clean| CORRECT
         CORRECT{"Check correction<br/>from previous turn?"}
-        CORRECT -->|"yes: mark had_correction=1"| LOAD_SKILL
-        CORRECT -->|no| LOAD_SKILL
+        CORRECT -->|"yes: had_correction=1"| RESOLVE
+        CORRECT -->|no| RESOLVE
+        RESOLVE["SkillFeedback.resolve_previous()<br/>success &rarr; revive + promote draft (I2)<br/>corrected &rarr; reset + refine skill (I3)"]
+        RESOLVE --> LOAD_SKILL
     end
 
     subgraph MEM["1 · Memory Loading"]
-        LOAD_SKILL["Load active skills<br/>SkillDecay: score &gt; 0.3,<br/>max 8, trigger-matched"]
-        LOAD_SKILL --> LOAD_CTX["Load memory context<br/>L1: last state · L2: facts<br/>L3: active skills<br/>L4: FTS5 cross-session"]
+        LOAD_SKILL["Load active skills<br/>SkillDecay: score &gt; 0.3,<br/>max 8 + 1 draft trial (I2)"]
+        LOAD_SKILL --> LOAD_CTX["Load memory context<br/>L1: state · L2: facts · L3: skills<br/>L4: FTS5 archive · User profile (I5, opt-in)"]
     end
 
     subgraph BUILD["2 · Context Building"]
@@ -179,21 +197,24 @@ flowchart TD
     end
 
     subgraph ROUTE["3 · Routing Decision"]
-        COMPACT --> DIMS["8 dimensions scored"]
+        COMPACT --> DIMS["10 dimensions scored<br/>(+ has_code_signal · query_script)"]
         DIMS --> SOUL{"soul.toml<br/>upgrade_kw hit?"}
         SOUL -->|"yes: +3 score"| PREFER
         SOUL -->|no| PREFER
         PREFER{"prefer_local?"}
-        PREFER -->|"yes: threshold +1<br/>stay local longer"| LABEL
-        PREFER -->|"no: normal threshold"| LABEL
-        LABEL["Complexity label<br/>TRIVIAL &rarr; SIMPLE &rarr; MODERATE<br/>&rarr; COMPLEX &rarr; CRITICAL"]
+        PREFER -->|"yes: threshold +1<br/>stay local longer"| LANG
+        PREFER -->|"no: normal threshold"| LANG
+        LANG{"language bump?<br/>(opt-in)"}
+        LANG -->|"script outside local<br/>threshold -1: bump tier"| LABEL
+        LANG -->|"local script / off"| LABEL
+        LABEL["Complexity label (+ calibration offset)<br/>TRIVIAL &rarr; SIMPLE &rarr; MODERATE<br/>&rarr; COMPLEX &rarr; CRITICAL"]
         LABEL --> OVERRIDE{"/settings<br/>override active?"}
         OVERRIDE -->|yes| USE_OV["Use chosen model<br/>(audit still logs router decision)"]
-        OVERRIDE -->|no| USE_ROUTE["Use router model"]
+        OVERRIDE -->|no| USE_ROUTE["Use router model<br/>(/router tier&rarr;model map)"]
     end
 
     subgraph AUDIT1["4 · Pre-Call Audit — innovation #1"]
-        USE_OV --> LOG["Auditor.log_decision()<br/>8 dims + score + label<br/>+ model + reason &rarr; DB"]
+        USE_OV --> LOG["Auditor.log_decision()<br/>10 dims + score + label<br/>+ model + reason &rarr; DB"]
         USE_ROUTE --> LOG
     end
 
@@ -225,7 +246,9 @@ flowchart TD
         ALLOWED -->|no| ERR2["Tool denied"]
         ALLOWED -->|yes| APPROVAL{"requires_approval?"}
         APPROVAL -->|no| RUN_TOOL["Run tool"]
-        APPROVAL -->|yes| HITL{"User approves?"}
+        APPROVAL -->|yes| AUTOMODE{"autopilot mode?"}
+        AUTOMODE -->|"yes: queue proposal<br/>(no silent execution)"| TOOL_RESULT
+        AUTOMODE -->|no| HITL{"User approves?"}
         HITL -->|reject/timeout| ERR3["Approval denied"]
         HITL -->|approve| RUN_TOOL
         ERR2 --> TOOL_RESULT
@@ -236,11 +259,15 @@ flowchart TD
         HOP -->|no| FINALIZE
     end
 
-    subgraph POST["7 · Post-Turn Processing"]
+    subgraph POST["7 · Post-Turn Processing — throttled, non-blocking"]
         FINALIZE["Auditor.finalize()<br/>tokens, cost, latency &rarr; DB"]
         FINALIZE --> WRITE_MEM["MemoryManager<br/>L1 checkpoint · L4 archive (if threshold)"]
         WRITE_MEM --> DECAY_PASS["SkillDecay.maybe_run_decay_pass()<br/>throttled: 1&times;/hour"]
-        DECAY_PASS --> CRYST_CHECK{"Crystallizer<br/>should_attempt?<br/>(&ge;3 tool calls)"}
+        DECAY_PASS --> RECORD["SkillFeedback.record_usage()<br/>(skills used this turn &rarr; next-turn outcome)"]
+        RECORD --> CURATE["SkillCurator.maybe_run_curation_pass() (I1)<br/>merge duplicates · judge &ge;4 · revertible"]
+        CURATE --> AUTOTUNE["Calibration.maybe_auto_apply() (I4)<br/>opt-in · clamp &plusmn;1 · revertible"]
+        AUTOTUNE --> USERMOD["UserModel.maybe_update() (I5)<br/>opt-in · versioned"]
+        USERMOD --> CRYST_CHECK{"Crystallizer<br/>should_attempt?<br/>(&ge;3 tool calls)"}
         CRYST_CHECK -->|yes| SELF_EVAL["Self-evaluate<br/>evaluator &ge; generator<br/>confidence 1–5"]
         SELF_EVAL --> STORE{"conf &ge; 4 AND<br/>no critical gaps?"}
         STORE -->|yes| ACTIVE["Store as active skill"]
@@ -267,22 +294,25 @@ mutate state or run code require explicit approval.
 
 ```mermaid
 flowchart LR
-    subgraph SAFE["No approval — read-only / inspect"]
+    subgraph SAFE["No approval — read-only / inspect / internal"]
         direction TB
-        R1["file_read · list_dir · glob · grep"]
-        R2["web_fetch · web_search · pdf_read"]
-        R3["memory_search · json_query"]
+        R1["file_read · read_many · list_dir · glob · grep"]
+        R2["web_fetch · web_search · pdf_read (SSRF-guarded net)"]
+        R3["memory_search · json_query · git_status/diff/log"]
+        R4["todo_write · report_blocker (internal tables)"]
     end
 
     subgraph GATED["Requires approval — mutate / execute / reach out"]
         direction TB
         G1["file_write · file_edit · file_append · apply_patch"]
         G2["code_run · shell_run"]
-        G3["http_request · db_query (SELECT-only)"]
+        G3["http_request (SSRF-guarded) · db_query (SELECT-only)"]
+        G4["doc_write · pdf_write"]
     end
 
-    subgraph APPROVAL_GATE["ApprovalGate · HITL"]
-        AG["Wait for user<br/>timeout: 120s<br/>fail-safe: deny"]
+    subgraph APPROVAL_GATE["ApprovalGate"]
+        AG["Interactive: wait for user<br/>timeout 120s · fail-safe deny"]
+        AGP["Autopilot: queue as proposal<br/>(never silent execution)"]
     end
 
     subgraph SANDBOX["Docker Sandbox — code_run AND shell_run"]
@@ -295,20 +325,22 @@ flowchart LR
     end
 
     GATED --> AG
+    GATED -.autopilot.-> AGP
     G2 --> SANDBOX
 ```
 
 > **Security note:** `code_run` and `shell_run` **never execute on the host** — both run inside
 > the Docker sandbox. If Docker is unavailable, they fail safe (return an error) rather than
-> falling back to host execution. `db_query` is SELECT-only: write keywords and multi-statement
-> SQL are rejected before the query reaches the database.
+> falling back to host execution. `db_query` is SELECT-only. `web_fetch`/`http_request` pass an
+> anti-SSRF guard (reject loopback, private, link-local incl. cloud metadata). In **autopilot**
+> mode, approval-gated tools are queued as proposals for later review — never run unattended.
 
 ### The 4 Innovations — Where They Fire
 
 ```mermaid
 flowchart LR
     subgraph TURN["One Agent Turn"]
-        T1["Audit: log<br/>routing decision"] --> T2["Route: soul-aware<br/>8-dim scoring"]
+        T1["Audit: log<br/>routing decision"] --> T2["Route: soul-aware<br/>10-dim scoring"]
         T2 --> T3["LLM call<br/>+ tool loop"]
         T3 --> T4["Audit: finalize<br/>tokens / cost / latency"]
         T4 --> T5["Decay pass<br/>(throttled)"]
@@ -320,6 +352,9 @@ flowchart LR
     I2["#2 · Skill Decay<br/><i>exponential + throttle</i>"] -.-> T5
     I3["#3 · Confidence-Gated<br/>Crystallization<br/><i>eval &ge; generator</i>"] -.-> T6
     I4["#4 · Role Output<br/>Contracts<br/><i>Pydantic validated</i>"] -.-> T3
+
+    C["Compounding (builds on #1–#3)<br/><i>I1 merge · I2 promote · I3 refine · I4 auto-tune · I5 profile</i>"] -.-> T5
+    C -.-> T6
 ```
 
 ### Multi-Agent Conversation
@@ -367,7 +402,7 @@ flowchart TD
 ## The 4 Core Innovations
 
 ### 1. Routing Audit + Self-Calibration
-Every routing decision is logged **before** the LLM call with 8 dimensions (token count, tech keywords, soul upgrade hits, etc.) and updated **after** with latency, cost, and correction signals. The `/metrics` dashboard shows which complexity labels have the highest correction rate — letting you tune the router with real data.
+Every routing decision is logged **before** the LLM call with 10 dimensions (token count, tech keywords, soul upgrade hits, a language-agnostic code signal, detected script, etc.) and updated **after** with latency, cost, and correction signals. The `/metrics` dashboard shows which complexity labels have the highest correction rate — letting you tune the router with real data.
 
 ### 2. Skill Decay
 Skills age with **exponential decay** (`score × 0.97^days_since_used`). Unused skills drop below 0.3 and get archived. A revived skill recovers score immediately. Decay runs throttled (max once per hour) so it never blocks a turn.
@@ -382,7 +417,7 @@ Handoffs between roles (PM → QA → Dev) use Pydantic models as typed contract
 
 ## LLM Routing
 
-The router scores 8 dimensions, then maps a complexity label to a model. Light tiers stay
+The router scores 10 dimensions, then maps a complexity label to a model. Light tiers stay
 **local** (Ollama, free, private); heavy tiers escalate to a **cloud** model. The exact mapping
 is configurable. Local tiers are ordered **by model capacity** (harder case → more capable
 model); heavy tiers go to the cloud. The shipped default:
