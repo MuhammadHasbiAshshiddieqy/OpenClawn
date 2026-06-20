@@ -6,6 +6,16 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added — single-user production polish
+Setelah review pihak ketiga (yang sebagian keliru menilai OpenCLAWN sebagai produk
+multi-user), dua gap yang BENAR-BENAR valid untuk self-hosted single-user ditutup:
+- **`/health` endpoint** — JSON status + cek konektivitas DB, untuk monitoring self-hosted.
+- **Stale-draft cleanup** — draft yang tua (`draft_stale_days`, default 14) & tak pernah
+  terbukti (`draft_success_count=0`) diarsipkan saat decay pass — cegah menumpuk. ARSIP,
+  bukan hapus (konsisten "tak ada kehilangan data senyap"). `draft_stale_days=0` → nonaktif.
+- README: section **Scope & Production Posture** — menegaskan auth/Postgres/scaling DI LUAR
+  scope secara SADAR (§7 single-user), bukan utang teknis. +5 test.
+
 ### Added — MCP (Model Context Protocol) client
 OpenCLAWN kini dapat memakai tool dari **server MCP eksternal** (GitHub, filesystem,
 dll) — sebelumnya hanya 26 tool bawaan. Via SDK resmi `mcp` (CLAUDE.md §7: MCP bukan

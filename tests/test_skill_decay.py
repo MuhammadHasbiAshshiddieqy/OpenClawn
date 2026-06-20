@@ -106,3 +106,63 @@ async def test_get_active_skills_excludes_archived(db, config):
     names = [s["skill_name"] for s in skills]
     assert "aktif" in names
     assert "arsip" not in names
+
+
+# ── Draft cleanup (gap valid dari review) ─────────────────────────────────────
+
+
+async def test_stale_unproven_draft_archived(db):
+    """Draft TUA & tak terbukti (success_count=0) diarsipkan saat decay pass."""
+    cfg = AppConfig(db_path=":memory:", draft_stale_days=14)
+    # created_at 30 hari lalu, masih draft, belum pernah terbukti.
+    await db.execute(
+        """INSERT INTO skills (role, skill_name, skill_content, status,
+               draft_success_count, created_at)
+           VALUES ('dev','tua','isi','draft',0, datetime('now','-30 days'))"""
+    )
+    decay = SkillDecayManager("dev", db, cfg)
+    res = await decay._run_decay_pass()
+    assert res["drafts_archived"] == 1
+    row = await db.fetchone("SELECT status FROM skills WHERE skill_name='tua'")
+    assert row["status"] == "archived"  # diarsipkan, BUKAN dihapus
+
+
+async def test_recent_draft_not_archived(db):
+    """Draft baru tidak diarsipkan (belum basi)."""
+    cfg = AppConfig(db_path=":memory:", draft_stale_days=14)
+    await db.execute(
+        """INSERT INTO skills (role, skill_name, skill_content, status,
+               draft_success_count, created_at)
+           VALUES ('dev','baru','isi','draft',0, datetime('now','-2 days'))"""
+    )
+    decay = SkillDecayManager("dev", db, cfg)
+    res = await decay._run_decay_pass()
+    assert res["drafts_archived"] == 0
+
+
+async def test_proven_draft_not_archived(db):
+    """Draft tua TAPI sudah terbukti sebagian (success_count>0) tidak diarsipkan."""
+    cfg = AppConfig(db_path=":memory:", draft_stale_days=14)
+    await db.execute(
+        """INSERT INTO skills (role, skill_name, skill_content, status,
+               draft_success_count, created_at)
+           VALUES ('dev','terbukti','isi','draft',2, datetime('now','-30 days'))"""
+    )
+    decay = SkillDecayManager("dev", db, cfg)
+    res = await decay._run_decay_pass()
+    assert res["drafts_archived"] == 0
+
+
+async def test_draft_cleanup_disabled_when_zero(db):
+    """draft_stale_days=0 menonaktifkan cleanup draft."""
+    cfg = AppConfig(db_path=":memory:", draft_stale_days=0)
+    await db.execute(
+        """INSERT INTO skills (role, skill_name, skill_content, status,
+               draft_success_count, created_at)
+           VALUES ('dev','tua','isi','draft',0, datetime('now','-99 days'))"""
+    )
+    decay = SkillDecayManager("dev", db, cfg)
+    res = await decay._run_decay_pass()
+    assert res["drafts_archived"] == 0
+    row = await db.fetchone("SELECT status FROM skills WHERE skill_name='tua'")
+    assert row["status"] == "draft"  # tetap draft

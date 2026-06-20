@@ -88,6 +88,10 @@ Test untuk `memory/skill_decay.py` (Inovasi 2).
 | `test_mark_used_increases_score` | `mark_used()` menaikkan `decay_score` |
 | `test_decay_throttled` | `maybe_run_decay_pass()` skip jika interval belum lewat |
 | `test_get_active_skills_excludes_archived` | Skill archived tidak muncul di `get_active_skills` |
+| `test_stale_unproven_draft_archived` | Draft tua & tak terbukti → diarsipkan (bukan dihapus) |
+| `test_recent_draft_not_archived` | Draft baru tidak diarsipkan |
+| `test_proven_draft_not_archived` | Draft tua tapi terbukti (success_count>0) tidak diarsipkan |
+| `test_draft_cleanup_disabled_when_zero` | `draft_stale_days=0` menonaktifkan cleanup |
 
 ---
 
@@ -511,6 +515,7 @@ Smoke test untuk endpoints Web UI.
 |---|---|
 | `test_metrics_renders_empty` | `GET /metrics` render tanpa data (tidak crash) |
 | `test_index_renders` | `GET /` return 200 |
+| `test_health_endpoint` | `GET /health` → JSON status + cek DB (monitoring self-hosted) |
 | `test_index_lists_new_roles` | Sidebar + chip memuat `data` & `security` |
 | `test_index_unknown_role_falls_back` | `?role=` tak dikenal → 200 (fallback role pertama) |
 | `test_approve_requires_valid_params` | `POST /approve` tanpa params → `ok=False`, tidak crash |

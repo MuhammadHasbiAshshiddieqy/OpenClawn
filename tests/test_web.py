@@ -49,6 +49,17 @@ def test_index_renders(client):
     assert resp.status_code == 200
 
 
+def test_health_endpoint(client):
+    """/health untuk monitoring self-hosted: JSON status + cek DB."""
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["database"] == "up"
+    assert data["service"] == "openclawn"
+    assert isinstance(data["tools"], int) and data["tools"] >= 26
+
+
 def test_index_lists_new_roles(client):
     """Role baru (data, security) muncul di sidebar + chip peserta."""
     html = client.get("/").text

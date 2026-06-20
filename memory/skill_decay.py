@@ -124,4 +124,18 @@ class SkillDecayManager:
                WHERE role=? AND status='active' AND decay_score < ?""",
             (self.role, self.config.skill_archive_threshold),
         )
-        return {"archived": cursor.rowcount}
+        archived = cursor.rowcount
+
+        # Draft cleanup: draft TUA yang tak pernah terbukti (draft_success_count=0)
+        # diarsipkan agar tak menumpuk. ARSIP, bukan hapus (tak ada kehilangan data
+        # senyap — bisa ditinjau di /skills). draft_stale_days=0 → fitur nonaktif.
+        drafts_archived = 0
+        if self.config.draft_stale_days > 0:
+            cur2 = await self.db.execute(
+                """UPDATE skills SET status='archived'
+                   WHERE role=? AND status='draft' AND draft_success_count=0
+                     AND julianday('now') - julianday(created_at) > ?""",
+                (self.role, self.config.draft_stale_days),
+            )
+            drafts_archived = cur2.rowcount
+        return {"archived": archived, "drafts_archived": drafts_archived}

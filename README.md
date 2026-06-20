@@ -524,6 +524,7 @@ Detailed reference for every module, class, and function:
 | 5++ | Autopilots (scheduled, proposal-gated) · Activity timeline · Skill packs | Done |
 | 6–8 | Compounding intelligence: skill curator · draft promotion · refine · guarded auto-apply · user model | Done |
 | — | Multilingual routing (structural + script-aware signals) | Done |
+| — | MCP client (external tools, approval-gated) · `/health` · stale-draft cleanup | Done |
 
 ---
 
@@ -536,6 +537,34 @@ Detailed reference for every module, class, and function:
 - **No hardcoded domain/locale** — locale via field & config, not in code (routing keywords moved out of core)
 - **Gated, versioned, reversible** — self-improvement (merge/refine/promote/auto-tune) always behind confidence gates, with audit trails and revert
 - **Every innovation = extractable module** — `skill_decay`, `audit`, `crystallizer`, `contracts`, `curator`, `activity` have clean interfaces
+
+---
+
+## Scope & Production Posture
+
+OpenCLAWN targets **single-user, self-hosted** use (research/experiment phase). Several
+things a multi-user SaaS would need are **intentionally out of scope** — they are design
+decisions, not technical debt:
+
+| Not included | Why (deliberate) |
+|---|---|
+| Authentication | Single-user by design — you run it for yourself, behind your own machine/network |
+| Rate limiting | Only relevant when exposed to untrusted/multiple clients |
+| PostgreSQL / horizontal scaling | SQLite (WAL) is sufficient for one user; no multi-instance state |
+| Multi-tenancy | One workspace, one user |
+
+Adopting these would change the project's identity, so they are not on the roadmap unless
+that direction is chosen explicitly.
+
+**What "production-ready" means here** (for single-user self-hosting): reliable for one
+person. That posture is already largely met — Docker-sandboxed execution, SSRF guard,
+HITL approval, fail-safe error handling, CI on every push, a `/health` endpoint, and stale
+draft-skill cleanup. Remaining polish is tracked in [CHANGELOG.md](CHANGELOG.md).
+
+> **Common review misread:** OpenCLAWN is *not* an under-built multi-user product. `shell_run`
+> and `code_run` run **only** in the Docker sandbox (never on the host); the DB is never
+> served statically; there are no `except: pass` swallows; CI exists. Evaluate it as a
+> single-user framework, not a SaaS.
 
 ---
 

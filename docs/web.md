@@ -25,6 +25,12 @@ Dipanggil oleh FastAPI saat startup dan shutdown:
 
 ---
 
+#### `GET /health`
+
+**Health check ringkas** untuk monitoring self-hosted (single-user, §7). Verifikasi konektivitas DB via `SELECT 1` murah. Return JSON `{ok, service, database: "up"|"down", tools}`. `ok=False` bila DB tak terjangkau — fail-soft (melaporkan, tak meledak). Bukan dashboard.
+
+---
+
 #### `GET /`
 
 **Halaman chat utama.**

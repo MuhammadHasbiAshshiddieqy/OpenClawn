@@ -38,6 +38,10 @@ class AppConfig:
     curation_auto: bool = False  # §8: default usulan-saja, user apply di /skills
     # I2 — Draft promotion: draft yang terbukti berguna naik 'active'.
     draft_promote_uses: int = 3  # dipakai-sukses N kali → promote
+    # Draft cleanup: draft yang TUA & tak pernah terbukti (draft_success_count=0)
+    # diarsipkan saat decay pass — cegah menumpuk. ARSIP (bukan hapus): konsisten
+    # prinsip "tak ada kehilangan data senyap". 0 = nonaktifkan cleanup.
+    draft_stale_days: int = 14
     # I3 — Skill refine on correction: perbaiki skill yang menyesatkan (versioned).
     refine_on_correction: bool = True
     refine_max_per_pass: int = 3

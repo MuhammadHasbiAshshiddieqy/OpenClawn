@@ -36,6 +36,7 @@ from infra.logging import log, setup_logging
 from infra.settings import KNOWN_MODELS, SettingsStore
 from security.approval import ApprovalGate
 from security.question import QuestionGate
+from tools import TOOL_REGISTRY
 
 db = DatabaseManager(CONFIG)
 # ApprovalGate & QuestionGate shared di tingkat app: AgentLoop dibuat baru tiap
@@ -150,6 +151,27 @@ async def index(request: Request, role: str = "pm"):
             "active_model": active_model,
         },
     )
+
+
+@app.get("/health")
+async def health():
+    """Health check ringkas untuk monitoring self-hosted (single-user, §7).
+
+    Verifikasi konektivitas DB lewat satu query murah. Mengembalikan JSON status —
+    bukan dashboard. `ok`=False bila DB tak terjangkau (mis. file terkunci/hilang).
+    """
+    db_ok = True
+    try:
+        await db.fetchone("SELECT 1 AS ok")
+    except Exception as e:  # noqa: BLE001 — health harus melaporkan, bukan meledak
+        db_ok = False
+        log.warning("health_db_check_failed", error=str(e))
+    return {
+        "ok": db_ok,
+        "service": "openclawn",
+        "database": "up" if db_ok else "down",
+        "tools": len(TOOL_REGISTRY),
+    }
 
 
 @app.post("/chat/stream")

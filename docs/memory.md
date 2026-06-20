@@ -96,9 +96,10 @@ Throttle gate: jika belum lewat `decay_interval_sec` sejak pass terakhir, return
 **`_run_decay_pass() → dict`** *(async, private)*  
 Jalankan decay sesungguhnya:
 1. UPDATE semua skill aktif: `decay_score = decay_score * POWER(0.97, hari_sejak_dipakai)` menggunakan custom function SQLite `POWER()`
-2. UPDATE skill yang skor-nya < threshold → `status='archived'`
+2. UPDATE skill aktif yang skor-nya < threshold → `status='archived'`
+3. **Draft cleanup:** UPDATE draft TUA (`> draft_stale_days`, default 14) & tak pernah terbukti (`draft_success_count=0`) → `status='archived'` (cegah menumpuk; ARSIP bukan hapus; `draft_stale_days=0` → nonaktif)
 
-Return `{"archived": N}` dengan N = jumlah skill yang baru diarsipkan.
+Return `{"archived": N, "drafts_archived": M}`.
 
 ---
 
