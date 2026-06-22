@@ -11,8 +11,12 @@
     <!-- Render markdown jawaban agent → HTML, lalu sanitasi (cegah XSS). -->
     <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+    <!-- Syntax highlighting untuk code blocks -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/atom-one-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 </head>
 <body>
+<button class="sidebar-toggle" id="sidebar-toggle" title="Toggle sidebar">☰</button>
 <div class="app">
     {# roles_meta dikirim dari web/main.py (ROLES_META) — single source of truth. #}
     <aside class="sidebar">
@@ -490,19 +494,28 @@
     // Tangani satu status event → status-line efemeral atau action chip persisten.
     function handleStatus(s, beforeEl) {
         if (s.text === 'question') {
-            // Agent bertanya → chip persisten + aktifkan mode jawab di composer.
             appendAction(statusLabel(s.text, s.detail), 'ask', beforeEl);
             beginAnswerMode(s.detail);
             return;
         }
         if (s.text === 'thinking') {
+            showTyping();
+            showStatus(statusLabel(s.text, s.detail));
+        } else if (s.text === 'tool') {
+            // Tampilkan tool card dengan input
+            hideTyping();
+            const input = s.input || {};
+            appendToolCard(s.detail, input, s.approval || '', beforeEl);
             showStatus(statusLabel(s.text, s.detail));
         } else {
+            hideTyping();
             const kind = s.text === 'fallback' ? 'fallback'
                        : s.text === 'loop_stopped' ? 'error' : '';
             appendAction(statusLabel(s.text, s.detail), kind, beforeEl);
         }
     }
+    // Patch: simpan referensi handleStatus asli untuk multi-agent
+    const _origHandleStatus = handleStatus;
 
     // Mode jawab: agent menunggu jawaban ask_user. Composer dialihkan ke /answer.
     function beginAnswerMode(question) {
@@ -519,6 +532,7 @@
     // ── Mode SINGLE: 1 agent (endpoint /chat/stream) ──────────────────────────
     async function runSingle(message) {
         userBubble(message);
+        showTyping();
         showStatus('<span class="status-tag think">Wait</span> Mengirim…');
         const params = new URLSearchParams({ message, role: form.role.value, session_id: form.session_id.value });
 
@@ -537,10 +551,11 @@
                 arm();
                 if (evType === 'thinking') {
                     let piece = data; try { piece = JSON.parse(data); } catch (_) {}
+                    hideTyping();
                     appendThinking(bodyEl, piece); showStatus('<span class="status-tag think">Think</span> Menalar…');
                 } else if (evType === 'token') {
                     let piece = data; try { piece = JSON.parse(data); } catch (_) {}
-                    if (!raw) collapseThinking(bodyEl);   // jawaban final mulai → tutup thinking
+                    if (!raw) { collapseThinking(bodyEl); hideTyping(); }
                     raw += piece; bodyEl.innerHTML = renderMarkdown(raw); showStatus('<span class="status-tag think">Gen</span> Menulis jawaban…');
                 } else if (evType === 'status') {
                     try { handleStatus(JSON.parse(data), wrapEl); } catch (_) {}
@@ -557,12 +572,12 @@
                 if (statusLine.className.indexOf('error') === -1)
                     appendAction('<span class="status-tag stop">Err</span> Tidak ada jawaban (semua model gagal/kosong)', 'error', null);
             }
-            if (statusLine.className.indexOf('error') === -1) hideStatus();
+            if (statusLine.className.indexOf('error') === -1) { hideStatus(); hideTyping(); }
         } catch (err) {
             clearTimeout(watchdog);
             appendAction('<span class="status-tag stop">Err</span> Koneksi terputus', 'error', wrapEl);
             if (!bodyEl.innerHTML.trim()) wrapEl.remove();
-            hideStatus();
+            hideStatus(); hideTyping();
         }
     }
 
@@ -747,6 +762,156 @@
             sendMessage();
         });
     });
+
+    // ── Sidebar toggle ────────────────────────────────────────────────────
+    const sidebarToggle = document.getElementById('sidebar-toggle');
+    sidebarToggle.addEventListener('click', function() {
+        document.body.classList.toggle('sidebar-collapsed');
+        sidebarToggle.textContent = document.body.classList.contains('sidebar-collapsed') ? '▶' : '☰';
+    });
+
+    // ── Smart auto-scroll ─────────────────────────────────────────────────
+    let userScrolledUp = false;
+    chatBox.parentElement.addEventListener('scroll', function() {
+        const s = chatBox.parentElement;
+        userScrolledUp = s.scrollTop + s.clientHeight < s.scrollHeight - 60;
+    });
+    function smartScroll() {
+        if (!userScrolledUp) {
+            chatBox.parentElement.scrollTop = chatBox.parentElement.scrollHeight;
+        }
+    }
+
+    // ── Copy button untuk code blocks ─────────────────────────────────────
+    function injectCopyButtons(el) {
+        el.querySelectorAll('pre').forEach(function(pre) {
+            if (pre.parentElement.classList.contains('code-block-wrap')) return;
+            const wrap = document.createElement('div');
+            wrap.className = 'code-block-wrap';
+            const btn = document.createElement('button');
+            btn.className = 'copy-btn';
+            btn.textContent = 'Copy';
+            btn.addEventListener('click', function() {
+                const code = pre.textContent || '';
+                navigator.clipboard.writeText(code).then(function() {
+                    btn.textContent = 'Copied!'; btn.classList.add('copied');
+                    setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1800);
+                }).catch(function() {
+                    btn.textContent = 'Failed';
+                });
+            });
+            pre.parentNode.insertBefore(wrap, pre);
+            wrap.appendChild(pre);
+            wrap.appendChild(btn);
+        });
+    }
+
+    // ── Typing indicator ──────────────────────────────────────────────────
+    let typingEl = null;
+    function showTyping() {
+        if (typingEl) return;
+        typingEl = document.createElement('div');
+        typingEl.className = 'typing';
+        typingEl.innerHTML = '<span></span><span></span><span></span>';
+        chatBox.appendChild(typingEl);
+        smartScroll();
+    }
+    function hideTyping() {
+        if (typingEl) { typingEl.remove(); typingEl = null; }
+    }
+
+    // ── Tool call cards ───────────────────────────────────────────────────
+    function appendToolCard(name, input, status, beforeEl) {
+        const card = document.createElement('div');
+        card.className = 'tool-card';
+        // Input sebagai JSON string pendek
+        let inputStr = '';
+        try { inputStr = JSON.stringify(input, null, 2); } catch(_) { inputStr = String(input); }
+        if (inputStr.length > 300) inputStr = inputStr.slice(0, 300) + '…';
+        card.innerHTML =
+            '<div class="tc-head">' +
+            '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="4" height="4" rx="1"/><rect x="10" y="2" width="4" height="4" rx="1"/><path d="M4 6v3h2v4h4V9h2V6"/></svg>' +
+            '<span class="tc-name">' + escapeHtml(name) + '</span>' +
+            (status ? '<span class="tc-approval ' + status + '">' + status + '</span>' : '') +
+            '</div>' +
+            '<div class="tc-body">' + escapeHtml(inputStr) + '</div>';
+        chatBox.insertBefore(card, beforeEl);
+        smartScroll();
+        return card;
+    }
+
+    // ── Toast notifications ────────────────────────────────────────────────
+    let toastContainer = document.getElementById('toast-container');
+    if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.className = 'toast-container';
+        toastContainer.id = 'toast-container';
+        document.body.appendChild(toastContainer);
+    }
+    function toast(msg, kind) {
+        const el = document.createElement('div');
+        el.className = 'toast ' + (kind || '');
+        el.textContent = msg;
+        toastContainer.appendChild(el);
+        setTimeout(function() {
+            el.classList.add('removing');
+            setTimeout(function() { el.remove(); }, 200);
+        }, 2800);
+    }
+
+    // ── Keyboard shortcuts ─────────────────────────────────────────────────
+    document.addEventListener('keydown', function(e) {
+        if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+        // Ctrl+K: fokus composer
+        if (e.ctrlKey && e.key === 'k') { e.preventDefault(); textarea.focus(); }
+        // Escape: blur composer
+        if (e.key === 'Escape') { textarea.blur(); }
+    });
+
+    // ── Drag & drop file ke composer ───────────────────────────────────────
+    const dropIndicator = document.createElement('div');
+    dropIndicator.className = 'drop-indicator';
+    dropIndicator.innerHTML = '<div>📂 Lepas file untuk dibaca</div>';
+    document.body.appendChild(dropIndicator);
+
+    let dragCounter = 0;
+    document.addEventListener('dragenter', function(e) { e.preventDefault(); dragCounter++; dropIndicator.classList.add('show'); });
+    document.addEventListener('dragleave', function(e) { e.preventDefault(); dragCounter--; if (dragCounter <= 0) { dragCounter = 0; dropIndicator.classList.remove('show'); } });
+    document.addEventListener('dragover', function(e) { e.preventDefault(); });
+    document.addEventListener('drop', function(e) {
+        e.preventDefault();
+        dragCounter = 0;
+        dropIndicator.classList.remove('show');
+        const file = e.dataTransfer.files[0];
+        if (!file) return;
+        textarea.value = 'Baca file ' + file.path + ' dan jelaskan isinya.';
+        autoGrow();
+        sendMessage();
+    });
+
+    // ── Patch: override renderMarkdown utk inject copy buttons + highlight ─
+    const _origRender = renderMarkdown;
+    renderMarkdown = function(raw) {
+        const html = _origRender(raw);
+        // Return wrapper yg bisa diproses setelah attach ke DOM
+        return html;
+    };
+
+    // Observer: setelah bubble di-render, inject copy button + syntax highlight
+    const renderObserver = new MutationObserver(function(mutations) {
+        mutations.forEach(function(m) {
+            m.addedNodes.forEach(function(node) {
+                if (node.nodeType !== 1) return;
+                if (node.classList && node.classList.contains('msg-body')) {
+                    injectCopyButtons(node);
+                    if (typeof hljs !== 'undefined') {
+                        node.querySelectorAll('pre code').forEach(function(b) { hljs.highlightElement(b); });
+                    }
+                }
+            });
+        });
+    });
+    renderObserver.observe(chatBox, { childList: true, subtree: true });
 </script>
 </body>
 </html>

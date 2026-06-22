@@ -925,3 +925,118 @@ select:focus { outline: none; border-color: var(--purple-bright); }
     .nav-links { flex-direction: row; }
     .main { height: calc(100vh - 62px); }
 }
+
+/* ── Sidebar toggle ─────────────────────────────────────────────────────── */
+.sidebar-toggle {
+    position: fixed; left: calc(var(--sidebar-w) + 8px); top: 10px; z-index: 10;
+    width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel-2); color: var(--text-dim); cursor: pointer;
+    display: grid; place-items: center; transition: all .2s; font-size: .8rem;
+}
+.sidebar-toggle:hover { color: var(--text); border-color: var(--purple-bright); }
+body.sidebar-collapsed .sidebar { display: none; }
+body.sidebar-collapsed .app { grid-template-columns: 1fr; }
+body.sidebar-collapsed .sidebar-toggle { left: 12px; }
+@media (min-width: 721px) {
+    .sidebar-toggle { display: none; } /* desktop pakai sidebar penuh */
+}
+
+/* ── Tool call card ─────────────────────────────────────────────────────── */
+.tool-card {
+    align-self: flex-start; max-width: 88%;
+    background: var(--panel); border: 1px solid var(--border-2);
+    border-radius: var(--radius-sm); overflow: hidden;
+    animation: rise .18s ease both;
+}
+.tool-card .tc-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px; background: rgba(240,196,90,.08);
+    border-bottom: 1px solid var(--border);
+    font-size: .76rem; font-weight: 700; letter-spacing: .04em;
+    color: #f0c45a;
+}
+.tool-card .tc-head svg { width: 14px; height: 14px; flex: none; }
+.tool-card .tc-name { text-transform: uppercase; }
+.tool-card .tc-approval {
+    font-size: .64rem; font-weight: 400; letter-spacing: .02em;
+    padding: 1px 7px; border-radius: 999px;
+    margin-left: auto;
+    background: rgba(236,30,75,.2); color: var(--red-soft);
+}
+.tool-card .tc-approval.approved { background: rgba(52,199,89,.15); color: var(--green); }
+.tool-card .tc-body {
+    padding: 8px 12px; font-size: .82rem; color: var(--text-dim);
+    font-family: ui-monospace, monospace; white-space: pre-wrap; word-break: break-all;
+    max-height: 140px; overflow-y: auto; line-height: 1.4;
+}
+.tool-card .tc-result {
+    border-top: 1px solid var(--border); padding: 8px 12px;
+    font-size: .82rem; color: var(--text-dim); max-height: 120px; overflow-y: auto;
+}
+.tool-card .tc-result.error { color: var(--red-soft); background: rgba(236,30,75,.05); }
+
+/* ── Typing indicator ───────────────────────────────────────────────────── */
+.typing {
+    align-self: flex-start;
+    display: flex; gap: 4px; padding: 10px 14px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.typing span {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--purple-bright);
+    animation: typing-bounce 1.4s infinite ease both;
+}
+.typing span:nth-child(2) { animation-delay: .2s; }
+.typing span:nth-child(3) { animation-delay: .4s; }
+@keyframes typing-bounce { 0%,80%,100% { transform: scale(.6); opacity: .4 } 40% { transform: scale(1); opacity: 1 } }
+
+/* ── Copy button (code blocks) ──────────────────────────────────────────── */
+.code-block-wrap { position: relative; }
+.code-block-wrap .copy-btn {
+    position: absolute; top: 6px; right: 6px;
+    padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text-faint); cursor: pointer;
+    font-size: .7rem; font-family: var(--font); transition: all .12s; opacity: 0;
+}
+.code-block-wrap:hover .copy-btn { opacity: 1; }
+.code-block-wrap .copy-btn:hover { color: var(--text); border-color: var(--purple-bright); }
+.code-block-wrap .copy-btn.copied { color: var(--green); border-color: var(--green); }
+
+/* ── Toast notifications ────────────────────────────────────────────────── */
+.toast-container {
+    position: fixed; bottom: 24px; right: 24px; z-index: 100;
+    display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+}
+.toast {
+    pointer-events: auto;
+    padding: 10px 16px; border-radius: var(--radius-sm);
+    font-size: .84rem; font-weight: 600;
+    background: var(--elevated); border: 1px solid var(--border-2);
+    color: var(--text); box-shadow: 0 8px 24px -8px rgba(0,0,0,.6);
+    animation: toast-in .25s ease both;
+    max-width: 360px;
+}
+.toast.success { border-color: var(--green); color: var(--green); background: rgba(52,199,89,.1); }
+.toast.error { border-color: var(--red); color: var(--red-soft); background: rgba(236,30,75,.1); }
+.toast.removing { animation: toast-out .2s ease forwards; }
+@keyframes toast-in { from { opacity: 0; transform: translateX(20px) } to { opacity: 1; transform: none } }
+@keyframes toast-out { to { opacity: 0; transform: translateX(20px) } }
+
+/* ── Drag-drop zone ─────────────────────────────────────────────────────── */
+.composer.dragover {
+    border-color: var(--purple-bright); box-shadow: var(--glow-purple);
+    background: rgba(124,58,237,.08);
+}
+.drop-indicator {
+    position: fixed; inset: 0; z-index: 50;
+    display: grid; place-items: center;
+    background: rgba(13,11,20,.7); backdrop-filter: blur(4px);
+    pointer-events: none; opacity: 0; transition: opacity .15s;
+}
+.drop-indicator.show { opacity: 1; }
+.drop-indicator div {
+    background: var(--grad-brand); color: #fff; padding: 20px 32px;
+    border-radius: var(--radius-lg); font-weight: 700; font-size: 1.1rem;
+    box-shadow: var(--glow-purple);
+}
