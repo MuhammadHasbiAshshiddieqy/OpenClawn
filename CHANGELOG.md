@@ -4,6 +4,33 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/) with pre-release suffixes during the research phase.
 
+## [0.6.0-alpha] — 2026-06-22
+
+### Added — UI enhancements (Web UI)
+Sepuluh peningkatan UX di halaman chat utama: **tool call cards** (kartu visual
+nama tool + input + status approval), **copy button** otomatis di code block,
+**smart auto-scroll** (diam saat user scroll ke atas, lanjut saat ada konten baru),
+**collapsible sidebar** untuk layar kecil, **toast notifications**, **drag & drop
+file** ke composer, **keyboard shortcut** (Ctrl+K fokus composer, Escape blur), dan
+**syntax highlighting** (highlight.js) untuk code block.
+
+### Fixed — UI batch (audit pasca-merge)
+Audit batch UI menemukan beberapa cacat nyata yang langsung diperbaiki:
+- **Drag & drop** semula memakai `file.path` (API Electron — selalu `undefined`
+  di browser) lalu auto-mengirim prompt rusak. Kini membaca **isi** file via
+  `FileReader` ke composer (tanpa auto-send, batas 256 KiB, guard `Files`-only agar
+  drag teks ke textarea tetap normal) dengan umpan balik toast.
+- **Syntax highlight + copy button** tak pernah jalan untuk jawaban streaming:
+  `MutationObserver` hanya terpicu saat node `.msg-body` baru, padahal streaming
+  me-rewrite `innerHTML` pada node yang **sama**. Diganti `finalizeBody()` yang
+  dipanggil **sekali per giliran** setelah stream selesai (mode single & conversation).
+- Hapus override `renderMarkdown` no-op (dead code) dan `MutationObserver` boros.
+- **highlight.js v11.9.0** kini di-host **lokal** di `web/static/` (local-first,
+  tanpa dependency CDN runtime); load bersifat opsional — `finalizeBody()` men-skip
+  highlight secara senyap bila `hljs` tak tersedia.
+- Cabut **typing indicator** (titik-tiga): status line sudah meng-cover state
+  menunggu, dua indikator "sedang bekerja" terasa berlebih.
+
 ## [0.5.0-alpha] — 2026-06-21
 
 ### Added — skill scanner (terinspirasi nvidia/skillspector)
