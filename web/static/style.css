@@ -975,22 +975,6 @@ body.sidebar-collapsed .sidebar-toggle { left: 12px; }
 }
 .tool-card .tc-result.error { color: var(--red-soft); background: rgba(236,30,75,.05); }
 
-/* ── Typing indicator ───────────────────────────────────────────────────── */
-.typing {
-    align-self: flex-start;
-    display: flex; gap: 4px; padding: 10px 14px;
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-}
-.typing span {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--purple-bright);
-    animation: typing-bounce 1.4s infinite ease both;
-}
-.typing span:nth-child(2) { animation-delay: .2s; }
-.typing span:nth-child(3) { animation-delay: .4s; }
-@keyframes typing-bounce { 0%,80%,100% { transform: scale(.6); opacity: .4 } 40% { transform: scale(1); opacity: 1 } }
-
 /* ── Copy button (code blocks) ──────────────────────────────────────────── */
 .code-block-wrap { position: relative; }
 .code-block-wrap .copy-btn {

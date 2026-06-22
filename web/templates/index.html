@@ -11,9 +11,12 @@
     <!-- Render markdown jawaban agent → HTML, lalu sanitasi (cegah XSS). -->
     <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
-    <!-- Syntax highlighting untuk code blocks -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/atom-one-dark.min.css">
-    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+    <!-- Syntax highlighting untuk code blocks (highlight.js v11.9.0).
+         Di-host LOKAL di web/static/ (local-first, tanpa dependency CDN runtime).
+         OPSIONAL: bila gagal load, finalizeBody() men-skip highlight secara
+         senyap (guard `typeof hljs`). -->
+    <link rel="stylesheet" href="/static/highlight-atom-one-dark.min.css">
+    <script src="/static/highlight.min.js"></script>
 </head>
 <body>
 <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle sidebar">☰</button>
@@ -499,23 +502,17 @@
             return;
         }
         if (s.text === 'thinking') {
-            showTyping();
             showStatus(statusLabel(s.text, s.detail));
         } else if (s.text === 'tool') {
-            // Tampilkan tool card dengan input
-            hideTyping();
             const input = s.input || {};
             appendToolCard(s.detail, input, s.approval || '', beforeEl);
             showStatus(statusLabel(s.text, s.detail));
         } else {
-            hideTyping();
             const kind = s.text === 'fallback' ? 'fallback'
                        : s.text === 'loop_stopped' ? 'error' : '';
             appendAction(statusLabel(s.text, s.detail), kind, beforeEl);
         }
     }
-    // Patch: simpan referensi handleStatus asli untuk multi-agent
-    const _origHandleStatus = handleStatus;
 
     // Mode jawab: agent menunggu jawaban ask_user. Composer dialihkan ke /answer.
     function beginAnswerMode(question) {
@@ -532,7 +529,6 @@
     // ── Mode SINGLE: 1 agent (endpoint /chat/stream) ──────────────────────────
     async function runSingle(message) {
         userBubble(message);
-        showTyping();
         showStatus('<span class="status-tag think">Wait</span> Mengirim…');
         const params = new URLSearchParams({ message, role: form.role.value, session_id: form.session_id.value });
 
@@ -551,11 +547,10 @@
                 arm();
                 if (evType === 'thinking') {
                     let piece = data; try { piece = JSON.parse(data); } catch (_) {}
-                    hideTyping();
                     appendThinking(bodyEl, piece); showStatus('<span class="status-tag think">Think</span> Menalar…');
                 } else if (evType === 'token') {
                     let piece = data; try { piece = JSON.parse(data); } catch (_) {}
-                    if (!raw) { collapseThinking(bodyEl); hideTyping(); }
+                    if (!raw) collapseThinking(bodyEl);
                     raw += piece; bodyEl.innerHTML = renderMarkdown(raw); showStatus('<span class="status-tag think">Gen</span> Menulis jawaban…');
                 } else if (evType === 'status') {
                     try { handleStatus(JSON.parse(data), wrapEl); } catch (_) {}
@@ -571,13 +566,15 @@
                 wrapEl.remove();
                 if (statusLine.className.indexOf('error') === -1)
                     appendAction('<span class="status-tag stop">Err</span> Tidak ada jawaban (semua model gagal/kosong)', 'error', null);
+            } else {
+                finalizeBody(bodyEl);  // highlight + copy button setelah stream selesai
             }
-            if (statusLine.className.indexOf('error') === -1) { hideStatus(); hideTyping(); }
+            if (statusLine.className.indexOf('error') === -1) hideStatus();
         } catch (err) {
             clearTimeout(watchdog);
             appendAction('<span class="status-tag stop">Err</span> Koneksi terputus', 'error', wrapEl);
             if (!bodyEl.innerHTML.trim()) wrapEl.remove();
-            hideStatus(); hideTyping();
+            hideStatus();
         }
     }
 
@@ -606,6 +603,7 @@
             await readSSE(resp, (evType, data) => {
                 let d = {}; try { d = JSON.parse(data); } catch (_) {}
                 if (evType === 'turn') {
+                    finalizeBody(currentBody);  // tuntaskan giliran sebelumnya sebelum buka bubble baru
                     currentBody = newAssistantBubble(d.role);
                     currentWrap = currentBody.parentElement;
                     currentRaw = '';
@@ -642,6 +640,7 @@
             }
             hideStatus();
         } finally {
+            finalizeBody(currentBody);  // tuntaskan giliran terakhir (sukses/abort/error)
             activeConvo = null;
             stopBtn.hidden = true;
             sendBtn.hidden = false;
@@ -806,20 +805,6 @@
         });
     }
 
-    // ── Typing indicator ──────────────────────────────────────────────────
-    let typingEl = null;
-    function showTyping() {
-        if (typingEl) return;
-        typingEl = document.createElement('div');
-        typingEl.className = 'typing';
-        typingEl.innerHTML = '<span></span><span></span><span></span>';
-        chatBox.appendChild(typingEl);
-        smartScroll();
-    }
-    function hideTyping() {
-        if (typingEl) { typingEl.remove(); typingEl = null; }
-    }
-
     // ── Tool call cards ───────────────────────────────────────────────────
     function appendToolCard(name, input, status, beforeEl) {
         const card = document.createElement('div');
@@ -869,49 +854,69 @@
     });
 
     // ── Drag & drop file ke composer ───────────────────────────────────────
+    // Browser File tidak punya .path (itu API Electron); baca ISI file via
+    // FileReader lalu sisipkan ke composer. Tidak auto-send: user meninjau
+    // dulu (file besar/biner di-tolak dengan pesan jelas).
+    const DROP_MAX_BYTES = 256 * 1024;  // 256 KiB — cukup untuk teks, cegah blow-up context
     const dropIndicator = document.createElement('div');
     dropIndicator.className = 'drop-indicator';
-    dropIndicator.innerHTML = '<div>📂 Lepas file untuk dibaca</div>';
+    dropIndicator.innerHTML = '<div>📂 Lepas file teks untuk disisipkan</div>';
     document.body.appendChild(dropIndicator);
 
+    // preventDefault HANYA saat seret membawa file — biarkan drag teks biasa
+    // ke textarea bekerja normal.
+    function dragHasFiles(e) {
+        const t = e.dataTransfer;
+        return t && t.types && Array.prototype.indexOf.call(t.types, 'Files') !== -1;
+    }
     let dragCounter = 0;
-    document.addEventListener('dragenter', function(e) { e.preventDefault(); dragCounter++; dropIndicator.classList.add('show'); });
-    document.addEventListener('dragleave', function(e) { e.preventDefault(); dragCounter--; if (dragCounter <= 0) { dragCounter = 0; dropIndicator.classList.remove('show'); } });
-    document.addEventListener('dragover', function(e) { e.preventDefault(); });
+    document.addEventListener('dragenter', function(e) {
+        if (!dragHasFiles(e)) return;
+        e.preventDefault(); dragCounter++; dropIndicator.classList.add('show');
+    });
+    document.addEventListener('dragleave', function(e) {
+        if (!dragHasFiles(e)) return;
+        e.preventDefault(); dragCounter--;
+        if (dragCounter <= 0) { dragCounter = 0; dropIndicator.classList.remove('show'); }
+    });
+    document.addEventListener('dragover', function(e) { if (dragHasFiles(e)) e.preventDefault(); });
     document.addEventListener('drop', function(e) {
+        if (!dragHasFiles(e)) return;
         e.preventDefault();
         dragCounter = 0;
         dropIndicator.classList.remove('show');
         const file = e.dataTransfer.files[0];
         if (!file) return;
-        textarea.value = 'Baca file ' + file.path + ' dan jelaskan isinya.';
-        autoGrow();
-        sendMessage();
+        if (file.size > DROP_MAX_BYTES) {
+            toast('File terlalu besar (maks ' + (DROP_MAX_BYTES / 1024) + ' KiB)', 'error');
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = function() {
+            const content = String(reader.result || '');
+            const sep = textarea.value.trim() ? '\n\n' : '';
+            textarea.value += sep + 'Isi file `' + file.name + '`:\n\n```\n' + content + '\n```\n';
+            autoGrow();
+            textarea.focus();
+            toast('File "' + file.name + '" disisipkan — tinjau lalu kirim', 'success');
+        };
+        reader.onerror = function() { toast('Gagal membaca file', 'error'); };
+        reader.readAsText(file);
     });
 
-    // ── Patch: override renderMarkdown utk inject copy buttons + highlight ─
-    const _origRender = renderMarkdown;
-    renderMarkdown = function(raw) {
-        const html = _origRender(raw);
-        // Return wrapper yg bisa diproses setelah attach ke DOM
-        return html;
-    };
-
-    // Observer: setelah bubble di-render, inject copy button + syntax highlight
-    const renderObserver = new MutationObserver(function(mutations) {
-        mutations.forEach(function(m) {
-            m.addedNodes.forEach(function(node) {
-                if (node.nodeType !== 1) return;
-                if (node.classList && node.classList.contains('msg-body')) {
-                    injectCopyButtons(node);
-                    if (typeof hljs !== 'undefined') {
-                        node.querySelectorAll('pre code').forEach(function(b) { hljs.highlightElement(b); });
-                    }
-                }
+    // ── Syntax highlight + copy button: dijalankan SEKALI setelah giliran
+    // selesai stream (bukan tiap token). MutationObserver per-mutasi dibuang
+    // karena streaming me-rewrite innerHTML berulang — observer tak terpicu
+    // (node msg-body tak baru) dan boros saat subtree dipantau penuh.
+    function finalizeBody(bodyEl) {
+        if (!bodyEl) return;
+        injectCopyButtons(bodyEl);
+        if (typeof hljs !== 'undefined') {
+            bodyEl.querySelectorAll('pre code').forEach(function(b) {
+                try { hljs.highlightElement(b); } catch (_) {}
             });
-        });
-    });
-    renderObserver.observe(chatBox, { childList: true, subtree: true });
+        }
+    }
 </script>
 </body>
 </html>
