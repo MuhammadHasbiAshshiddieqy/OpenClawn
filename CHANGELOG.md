@@ -2,7 +2,42 @@
 
 All notable changes to OpenCLAWN are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is
-[SemVer](https://semver.org/) with pre-release suffixes during the research phase.
+[SemVer](https://semver.org/). Versi 0.7.0 menandai keluarnya dari fase
+pre-release (`-alpha`) menjadi rilis stabil pertama.
+
+## [0.7.0] — 2026-06-17
+
+Rilis stabil pertama (keluar dari fase alpha). MINOR bump di atas v0.6.0-alpha.
+
+### Added — Guardrails (terinspirasi NVIDIA NeMo Guardrails)
+Sebelumnya tak ada lapisan yang memeriksa **output** LLM sebelum sampai ke user —
+gap keamanan terbesar. Ditambahkan kerangka rail input/output, mengadopsi *arsitektur*
+NeMo Guardrails secara native tanpa paketnya (paket NeMo butuh LangChain + dependency
+berat → melanggar prinsip minimal §6/§1.4/§8). Sejalan dengan `skill_scanner` yang
+meniru `nvidia/skillspector`.
+- **`security/guardrails.py`** — `GuardrailEngine` + rail MURNI stdlib (extractable):
+  - INPUT: `PromptInjectionRail` (membungkus `Shield`, BLOCK).
+  - OUTPUT: `PromptLeakRail` (BLOCK respons yang membocorkan system-prompt/peran),
+    `PIIRail` (REDACT email/kartu kredit/kunci API → `[REDACTED]`).
+- **`core/guardrails_config.py`** — `GuardrailConfigStore`: on/off per rail disimpan
+  di `app_settings` (key `guardrails_enabled`), dibaca tiap turn → perubahan UI berlaku
+  tanpa restart. Fail-safe default-on (config korup/hilang → semua rail aktif, §1).
+- **Integrasi `agent_loop`:** input rail di awal `run()`; output rail saat finalisasi
+  turn — meredaksi/memblokir **sebelum** disimpan ke history & memori (L1/L4 tak
+  tercemar PII), lalu memancarkan event SSE `guardrail` ke UI.
+- Catatan jujur soal streaming: token yang sudah ter-stream tak bisa ditarik; output
+  rail bekerja pada `turn.content` lengkap untuk menjaga PII keluar dari penyimpanan
+  dan menandai UI.
+
+### Fixed — FTS5 query sanitization (memory L4)
+Query user dikirim mentah ke FTS5 `MATCH`, padahal tanda baca (`.` `,` `:` `(` `)` `"`)
+adalah sintaks operator FTS5 — sehingga query biasa seperti "bug login: OAuth." selalu
+melempar syntax error dan **L4 cross-session search gagal diam-diam** untuk mayoritas
+query nyata.
+- **`fts5_query()`** di `memory/search.py`: ekstrak token `\w+`, bungkus tiap token
+  sebagai literal berkutip, gabung dengan `OR`. Diterapkan di `SessionSearch.search`
+  dan `MemoryManager.load_context`. Query bertanda baca kini **menemukan hasil**,
+  bukan error.
 
 ## [0.6.0-alpha] — 2026-06-22
 
