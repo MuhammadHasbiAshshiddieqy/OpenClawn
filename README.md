@@ -15,7 +15,7 @@
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
     <img src="https://img.shields.io/badge/LLM-Ollama%20%2B%20Gemini%20%2B%20Claude-purple" alt="Hybrid LLM">
     <img src="https://img.shields.io/badge/tools-26-orange" alt="26 Tools">
-    <img src="https://img.shields.io/badge/tests-420%20passing-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-490%20passing-brightgreen" alt="Tests">
   </p>
 </div>
 
@@ -43,6 +43,7 @@ as it's used, all gated and reversible:
 | **Skill packs** | Export/import skills between installs (Markdown + hash), imported as `draft` behind SSRF + injection guards |
 | **Activity timeline** | Chronological view of every agent action across routing, tools, handoffs, conversations |
 | **Multilingual routing** | Language-agnostic complexity signals + optional script-aware tier bump |
+| **Guardrails** | NeMo-style input/output rails (native, no LangChain): block prompt-injection, block system-prompt leaks, redact PII — config-toggleable, fail-safe on |
 
 **Stack:** Python 3.12 · FastAPI · HTMX · SQLite (aiosqlite) · Ollama + Gemini + Claude · httpx · Pydantic · structlog · tenacity
 
@@ -116,10 +117,11 @@ graph TB
 
     subgraph AGENT["Agent Loop — iterative, not recursive"]
         direction TB
-        SHIELD["Shield · NFKD scan"]
+        SHIELD["Guardrails (input) · injection scan"]
         ROUTE["SmartRouter · soul-aware · multilingual"]
         LLMCALL["LLM Client · stream + fallback"]
         TOOLLOOP["Tool Loop · max 5 hops + loop guard"]
+        GROUT["Guardrails (output) · PII redact · leak block"]
         POST["Post-Turn · memory + decay + compounding"]
     end
 
@@ -148,6 +150,7 @@ graph TB
         VAULT["Vault · API keys, never in context"]
         APPROVAL["ApprovalGate · HITL + proposal queue"]
         SHIELD2["Shield · injection scan · SSRF guard"]
+        GUARD["Guardrails (NeMo-style) · input + output rails<br/>injection · prompt-leak · PII redaction"]
     end
 
     subgraph INFRA["Infrastructure"]
@@ -177,7 +180,7 @@ flowchart TD
     U(["User sends message via Web UI"]) --> SHIELD
 
     subgraph PRE["0 · Input Processing"]
-        SHIELD{"Shield<br/>NFKD normalize<br/>+ danger pattern scan"}
+        SHIELD{"Guardrails — INPUT rails<br/>injection scan (Shield + NFKD)<br/>config-driven, fail-safe on"}
         SHIELD -->|blocked| REJECT["Rejected"]
         SHIELD -->|clean| CORRECT
         CORRECT{"Check correction<br/>from previous turn?"}
@@ -237,11 +240,11 @@ flowchart TD
         PARSE -->|"tool_call found"| LOOPGUARD
         PARSE -->|"text only"| YIELD["Yield text to user"]
         YIELD --> DONE_CHECK{"Another tool call?"}
-        DONE_CHECK -->|no| FINALIZE
+        DONE_CHECK -->|no| GUARD_OUT
         LOOPGUARD{"Same call<br/>repeated 2&times;?"}
         LOOPGUARD -->|yes| HALT["Loop halted<br/>(hard break)"]
         LOOPGUARD -->|no| ALLOWED
-        HALT --> FINALIZE
+        HALT --> GUARD_OUT
         ALLOWED{"Role allowed?"}
         ALLOWED -->|no| ERR2["Tool denied"]
         ALLOWED -->|yes| APPROVAL{"requires_approval?"}
@@ -256,10 +259,16 @@ flowchart TD
         RUN_TOOL --> TOOL_RESULT["Result &rarr; append to messages"]
         TOOL_RESULT --> HOP{"hop &lt; 5?"}
         HOP -->|yes| PRIMARY
-        HOP -->|no| FINALIZE
+        HOP -->|no| GUARD_OUT
     end
 
     subgraph POST["7 · Post-Turn Processing — throttled, non-blocking"]
+        GUARD_OUT{"Guardrails — OUTPUT rails<br/>on full turn.content<br/>before it is stored"}
+        GUARD_OUT -->|"prompt-leak"| GBLOCK["Block: replace with safe message"]
+        GUARD_OUT -->|"PII match"| GREDACT["Redact &rarr; [REDACTED]"]
+        GUARD_OUT -->|clean| FINALIZE
+        GBLOCK --> FINALIZE
+        GREDACT --> FINALIZE
         FINALIZE["Auditor.finalize()<br/>tokens, cost, latency &rarr; DB"]
         FINALIZE --> WRITE_MEM["MemoryManager<br/>L1 checkpoint · L4 archive (if threshold)"]
         WRITE_MEM --> DECAY_PASS["SkillDecay.maybe_run_decay_pass()<br/>throttled: 1&times;/hour"]
@@ -281,6 +290,8 @@ flowchart TD
     style REJECT fill:#f66,stroke:#900,color:#fff
     style FAIL fill:#f66,stroke:#900,color:#fff
     style HALT fill:#f66,stroke:#900,color:#fff
+    style GBLOCK fill:#f66,stroke:#900,color:#fff
+    style GREDACT fill:#ff6,stroke:#990
     style ACTIVE fill:#6f6,stroke:#090
     style DRAFT fill:#ff6,stroke:#990
     style DONE fill:#6cf,stroke:#069
@@ -292,8 +303,19 @@ All 26 tools are **workspace-bounded** — every file path is resolved with `Pat
 and rejected if it escapes the workspace root (defeats `../` and symlink escape). Tools that
 mutate state or run code require explicit approval.
 
+Around the whole turn sit **guardrails** (NeMo-style, native — no LangChain): **input rails**
+scan the user message for prompt-injection before the pipeline runs; **output rails** check the
+full response before it is stored — blocking system-prompt leaks and redacting PII (email, card,
+API key). Each rail is config-toggleable and **fail-safe on** (corrupt/missing config → all rails active).
+
 ```mermaid
 flowchart LR
+    subgraph GUARDRAILS["Guardrails — NeMo-style rails (config-driven, fail-safe on)"]
+        direction TB
+        GIN["INPUT: prompt-injection &rarr; block"]
+        GOUT["OUTPUT: prompt-leak &rarr; block · PII &rarr; redact"]
+    end
+
     subgraph SAFE["No approval — read-only / inspect / internal"]
         direction TB
         R1["file_read · read_many · list_dir · glob · grep"]
@@ -324,9 +346,13 @@ flowchart LR
         S5["timeout 30s · no-new-privileges"]
     end
 
+    GIN --> SAFE
+    GIN --> GATED
     GATED --> AG
     GATED -.autopilot.-> AGP
     G2 --> SANDBOX
+    SAFE --> GOUT
+    AG --> GOUT
 ```
 
 > **Security note:** `code_run` and `shell_run` **never execute on the host** — both run inside
@@ -334,6 +360,10 @@ flowchart LR
 > falling back to host execution. `db_query` is SELECT-only. `web_fetch`/`http_request` pass an
 > anti-SSRF guard (reject loopback, private, link-local incl. cloud metadata). In **autopilot**
 > mode, approval-gated tools are queued as proposals for later review — never run unattended.
+> **Guardrails** wrap the turn: input rails block injection before the pipeline; output rails
+> run on the full response before storage — blocking system-prompt leaks and redacting PII so it
+> never reaches stored memory (L1/L4). Note: tokens already streamed can't be unsent — output
+> rails operate on the complete `turn.content` to keep PII out of storage and flag the UI.
 
 ### The 4 Innovations — Where They Fire
 
@@ -459,10 +489,11 @@ openclawn/
 ├── roles/          # pm/qa/dev/data/security soul.toml · contracts (Pydantic) · registry
 ├── tools/          # 26 tools: file_ops · read_many · search · shell · code · web · git
 │                   # document (pdf_read · doc_write · pdf_write) · todo · report_blocker
-├── security/       # vault · shield (NFKD) · approval (HITL + proposal queue) · question
+├── security/       # vault · shield (NFKD) · guardrails (NeMo-style rails) · approval
+│                   # (HITL + proposal queue) · question · skill_scanner
 ├── web/            # FastAPI app · HTMX templates · SSE · /activity /autopilots /skills
 ├── migrations/     # 001_initial.sql
-└── tests/          # 30 files, 420 tests — innovations, tools, web, compounding
+└── tests/          # 490 tests — innovations, tools, web, compounding, guardrails
 ```
 
 The 4 core innovations are stable; everything above (multi-agent, autopilots, skill
@@ -502,7 +533,7 @@ Detailed reference for every module, class, and function:
 | `core/` | [docs/core.md](docs/core.md) — agent loop, LLM client, router (multilingual), audit, crystallizer, calibration, conversation, activity, autopilot, skill packs |
 | `memory/` | [docs/memory.md](docs/memory.md) — L1–L4 layers, skill decay, curator (merge), skill feedback (promote/refine), user model, FTS5 search |
 | `roles/` | [docs/roles.md](docs/roles.md) — contracts, role registry, soul.toml format |
-| `security/` | [docs/security.md](docs/security.md) — vault, shield, approval gate HITL |
+| `security/` | [docs/security.md](docs/security.md) — vault, shield, guardrails (NeMo-style rails), approval gate HITL, skill scanner |
 | `tools/` | [docs/tools.md](docs/tools.md) — 26 tools, permission matrix, Docker sandbox |
 | `web/` | [docs/web.md](docs/web.md) — FastAPI endpoints, SSE streaming |
 | Database | [docs/database.md](docs/database.md) — full schema + example queries |
@@ -525,18 +556,19 @@ Detailed reference for every module, class, and function:
 | 6–8 | Compounding intelligence: skill curator · draft promotion · refine · guarded auto-apply · user model | Done |
 | — | Multilingual routing (structural + script-aware signals) | Done |
 | — | MCP client (external tools, approval-gated) · `/health` · stale-draft cleanup | Done |
+| — | Guardrails (NeMo-style input/output rails: injection · prompt-leak · PII redaction) | Done |
 
 ---
 
 ## Design Principles
 
-- **Security first** — `code_run` and `shell_run` only run inside Docker (`network none`, `read-only`, non-root, timeout); they never touch the host. Web tools have an anti-SSRF guard; autopilots never execute approval-gated actions (they queue proposals)
+- **Security first** — `code_run` and `shell_run` only run inside Docker (`network none`, `read-only`, non-root, timeout); they never touch the host. Web tools have an anti-SSRF guard; autopilots never execute approval-gated actions (they queue proposals). Input/output guardrails (NeMo-style, native) wrap every turn — fail-safe on
 - **Workspace-bounded** — every file tool resolves paths and rejects escapes outside the workspace root
 - **No SDK** — raw `httpx` for all LLM calls, intentional for audit transparency
 - **Token-first** — context budget tracked; prompt caching on stable system blocks
 - **No hardcoded domain/locale** — locale via field & config, not in code (routing keywords moved out of core)
 - **Gated, versioned, reversible** — self-improvement (merge/refine/promote/auto-tune) always behind confidence gates, with audit trails and revert
-- **Every innovation = extractable module** — `skill_decay`, `audit`, `crystallizer`, `contracts`, `curator`, `activity` have clean interfaces
+- **Every innovation = extractable module** — `skill_decay`, `audit`, `crystallizer`, `contracts`, `curator`, `activity`, `guardrails` have clean interfaces
 
 ---
 
