@@ -209,6 +209,10 @@ async def chat_stream(request: Request):
                 elif event.type == "usage":
                     # Ringkasan turn termasuk meter budget token (context vs max, §1.4).
                     yield f"event: usage\ndata: {json.dumps(event.usage)}\n\n"
+                elif event.type == "guardrail":
+                    # Output rail menandai respons (blocked/redacted) — UI bisa rerender.
+                    payload = json.dumps({"text": event.text, "detail": event.detail})
+                    yield f"event: guardrail\ndata: {payload}\n\n"
         except Exception as exc:  # noqa: BLE001 — laporkan ke UI, jangan diam saat macet
             log.error("chat_stream_failed", session=session_id, error=str(exc))
             msg = json.dumps({"text": str(exc)})

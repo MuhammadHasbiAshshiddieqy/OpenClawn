@@ -26,6 +26,8 @@ from security.vault import Vault
 from security.approval import ApprovalGate
 from security.question import QuestionGate
 from security.shield import Shield
+from security.guardrails import GuardrailEngine, RailStage
+from core.guardrails_config import GuardrailConfigStore
 
 
 @dataclass
@@ -154,6 +156,9 @@ class AgentLoop:
         self.question_gate = question_gate or QuestionGate(config)
         self.shield = Shield()
         self.settings = SettingsStore(db)
+        # Guardrails (ala NeMo): config on/off per rail dari app_settings; engine
+        # dibangun per-turn agar perubahan UI langsung berlaku tanpa restart.
+        self.guardrails_config = GuardrailConfigStore(db)
         self.history: list[Turn] = []
 
         # nit #2: cache soul.toml sekali, jangan baca tiap turn
@@ -215,12 +220,18 @@ class AgentLoop:
     async def run(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         start = time.monotonic()
 
-        # 0. Shield: scan input (lapisan kosmetik, BUKAN pertahanan utama — lihat §17).
-        # Pertahanan utama tetap container isolation di code_run.
-        safe, reason = self.shield.scan_input(user_message)
-        if not safe:
-            log.warning("shield_blocked_input", session=self.cfg.session_id, reason=reason)
-            yield AgentEvent(type="token", text=reason)
+        # 0. Guardrails — INPUT rails (ala NeMo). Lapisan kosmetik, BUKAN pertahanan
+        # utama (container isolation tetap utama, §17). Engine dibangun per-turn dari
+        # config app_settings agar perubahan on/off di UI langsung berlaku.
+        guardrails = GuardrailEngine(enabled=await self.guardrails_config.get_enabled())
+        in_outcome = guardrails.check_input(user_message)
+        if in_outcome.blocked:
+            log.warning(
+                "guardrail_blocked_input",
+                session=self.cfg.session_id,
+                reason=in_outcome.block_reason,
+            )
+            yield AgentEvent(type="token", text=in_outcome.block_reason)
             return
 
         # 1. Deteksi koreksi user (audit feedback) [#1]
@@ -289,6 +300,31 @@ class AgentLoop:
 
         async for event in self._run_tool_loop(messages, route, tools_schema, turn):
             yield event
+
+        # 6b. Guardrails — OUTPUT rails (ala NeMo). Gap terbesar OpenCLAWN sebelumnya:
+        # tak ada yang memeriksa respons LLM. Catatan jujur: token sudah di-stream ke
+        # UI (tak bisa ditarik), jadi rail bekerja pada turn.content LENGKAP — meredaksi
+        # PII / memblokir kebocoran SEBELUM disimpan ke history & memori, lalu memberi
+        # tahu UI agar bisa menandai/menimpa. Deteksi + redaksi-penyimpanan tetap bernilai.
+        if turn.content:
+            out_outcome = guardrails.run(RailStage.OUTPUT, turn.content)
+            if out_outcome.blocked:
+                log.warning(
+                    "guardrail_blocked_output",
+                    session=self.cfg.session_id,
+                    reason=out_outcome.block_reason,
+                )
+                turn.content = out_outcome.text  # pesan tahanan, jangan simpan teks asli
+                yield AgentEvent(type="guardrail", text="blocked", detail=out_outcome.block_reason)
+            elif out_outcome.modified:
+                redactions = [f for r in out_outcome.results for f in r.findings]
+                log.info(
+                    "guardrail_redacted_output",
+                    session=self.cfg.session_id,
+                    findings=redactions,
+                )
+                turn.content = out_outcome.text  # versi teredaksi disimpan & ditandai
+                yield AgentEvent(type="guardrail", text="redacted", detail=", ".join(redactions))
 
         # 7. Finalize
         turn.latency_ms = int((time.monotonic() - start) * 1000)

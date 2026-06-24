@@ -44,7 +44,61 @@ Daftar pola regex yang menandakan upaya prompt injection atau jailbreak (prompt-
 2. Cocokkan dengan `DANGER_PATTERNS` (case-insensitive)
 3. Return `(True, "")` jika aman, `(False, "Input ditolak: ...")` jika mencurigakan
 
-Dipanggil di awal `agent_loop.run()` sebelum input masuk pipeline apapun.
+Dipakai oleh `PromptInjectionRail` (lihat Guardrails) — di awal `agent_loop.run()` input dijalankan lewat `GuardrailEngine`, bukan memanggil `Shield` langsung.
+
+---
+
+## `security/guardrails.py` — Guardrails (ala NeMo)
+
+Rail input/output ringan, **terinspirasi arsitektur NVIDIA NeMo Guardrails** tanpa memakai paketnya (paket NeMo butuh LangChain + dependency berat → melanggar CLAUDE.md §6/§1.4/§8). Mengadopsi *konsep* rail, persis seperti `skill_scanner` meniru `nvidia/skillspector`. **Murni stdlib** (`re`, `dataclasses`) — extractable, tanpa DB (config dipisah ke `core/guardrails_config.py`).
+
+### Model rail
+
+| Stage | Kapan jalan | Rail bawaan |
+|---|---|---|
+| **INPUT** | sebelum pesan user masuk pipeline | `prompt_injection` |
+| **OUTPUT** | saat finalisasi turn, sebelum disimpan ke history/memori | `prompt_leak`, `pii` |
+
+> **Catatan jujur soal streaming:** token di-stream real-time ke UI, jadi output rail tidak bisa "menarik kembali" token yang sudah tampil. Yang dilakukan: memeriksa `turn.content` LENGKAP → **meredaksi/memblokir sebelum disimpan** ke history & L1/L4, lalu memancarkan event `guardrail` ke UI. Deteksi + redaksi-penyimpanan tetap bernilai (PII tak bocor ke memori; audit mencatat).
+
+### Enum & dataclass
+
+- `RailStage` — `INPUT` / `OUTPUT`
+- `RailAction` — `ALLOW` (lolos) / `REDACT` (teks dimodifikasi) / `BLOCK` (tolak total)
+- `RailResult` — hasil satu rail: `rail`, `action`, `text`, `reason`, `findings`, properti `triggered`
+- `GuardrailOutcome` — hasil agregat satu stage: `text` (final), `blocked`, `block_reason`, `results`, properti `modified`
+
+### Rail bawaan
+
+| Rail | Stage | Aksi | Deteksi |
+|---|---|---|---|
+| `PromptInjectionRail` | input | BLOCK | bungkus `Shield.scan_input` (DRY) |
+| `PromptLeakRail` | output | BLOCK | respons membocorkan system-prompt/peran internal |
+| `PIIRail` | output | REDACT | email, kartu kredit, kunci API → `[REDACTED]` |
+
+### Kelas: `GuardrailEngine`
+
+**`__init__(enabled=None)`** — `enabled`: peta `nama_rail → bool`. `None` → `DEFAULT_ENABLED` (semua aktif).
+
+**`run(stage, text) → GuardrailOutcome`** — jalankan rail aktif untuk stage secara berurutan. `BLOCK` menghentikan rantai; `REDACT` meneruskan teks teredaksi ke rail berikutnya. Output yang BLOCK → teks diganti `BLOCKED_OUTPUT_MESSAGE` (teks asli tak bocor).
+
+**`check_input(text)` / `check_output(text)`** — shortcut untuk `run(INPUT/OUTPUT, text)`.
+
+Konstanta: `BUILTIN_RAILS` (nama→kelas), `DEFAULT_ENABLED`, `BLOCKED_OUTPUT_MESSAGE`.
+
+---
+
+## `core/guardrails_config.py` — on/off per rail
+
+`GuardrailConfigStore` menyimpan peta `nama_rail → bool` sebagai satu key JSON di `app_settings` (pola sama `RouterConfigStore`). DB-bound (§1.6) — dipisah dari engine agar `guardrails.py` tetap murni stdlib.
+
+| Method | Keterangan |
+|---|---|
+| `get_enabled() → dict[str,bool]` *(async)* | Peta aktif. Tanpa config → semua aktif. Rail hilang dari config dianggap **aktif** (fail-safe default-on). Korup → semua aktif. |
+| `set_enabled(mapping) → dict` *(async)* | Simpan on/off; hanya rail dikenal disimpan |
+| `reset() → None` *(async)* | Hapus config → semua rail aktif lagi |
+
+Dibaca `AgentLoop` tiap turn untuk membangun `GuardrailEngine(enabled=...)` — perubahan UI langsung berlaku tanpa restart.
 
 ---
 
@@ -182,7 +236,9 @@ Jika user tidak merespons dalam `approval_timeout_sec` (default 120 detik) → F
 | Komponen | Melindungi dari | Lapisan |
 |---|---|---|
 | `Vault` | Credential bocor ke prompt/log | Semua LLM call |
-| `Shield` | Prompt injection yang jelas | Input user |
+| `GuardrailEngine` (input) | Prompt injection di input user | Input rail (ala NeMo) |
+| `GuardrailEngine` (output) | Kebocoran system-prompt & PII di respons | Output rail (ala NeMo) |
+| `Shield` | Prompt injection yang jelas (dipakai oleh input rail) | Input user |
 | `skill_scanner` | Skill impor membawa kode berbahaya/eksfiltrasi | Impor skill pack (file/URL) |
 | `ApprovalGate` | Tool destruktif jalan tanpa izin | Tool execution |
 | `QuestionGate` | (bukan keamanan) klarifikasi interaktif `ask_user` | Tool execution |

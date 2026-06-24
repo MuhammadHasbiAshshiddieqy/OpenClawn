@@ -19,6 +19,7 @@ Referensi teknis lengkap untuk semua modul dan fungsi dalam OpenCLAWN. Dibaca be
 | **Compounding**: curator (merge), draft promotion, refine, user model | [memory.md](memory.md) · [core.md](core.md) |
 | Role PM/QA/Dev/Data/Security, handoff contract, soul.toml | [roles.md](roles.md) |
 | Vault, Shield (+**SSRF guard**), ApprovalGate HITL (+proposal queue) | [security.md](security.md) · [tools.md](tools.md) |
+| **Guardrails** (ala NeMo): input/output rails, PII redaction, prompt-leak block | [security.md](security.md) |
 | Tool file/web/code/**blocker**, Docker sandbox | [tools.md](tools.md) |
 | Endpoint FastAPI, SSE streaming, Web UI, **/settings** | [web.md](web.md) |
 | Pilih/override model (Gemini, dll.) | [infra.md](infra.md) · [web.md](web.md) |
@@ -44,6 +45,7 @@ web/main.py          → web.md
 │   ├── SkillFeedback / SkillCuratorManager / UserModel → memory.md (I1/I2/I3/I5)
 │   ├── ApprovalGate → security.md (HITL + queue_proposal)
 │   ├── Shield / Vault → security.md
+│   ├── GuardrailEngine → security.md (input+output rails, ala NeMo)
 │   ├── skill_scanner → security.md (AST + pola, lapis impor skill)
 │   └── tool_audit · activity · autopilot · skill_pack → core.md
 │

@@ -188,6 +188,7 @@ Key yang dipakai saat ini:
 - `model_override_model` — nama model override
 - `router_threshold_offset` — offset threshold kalibrasi (int), dibaca `SmartRouter` tiap turn
 - `router_model_map` — JSON override peta tier→model (`RouterConfigStore`), dibaca tiap turn → `router.model_map`
+- `guardrails_enabled` — JSON on/off per rail guardrail (`GuardrailConfigStore`), dibaca tiap turn → `GuardrailEngine`; tanpa key = semua rail aktif
 
 Override model dianggap aktif hanya jika **kedua** key model terisi. Menghapus salah satu (set kosong) mengembalikan ke mode router otomatis.
 
