@@ -37,7 +37,7 @@ Load semua layer dan kembalikan sebagai dict:
 }
 ```
 
-L4 hanya di-query jika query > 3 kata **atau** mengandung term teknis spesifik. Ini hemat query SQLite untuk percakapan pendek/casual.
+L4 hanya di-query jika query > 3 kata **atau** mengandung term teknis spesifik. Ini hemat query SQLite untuk percakapan pendek/casual. Query disanitasi lewat `fts5_query()` sebelum MATCH — query bertanda baca (titik, titik dua, kurung) tidak lagi memicu syntax error.
 
 **`update_checkpoint(summary: str) → None`** *(async)*  
 Tulis/update L1 key `"last_summary"` dengan konten terbaru (maks 500 karakter). Operasi UPSERT — tidak duplikasi.
@@ -147,6 +147,10 @@ Fungsi yang sama dengan `layers.py:archive_session + load_context[l4]` tapi dipi
 
 Sama dengan `layers.py` — term teknis yang memicu search.
 
+### Fungsi: `fts5_query(raw) → str`
+
+Sanitasi query bebas user menjadi query FTS5 yang aman. Query mentah memicu syntax error karena `.`, `,`, `:`, `(`, `)`, `"` adalah operator/sintaks FTS5 — sehingga query user biasa (mis. "bug login: OAuth.") membuat L4 search selalu gagal. Solusi: ekstrak token alfanumerik saja (`\w+`), bungkus tiap token dalam kutip ganda (term literal), gabung dengan `OR` untuk pencocokan parsial. Query tanpa token kata → string kosong (pemanggil harus skip MATCH). Dipakai oleh `SessionSearch.search()` dan `MemoryManager.load_context()`.
+
 ### Kelas: `SessionSearch`
 
 **`__init__(role, db)`**
@@ -155,7 +159,7 @@ Sama dengan `layers.py` — term teknis yang memicu search.
 Return True jika query > 3 kata atau mengandung term teknis.
 
 **`search(query, limit=3) → list[str]`** *(async)*  
-FTS5 full-text search di `memory_l4`. Return list summary sesi lama yang relevan. Jika FTS5 syntax error atau tabel belum ada → return `[]` dan log warning (graceful degradation).
+FTS5 full-text search di `memory_l4`. Query disanitasi lewat `fts5_query()` dulu — query bertanda baca kini menemukan hasil, bukan error. Return list summary sesi lama yang relevan. `try/except` tetap dipertahankan sebagai safety-net (tabel belum ada / edge case) → return `[]` + log debug.
 
 **`archive(session_id, summary, full_content) → None`** *(async)*  
 Simpan sesi ke L4. Berbeda dengan `MemoryManager.archive_session()` — **tidak idempoten** (insert langsung). Gunakan `MemoryManager.archive_session()` untuk panggilan dari agent loop.

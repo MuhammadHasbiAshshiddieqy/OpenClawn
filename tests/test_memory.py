@@ -164,6 +164,39 @@ async def test_l4_scoped_to_role(memory, db):
     assert len(ctx["l4"]) == 0
 
 
+@pytest.mark.asyncio
+async def test_l4_query_with_punctuation_finds_match(memory, db):
+    """Regresi: query bertanda baca (titik/titik dua/kurung) dulu memicu fts5
+    syntax error → L4 selalu kosong. Setelah fts5_query, harus disanitasi dan
+    TETAP menemukan hasil yang relevan."""
+    await memory.archive_session("bug login oauth fixed in prod", "full transcript")
+
+    # Query ini dulu melempar: fts5 syntax error near ":" / "." / "("
+    for q in ["bug login: OAuth.", "fix oauth (prod) deploy.", "error login. oauth crash?"]:
+        ctx = await memory.load_context(query=q, skills=[])
+        assert ctx["l4"], f"query {q!r} seharusnya menemukan arsip, bukan kosong/error"
+        assert "oauth" in ctx["l4"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_l4_query_only_punctuation_is_safe(memory, db):
+    """Query tanpa token kata (hanya tanda baca) → tidak crash, return []."""
+    await memory.archive_session("some bug fixed", "content")
+    ctx = await memory.load_context(query="bug ... !!! ???", skills=[])
+    # 'bug' adalah specific term → trigger, tapi token tetap aman disanitasi
+    assert isinstance(ctx["l4"], list)
+
+
+def test_fts5_query_sanitizes_punctuation():
+    """fts5_query: token alfanumerik dibungkus kutip + OR; tanda baca dibuang."""
+    from memory.search import fts5_query
+
+    assert fts5_query("bug login: OAuth.") == '"bug" OR "login" OR "OAuth"'
+    assert fts5_query("deploy (prod)") == '"deploy" OR "prod"'
+    assert fts5_query("...") == ""  # tanpa token → string kosong
+    assert fts5_query("") == ""
+
+
 # ── _has_specific_term ──────────────────────────────────────────────────────
 
 

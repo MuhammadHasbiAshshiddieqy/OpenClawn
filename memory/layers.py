@@ -1,5 +1,6 @@
 from infra.database import DatabaseManager
 from infra.logging import log
+from memory.search import fts5_query
 
 SPECIFIC_TERMS = ["bug", "error", "oauth", "api", "deploy", "fix", "crash"]
 
@@ -27,16 +28,18 @@ class MemoryManager:
         # FTS5: trigger jika query > 3 kata ATAU mengandung kata teknis spesifik.
         # Threshold 5 kata terlalu kaku untuk query seperti "bug login OAuth" (audit)
         l4: list[str] = []
-        if len(query.split()) > 3 or self._has_specific_term(query):
+        match = fts5_query(query)
+        if match and (len(query.split()) > 3 or self._has_specific_term(query)):
             try:
                 l4_rows = await self.db.fetchall(
                     """SELECT summary FROM memory_l4
                        WHERE role=? AND memory_l4 MATCH ? ORDER BY rank LIMIT 3""",
-                    (self.role, query),
+                    (self.role, match),
                 )
                 l4 = [r["summary"] for r in l4_rows]
             except Exception as e:
-                # FTS5 syntax error → skip gracefully, tapi tetap log (CLAUDE.md §6)
+                # Safety-net: harusnya tak terjadi lagi setelah fts5_query, tapi tetap
+                # tangani agar query aneh tak meng-crash turn (CLAUDE.md §6).
                 log.debug("fts5_load_skipped", role=self.role, error=str(e))
 
         return {"l1": l1, "l2": l2, "l3": skills, "l4": l4}

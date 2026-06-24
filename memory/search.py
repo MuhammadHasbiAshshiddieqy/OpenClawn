@@ -1,10 +1,24 @@
 """FTS5 cross-session search. Fungsionalitas dasar ada di layers.py;
 modul ini mengekspos interface standalone agar bisa diekstrak sebagai paket terpisah."""
 
+import re
+
 from infra.database import DatabaseManager
 from infra.logging import log
 
 SPECIFIC_TERMS = ["bug", "error", "oauth", "api", "deploy", "fix", "crash"]
+
+
+def fts5_query(raw: str) -> str:
+    """Ubah query bebas user → query FTS5 yang aman.
+
+    Query mentah memicu syntax error: karakter seperti . , : ( ) " adalah
+    operator/sintaks FTS5. Solusinya: ekstrak token alfanumerik saja, bungkus
+    tiap token dalam kutip ganda (term literal), gabung dengan OR untuk
+    pencocokan parsial. String kosong → caller harus skip MATCH.
+    """
+    tokens = re.findall(r"\w+", raw, flags=re.UNICODE)
+    return " OR ".join(f'"{t}"' for t in tokens)
 
 
 class SessionSearch:
@@ -25,11 +39,14 @@ class SessionSearch:
         """Return daftar summary dari sesi lama yang relevan."""
         if not self.should_search(query):
             return []
+        match = fts5_query(query)
+        if not match:  # query tanpa token kata → tak ada yang bisa dicari
+            return []
         try:
             rows = await self.db.fetchall(
                 """SELECT summary FROM memory_l4
                    WHERE role=? AND memory_l4 MATCH ? ORDER BY rank LIMIT ?""",
-                (self.role, query, limit),
+                (self.role, match, limit),
             )
             return [r["summary"] for r in rows]
         except Exception as e:
