@@ -5,6 +5,53 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 [SemVer](https://semver.org/). Versi 0.7.0 menandai keluarnya dari fase
 pre-release (`-alpha`) menjadi rilis stabil pertama.
 
+## [0.8.0] — 2026-07-01
+
+### Added — Gated Skill Curator (I1 completion, §8)
+`curation_auto` (default `False`) sebelumnya ditulis di config tapi tak pernah dibaca —
+curator selalu langsung merge begitu judge confidence memenuhi ambang, melanggar
+filosofi "usul dulu, manusia apply" yang sama dipakai kalibrasi router. Sekarang default
+merge hanya **diusulkan** (`curation_log.status='pending'`) dan menunggu tombol **Terapkan**
+di `/skills`; `curation_auto=True` tetap tersedia untuk auto-merge langsung.
+- `memory/curator.py`: `_propose()`/`apply_pending_merge()` baru, `_merge()` di-refactor
+  jadi `_apply_merge()` bersama; `revert_last_merge()` hanya melihat baris `status='applied'`.
+- `web/main.py` + `skills.html`: endpoint `POST /skills/apply-merge` + tombol Terapkan.
+
+### Added — Bahasa tampilan UI (English default, switch ke Indonesian)
+Seluruh teks statis di 9 halaman web (nav, tombol, judul, pesan status — sebelumnya
+campuran Indonesia hardcoded) kini lewat `infra/i18n.py` (`t()`/`translator()`, ~180 key).
+Default **English**; switch ke **Indonesian** via dropdown di `/settings`, disimpan per-server
+di `app_settings` (`ui_locale`). **Tidak mengubah bahasa respons agent** — agent tetap selalu
+mengikuti bahasa pesan user (§1.5), locale ini murni untuk label/tombol UI.
+
+### Changed — Refactor teknis Web UI (dari audit UI/UX)
+- **Sidebar DRY**: markup sidebar (diduplikasi di 9 template) dipindah ke
+  `web/templates/_sidebar.html`, di-include via `page` context var; bonus `aria-current="page"`
+  di nav aktif.
+- **CSS terorganisir**: `style.css` monolitik (1082 baris) dipecah ke `web/static/css/*.css`
+  per topik (base/layout/chat/pages/activity/autopilots/skills/conversations/toast);
+  `style.css` jadi entry point `@import`.
+- **JS diekstrak**: ~700 baris JS inline di `index.html` dipindah ke `web/static/chat.js`
+  (cacheable browser), data server-side lewat `window.OPENCLAWN_DATA`.
+- **Aksesibilitas & keamanan**: SRI `integrity` hash (dihitung nyata dari CDN pinned version)
+  untuk `marked`/`DOMPurify`, `prefers-reduced-motion` respect, `--text-faint` kontras dinaikkan
+  (`#6f6690` → `#7d73a0`), `aria-live="polite"` untuk region SSE.
+
+### Fixed — Migrasi kolom untuk instalasi lama (regresi §I1)
+`CREATE TABLE IF NOT EXISTS` adalah no-op pada tabel yang sudah ada, jadi kolom yang
+ditambahkan setelah rilis awal (`curation_log.status`/`merged_content`,
+`skills.merged_into`/`version`) tak pernah muncul di DB lama → `/skills` 500
+(`no such column: status`). `infra/database.py` sekarang menambal kolom yang hilang di
+tabel existing tiap startup (`PRAGMA table_info` + `ALTER TABLE ADD COLUMN`, idempoten,
+tanpa kehilangan data).
+
+### Fixed — Activity timeline label overlap
+Regresi dari framing "evidence" sebelumnya: label kind diperpanjang ("Routing" → "Routing
+evidence" dst) tapi lebar kolom grid tak disesuaikan, menyebabkan label terpanjang meluber
+ke kolom judul. Kolom dilebarkan + label boleh membungkus.
+
+Tests: **513 passing**, ruff clean.
+
 ## [0.7.0] — 2026-06-17
 
 Rilis stabil pertama (keluar dari fase alpha). MINOR bump di atas v0.6.0-alpha.
