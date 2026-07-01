@@ -5,6 +5,34 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 [SemVer](https://semver.org/). Versi 0.7.0 menandai keluarnya dari fase
 pre-release (`-alpha`) menjadi rilis stabil pertama.
 
+## [0.9.0] — 2026-07-01
+
+### Added — Self-host production hardening (opt-in auth, CSRF, rate limiting)
+Menjawab temuan P0 valid dari audit production-readiness (no auth/HTTPS/CSRF/rate-limit
+= blocker untuk expose ke internet). Semua **default mati** (`OPENCLAWN_AUTH_TOKEN`
+kosong) — perilaku lama tanpa login tetap jalan untuk localhost/VPN. Tanpa dependency
+baru: auth pakai stdlib `hmac`/`secrets` (bukan `SessionMiddleware` Starlette yang butuh
+`itsdangerous`), rate limit in-memory (single-process cukup untuk single-user, §7).
+- **`security/auth.py`** — login shared-secret single-user, session cookie HMAC-signed
+  (7 hari, verifikasi constant-time), token CSRF.
+- **`security/rate_limit.py`** — sliding window untuk `/chat/stream` & `/converse/stream`
+  (default 20 req/60 detik), independen dari status auth.
+- **`web/main.py`** — middleware auth+CSRF+rate-limit, route `/login` + `/logout`,
+  exception handler 404/500 kustom (tak bocorkan stack trace), startup health check
+  (log status Ollama/API key/auth tanpa memblokir boot), `/health` kini melaporkan
+  `ollama`/`cloud_keys`/`auth_enabled`.
+- Template baru `login.html`/`404.html`/`500.html` + tombol Sign out di sidebar (tampil
+  hanya bila auth aktif).
+- `Caddyfile.example` (reverse proxy TLS otomatis) + healthcheck `docker-compose.yml`
+  (stdlib `urllib`, bukan `curl` — hindari menambah paket ke image slim).
+- Dokumentasi (README, `docs/security.md`, `docs/web.md`, `docs/infra.md`,
+  `docs/tests.md`) diperbarui — klaim lama "Authentication: Not included" di README
+  sudah usang, diganti panduan self-host publik.
+
+**Bug ditemukan & diperbaiki via test-first:** rate limiter awalnya ikut ter-bypass total
+saat auth dimatikan (early-return auth menyelimuti blok rate-limit yang seharusnya
+independen). Sudah diperbaiki + test regresi.
+
 ## [0.8.0] — 2026-07-01
 
 ### Added — Gated Skill Curator (I1 completion, §8)
