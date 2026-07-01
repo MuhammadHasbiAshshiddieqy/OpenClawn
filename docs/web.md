@@ -18,8 +18,30 @@ approval_gate = ApprovalGate(db, CONFIG)  # singleton level app
 ### Lifespan (`lifespan`)
 
 Dipanggil oleh FastAPI saat startup dan shutdown:
-- **Startup:** setup logging, jalankan migration SQL (`migrations/001_initial.sql`)
+- **Startup:** setup logging, jalankan migration SQL (`migrations/001_initial.sql`), **startup health check** (§P0 production-readiness) — cek Ollama reachability + API key cloud yang terkonfigurasi, di-LOG (`startup_health`) TIDAK memblokir boot (§8: "Ollama offline ≠ agent mati"); warning terpisah bila tak ada provider LLM sama sekali terjangkau, atau bila `OPENCLAWN_AUTH_TOKEN` kosong (auth nonaktif)
 - **Shutdown:** tutup koneksi DB
+
+### Middleware (`auth_and_csrf_middleware`)
+
+Self-host auth + CSRF + rate limit (§P0 production-readiness, `security/auth.py` +
+`security/rate_limit.py`). **Fail-open**: `CONFIG.auth_token` kosong (default) → seluruh
+middleware di-skip, perilaku lama tanpa login tetap jalan. Aktif hanya bila
+`OPENCLAWN_AUTH_TOKEN` diisi:
+1. Sesi tak valid → redirect `/login` (GET) atau 401 JSON (non-GET). `/health`, `/login`,
+   `/static/*` selalu publik.
+2. POST form biasa tanpa `csrf_token` cocok (cookie vs field form) → 403 JSON. Endpoint
+   SSE/fetch JS (`/chat/stream`, `/converse/stream`, `/converse/interject`,
+   `/converse/stop`, `/answer`, `/approve`) di-exempt — dilindungi cookie auth +
+   `SameSite=lax`, bukan form CSRF biasa.
+3. `/chat/stream` & `/converse/stream` dibatasi `RateLimiter` (default 20/60 detik per
+   sesi) → 429 JSON + header `Retry-After` bila terlampaui.
+
+### Exception handlers
+
+**404** (`StarletteHTTPException`, status 404) → render `404.html` (ramah, tanpa detail
+internal). **Unhandled exception** (`Exception`) → log traceback server-side
+(`unhandled_exception`), render `500.html` — **tidak pernah** membocorkan stack trace ke
+client.
 
 ### Endpoints
 
@@ -27,7 +49,30 @@ Dipanggil oleh FastAPI saat startup dan shutdown:
 
 #### `GET /health`
 
-**Health check ringkas** untuk monitoring self-hosted (single-user, §7). Verifikasi konektivitas DB via `SELECT 1` murah. Return JSON `{ok, service, database: "up"|"down", tools}`. `ok=False` bila DB tak terjangkau — fail-soft (melaporkan, tak meledak). Bukan dashboard.
+**Health check** untuk monitoring self-hosted (single-user, §7) + Docker healthcheck.
+Verifikasi DB (`SELECT 1` murah) + Ollama (`GET /api/tags`, timeout 2s) + key cloud yang
+terkonfigurasi. Return JSON `{ok, service, database: "up"|"down", ollama: "up"|"down",
+cloud_keys: {anthropic, gemini}, auth_enabled, tools}`. `ok` hanya bergantung DB — Ollama
+down TIDAK membuat `ok=False` (fallback chain menangani), dilaporkan terpisah di `ollama`.
+Dipakai oleh `docker-compose.yml` healthcheck (stdlib `urllib`, bukan `curl` — image slim
+tak menyertakannya).
+
+---
+
+#### `GET /login`, `POST /login`, `POST /logout`
+
+**Self-host auth** (§P0 production-readiness, opt-in via `OPENCLAWN_AUTH_TOKEN`).
+
+`GET /login` → redirect `/` bila auth nonaktif; render `login.html` (form password,
+query `?next=` dibawa sebagai hidden field, `?error=true` menampilkan pesan token salah).
+
+`POST /login` → verifikasi `token` vs `OPENCLAWN_AUTH_TOKEN` (constant-time). Salah →
+redirect `/login?error=true`. Benar → set cookie `openclawn_session` (signed HMAC, 7 hari)
++ `openclawn_csrf` (dibaca template untuk field CSRF form), redirect ke `next` (divalidasi
+harus path relatif — cegah open-redirect ke domain eksternal).
+
+`POST /logout` → hapus kedua cookie, redirect `/login`. Butuh `csrf_token` valid seperti
+form lain (tombol Sign out di sidebar, hanya tampil bila `auth_enabled`).
 
 ---
 

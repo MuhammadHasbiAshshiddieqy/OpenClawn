@@ -32,6 +32,7 @@
 
             <div class="card">
                 <form method="post" action="/settings">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <label for="model_choice"><strong>{{ t('settings.active_model') }}</strong></label>
                     <select name="model_choice" id="model_choice">
                         <option value="auto" {{ 'selected' if not current else '' }}>

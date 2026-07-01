@@ -84,4 +84,14 @@
         </div>
     </div>
     {% endif %}
+
+    {% if auth_enabled %}
+    <form method="post" action="/logout" class="logout-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="nav-link logout-btn">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 2H3.5A1.5 1.5 0 002 3.5v9A1.5 1.5 0 003.5 14H6M10.5 11l3-3-3-3M13 8H6"/></svg>
+            {{ t('nav.logout') }}
+        </button>
+    </form>
+    {% endif %}
 </aside>

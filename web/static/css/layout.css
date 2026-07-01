@@ -121,6 +121,14 @@ body.mode-convo .role-group .role-link.active .dot {
 
 .sidebar .spacer { flex: 1; }
 
+/* Logout — tombol form disamarkan sebagai nav-link biasa (§P0 self-host auth) */
+.logout-form { margin: 0; }
+.logout-btn {
+    width: 100%; background: none; border: none; cursor: pointer;
+    font-family: inherit; text-align: left;
+}
+.logout-btn:hover { color: var(--red-soft); }
+
 /* Kartu status model di kaki sidebar */
 .model-card {
     background: var(--panel);

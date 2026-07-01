@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCLAWN · Login</title>
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="login-shell">
+    <div class="login-card">
+        <div class="brand" style="justify-content:center;margin-bottom:18px">
+            <img src="/static/logo.png" alt="OpenCLAWN">
+            <div>
+                <div class="name">Open<b>CLAWN</b></div>
+                <div class="tag">playful · sharp</div>
+            </div>
+        </div>
+        {% if error %}
+        <p class="login-error">{{ t('login.error') }}</p>
+        {% endif %}
+        <form method="post" action="/login">
+            <input type="hidden" name="next" value="{{ next or '/' }}">
+            <label for="token">{{ t('login.token_label') }}</label>
+            <input type="password" name="token" id="token" autofocus required autocomplete="current-password">
+            <button type="submit" class="btn" style="width:100%;margin-top:10px">{{ t('login.submit') }}</button>
+        </form>
+        <p class="muted login-hint">{{ t('login.hint') }}</p>
+    </div>
+</div>
+</body>
+</html>

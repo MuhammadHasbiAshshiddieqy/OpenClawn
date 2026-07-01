@@ -1,0 +1,33 @@
+# Contoh reverse proxy untuk self-host OpenCLAWN di VPS publik (§P0 production-readiness).
+#
+# Caddy otomatis mengurus sertifikat TLS (Let's Encrypt) — cukup domain yang
+# sudah menunjuk ke IP server ini. Ini SATU-SATUNYA cara direkomendasikan untuk
+# expose OpenCLAWN ke internet: jangan bind uvicorn langsung ke 0.0.0.0 tanpa
+# TLS di depannya (kredensial login & konten chat akan lewat plaintext).
+#
+# Pemakaian:
+#   1. cp Caddyfile.example Caddyfile
+#   2. Ganti openclawn.example.com dengan domain Anda
+#   3. Isi OPENCLAWN_AUTH_TOKEN di .env (WAJIB untuk akses publik, lihat .env.example)
+#   4. caddy run   (atau tambahkan sebagai service di docker-compose.yml)
+
+openclawn.example.com {
+    reverse_proxy localhost:8000
+
+    # SSE (/chat/stream, /converse/stream) butuh buffering dimatikan agar token
+    # streaming sampai ke browser real-time, bukan menumpuk di buffer proxy.
+    flush_interval -1
+
+    # Header keamanan dasar — pelengkap CSRF/auth di level aplikasi, bukan pengganti.
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "same-origin"
+    }
+
+    encode gzip
+    log {
+        output file /var/log/caddy/openclawn.log
+    }
+}

@@ -231,6 +231,67 @@ Jika user tidak merespons dalam `approval_timeout_sec` (default 120 detik) → F
 
 ---
 
+## `security/auth.py` — Self-host auth (§P0 production-readiness)
+
+**Single-user shared-secret login**, bukan sistem akun multi-user. Menjawab
+"apakah orang ini tahu `OPENCLAWN_AUTH_TOKEN`", bukan lebih dari itu. Murni
+stdlib (`hmac` + `secrets`) — sengaja tidak memakai `itsdangerous`/`SessionMiddleware`
+Starlette agar tidak menambah dependency baru (§7) tanpa persetujuan eksplisit.
+
+**Fail-open by default:** `CONFIG.auth_token` kosong (default) → seluruh
+middleware auth di `web/main.py` di-skip, perilaku lama (tanpa login) tetap
+jalan — aman untuk localhost dev. Diaktifkan hanya bila `OPENCLAWN_AUTH_TOKEN`
+diisi di `.env` (self-host di VPS publik, lihat README § Scope & Production Posture).
+
+**`create_session_token(secret) → str`**  
+Token sesi `{timestamp}.{hmac_hex}` ditandatangani HMAC-SHA256. Dipanggil saat login sukses.
+
+**`verify_session_token(token, secret) → bool`**  
+Verifikasi signature (constant-time via `hmac.compare_digest`, cegah timing attack) +
+expiry (`SESSION_MAX_AGE_SEC`, default 7 hari). Token tanpa titik, signature tak
+cocok, atau kedaluwarsa/masa depan → ditolak.
+
+**`verify_login_token(candidate, secret) → bool`**  
+Bandingkan password yang diketik user vs `OPENCLAWN_AUTH_TOKEN`, constant-time.
+
+**`generate_csrf_token() → str`**  
+Token acak (`secrets.token_urlsafe`) disimpan di cookie terpisah (`openclawn_csrf`,
+`httponly=False` agar terbaca Jinja) + disuntik ke tiap form POST.
+
+**`is_public_path(path) → bool`**  
+`/health`, `/login`, `/static/*` selalu bisa diakses tanpa sesi (monitoring, aset
+halaman login itu sendiri, dan login flow).
+
+Diintegrasikan di `web/main.py` (`auth_and_csrf_middleware`): cek sesi → redirect
+`/login` (GET) atau 401 JSON (non-GET) bila tak valid; lalu cek CSRF untuk POST
+form biasa (endpoint SSE/fetch JS di `_CSRF_EXEMPT_PATHS` — sudah dilindungi
+cookie auth + `SameSite=lax`, tak realistis membawa token form).
+
+---
+
+## `security/rate_limit.py` — Rate limiting (§P0 production-readiness)
+
+**Sliding window in-memory**, single-process — cukup untuk single-user (§7),
+tak butuh Redis/dependency eksternal. Membatasi `/chat/stream` &
+`/converse/stream` (default 20 request/60 detik per key) agar biaya LLM tak
+tak-terkendali & mencegah DoS sederhana saat self-host di VPS publik.
+
+### Kelas: `RateLimiter`
+
+**`allow(key: str) → bool`**  
+True bila request boleh lanjut; mencatat hit HANYA bila diizinkan (hit yang
+ditolak tak ikut disimpan, agar retry setelah window lewat tak ikut diblokir).
+`key` = session cookie auth (bukan app `session_id` — satu user dgn banyak tab
+tetap dibatasi bersama), fallback client IP bila auth nonaktif.
+
+**`remaining(key: str) → int`**  
+Sisa kuota di window saat ini.
+
+State in-memory murni — reset otomatis saat restart proses (dapat diterima
+untuk single-user, tak perlu persisten).
+
+---
+
 ## Ringkasan Tanggung Jawab
 
 | Komponen | Melindungi dari | Lapisan |
@@ -242,4 +303,6 @@ Jika user tidak merespons dalam `approval_timeout_sec` (default 120 detik) → F
 | `skill_scanner` | Skill impor membawa kode berbahaya/eksfiltrasi | Impor skill pack (file/URL) |
 | `ApprovalGate` | Tool destruktif jalan tanpa izin | Tool execution |
 | `QuestionGate` | (bukan keamanan) klarifikasi interaktif `ask_user` | Tool execution |
+| `security/auth.py` | Akses tanpa login saat self-host publik (opt-in) | Semua route (kecuali `/health`, `/login`, `/static/*`) |
+| `security/rate_limit.py` | Biaya LLM tak terkendali / DoS sederhana | `/chat/stream`, `/converse/stream` |
 | `DockerSandbox` | Kode berbahaya akses host/network | **Pertahanan utama** |

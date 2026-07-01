@@ -28,6 +28,7 @@
 
             <h2>{{ t('autopilots.new_schedule') }}</h2>
             <form method="post" action="/autopilots" class="autopilot-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="text" name="name" placeholder="{{ t('autopilots.name_placeholder') }}" required>
                 <select name="role">
                     {% for r in roles %}<option value="{{ r }}">{{ r|upper }}</option>{% endfor %}
@@ -63,11 +64,13 @@
                     </div>
                     <div class="ap-actions">
                         <form method="post" action="/autopilots/toggle">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <input type="hidden" name="autopilot_id" value="{{ a.id }}">
                             <input type="hidden" name="enabled" value="{{ '0' if a.enabled else '1' }}">
                             <button type="submit" class="btn-ghost">{{ t('autopilots.pause') if a.enabled else t('autopilots.activate') }}</button>
                         </form>
                         <form method="post" action="/autopilots/delete" onsubmit="return confirm('{{ t('autopilots.confirm_delete') }}')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <input type="hidden" name="autopilot_id" value="{{ a.id }}">
                             <button type="submit" class="btn-ghost danger">{{ t('autopilots.delete') }}</button>
                         </form>

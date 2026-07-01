@@ -28,6 +28,7 @@
 
             <h2>{{ t('mcp.add_server') }}</h2>
             <form method="post" action="/mcp/add" class="autopilot-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="text" name="name" placeholder="{{ t('mcp.name_placeholder') }}" required>
                 <select name="transport">
                     <option value="stdio">{{ t('mcp.transport_stdio') }}</option>
@@ -55,11 +56,13 @@
                     </div>
                     <div class="ap-actions">
                         <form method="post" action="/mcp/toggle">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <input type="hidden" name="server_id" value="{{ s.id }}">
                             <input type="hidden" name="enabled" value="{{ '0' if s.enabled else '1' }}">
                             <button type="submit" class="btn-ghost">{{ t('mcp.pause') if s.enabled else t('mcp.activate') }}</button>
                         </form>
                         <form method="post" action="/mcp/delete" onsubmit="return confirm('{{ t('mcp.confirm_delete') }}')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <input type="hidden" name="server_id" value="{{ s.id }}">
                             <button type="submit" class="btn-ghost danger">{{ t('mcp.delete') }}</button>
                         </form>

@@ -22,6 +22,7 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `ollama_base` | `http://localhost:11434` | URL base Ollama |
 | `anthropic_base` | `https://api.anthropic.com` | URL base Anthropic API |
 | `gemini_base` | `https://generativelanguage.googleapis.com` | URL base Google AI Studio (Gemini) |
+| `auth_token` | `""` (kosong) | §P0 self-host auth — password shared satu-satunya user. Kosong = auth DIMATIKAN (default, aman localhost). Isi via `OPENCLAWN_AUTH_TOKEN` di `.env` untuk self-host di VPS publik. Lihat `security/auth.py` & README § Scope and Production Posture |
 | `max_context_tokens` | `28_000` | Batas token context window |
 | `max_tool_hops` | `5` | Maksimum iterasi tool loop per turn |
 | `llm_max_retries` | `3` | Retry maksimum untuk LLM transient error |
@@ -166,5 +167,7 @@ Murni di atas `DatabaseManager` (tabel `app_settings` key-value).
 | `set_model_override(provider, model) → None` *(async)* | Set override; kirim `None`/`None` untuk kembali ke router otomatis |
 | `get_compaction_mode(default="off") → str` *(async)* | Mode compaction: `off`/`local`/`cloud`. Nilai tak dikenal → fail-safe ke `default` |
 | `set_compaction_mode(mode) → None` *(async)* | Set mode; nilai tak valid/`None` → kembali ke `off` |
+| `get_ui_locale() → str` *(async)* | Bahasa tampilan UI (`en`/`id`, lihat `infra/i18n.py`) — **bukan** bahasa respons agent (§1.5, agent selalu ikut bahasa pesan user). Default `en`; nilai tak dikenal → fail-safe ke `en` |
+| `set_ui_locale(locale) → None` *(async)* | Set locale UI; nilai tak dikenal/`None` → kembali ke `en` |
 
 Override dianggap aktif hanya jika **provider dan model** keduanya terisi — partial (satu saja) = tetap otomatis. Mode compaction valid: `COMPACTION_MODES = ("off","local","cloud")`.

@@ -614,6 +614,31 @@ STRINGS: dict[str, dict[str, str]] = {
         "id": "Belum ada tool MCP yang dimuat. Tambah server aktif yang dapat dijangkau.",
     },
     "mcp.approval": {"en": "approval", "id": "approval"},
+    # ── Login (self-host auth) ───────────────────────────────────────────────
+    "login.token_label": {"en": "Access token", "id": "Token akses"},
+    "login.submit": {"en": "Sign in", "id": "Masuk"},
+    "login.error": {"en": "Incorrect token. Try again.", "id": "Token salah. Coba lagi."},
+    "login.hint": {
+        "en": "Single-user instance — the token is set via OPENCLAWN_AUTH_TOKEN.",
+        "id": "Instansi single-user — token diatur lewat OPENCLAWN_AUTH_TOKEN.",
+    },
+    "nav.logout": {"en": "Sign out", "id": "Keluar"},
+    # ── Error pages ───────────────────────────────────────────────────────────
+    "error.404_title": {"en": "Page not found", "id": "Halaman tidak ditemukan"},
+    "error.404_body": {
+        "en": "This page doesn't exist. Check the URL, or go back to Chat.",
+        "id": "Halaman ini tidak ada. Periksa URL, atau kembali ke Chat.",
+    },
+    "error.500_title": {"en": "Something went wrong", "id": "Terjadi kesalahan"},
+    "error.500_body": {
+        "en": "An unexpected error occurred. It has been logged — try again shortly.",
+        "id": "Terjadi kesalahan tak terduga. Sudah tercatat di log — coba lagi sesaat lagi.",
+    },
+    "error.back_home": {"en": "Back to Chat", "id": "Kembali ke Chat"},
+    "error.rate_limited": {
+        "en": "Too many requests. Please wait a moment before trying again.",
+        "id": "Terlalu banyak permintaan. Tunggu sebentar sebelum coba lagi.",
+    },
 }
 
 

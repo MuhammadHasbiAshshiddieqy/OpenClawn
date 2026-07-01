@@ -670,6 +670,94 @@ Test untuk `infra/logging.py` (structlog JSON + secret-scrubbing).
 
 ---
 
+### `tests/test_database.py`
+
+Test untuk `infra/database.py` — `DatabaseManager._ensure_columns()` (auto-tambal kolom
+di tabel lama). Regresi nyata: DB dibuat sebelum kolom I1 ditambahkan ke migration tak
+pernah dapat kolom baru (`CREATE TABLE IF NOT EXISTS` no-op pada tabel existing) → 500 di
+`/skills` (`no such column: status`).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_ensure_columns_patches_missing_curation_log_columns` | DB skema lama → `curation_log.status`/`merged_content` muncul setelah `run_migration` |
+| `test_ensure_columns_patches_missing_skills_columns` | `skills.merged_into`/`version`/`draft_success_count` ditambal dengan default benar |
+| `test_ensure_columns_preserves_existing_data` | Tambal kolom TIDAK mengubah/menghapus data lama |
+| `test_ensure_columns_idempotent_on_second_run` | Jalan dua kali (restart berulang) tak error kolom duplikat |
+| `test_ensure_columns_noop_on_fresh_db` | DB baru (skema lengkap dari CREATE TABLE) — tak berefek |
+
+---
+
+### `tests/test_i18n.py`
+
+Test untuk `infra/i18n.py` (`t()`/`translator()`) + `SettingsStore.get/set_ui_locale`.
+Locale UI murni untuk teks statis (nav/tombol) — TIDAK menyentuh bahasa respons agent (§1.5).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_default_locale_is_english` | `DEFAULT_LOCALE="en"`, `LOCALES` berisi en+id |
+| `test_t_returns_english_by_default` / `test_t_returns_indonesian_when_requested` | `t()` mengambil locale yang diminta |
+| `test_t_unknown_locale_falls_back_to_english` | Locale tak dikenal → fallback English |
+| `test_t_unknown_key_returns_key_itself` | Key hilang → fail-safe kembalikan key (tak exception) |
+| `test_t_formats_placeholders` / `test_t_bad_format_kwargs_falls_back_to_unformatted_text` | `str.format` placeholder + fail-safe kwargs salah |
+| `test_translator_closure_binds_locale` / `test_translator_unknown_locale_normalizes_to_default` | Closure `translator()` untuk Jinja2 context |
+| `test_every_string_has_both_locales` | Setiap entri `STRINGS` wajib punya en+id (cegah UI kosong saat toggle) |
+| `test_ui_locale_default_english` / `test_ui_locale_roundtrip` / `test_ui_locale_invalid_falls_back_to_english` / `test_ui_locale_none_resets_to_english` | `SettingsStore` persist locale, fail-safe ke English |
+
+---
+
+### `tests/test_auth.py`
+
+Test untuk `security/auth.py` (unit, tanpa HTTP) — signing/verifikasi token sesi, CSRF
+token, deteksi path publik. Security-critical: signature harus tolak token dipalsukan.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_valid_token_verifies` / `test_wrong_secret_rejected` | Token sah lolos, secret salah ditolak |
+| `test_none_token_rejected` / `test_empty_token_rejected` / `test_malformed_token_no_dot_rejected` / `test_non_numeric_timestamp_rejected` | Input aneh ditolak, tak exception |
+| `test_tampered_timestamp_rejected` / `test_tampered_signature_rejected` | Modifikasi token → signature tak cocok, ditolak |
+| `test_expired_token_rejected` / `test_future_timestamp_rejected` | Token di luar `SESSION_MAX_AGE_SEC` (masa lalu/masa depan) ditolak |
+| `test_login_token_matches` / `test_login_token_mismatch` | Verifikasi password login constant-time |
+| `test_csrf_token_is_random_and_url_safe` | Tiap token CSRF unik |
+| `test_public_paths_allowed_without_session` / `test_protected_paths_not_public` | `/health`, `/login`, `/static/*` publik; sisanya tidak |
+
+---
+
+### `tests/test_auth_web.py`
+
+Test end-to-end untuk `auth_and_csrf_middleware` di `web/main.py` (bukan unit
+`security/auth.py`) — perilaku HTTP nyata via `TestClient`. Dua fixture: `client_no_auth`
+(auth nonaktif, default) dan `client_auth` (`OPENCLAWN_AUTH_TOKEN` diset).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_no_auth_root_accessible_without_session` | Auth nonaktif → `/` tetap 200 tanpa sesi (tak ada regresi perilaku lama) |
+| `test_no_auth_health_reports_auth_disabled` | `/health.auth_enabled == False` saat token kosong |
+| `test_auth_enabled_redirects_unauthenticated_get_to_login` | GET tanpa sesi valid → 303 ke `/login` |
+| `test_auth_enabled_unauthenticated_post_returns_401_json` | POST tanpa sesi valid → 401 JSON (bukan redirect, agar fetch API tahu) |
+| `test_health_and_login_reachable_without_session` / `test_static_reachable_without_session` | Path publik tetap 200 tanpa sesi walau auth aktif |
+| `test_login_wrong_token_rejected` | Password salah → redirect `/login?error=true`, tak set cookie sesi |
+| `test_login_correct_token_sets_cookies_and_grants_access` | Password benar → cookie sesi+CSRF ter-set, halaman utama lolos |
+| `test_login_rejects_open_redirect_via_next` | `?next=` ke domain eksternal dinetralkan ke `/` |
+| `test_csrf_missing_token_rejected_after_login` / `test_csrf_valid_token_allows_post` | POST form tanpa token CSRF ditolak (403); dengan token cocok diterima |
+| `test_csrf_exempt_paths_bypass_check` | `/answer` (endpoint fetch JS) tak butuh token CSRF |
+| `test_logout_clears_session` / `test_logout_without_csrf_rejected` | Logout hapus cookie via form ber-CSRF; tanpa CSRF ditolak sama seperti form lain |
+
+---
+
+### `tests/test_rate_limit.py`
+
+Test untuk `security/rate_limit.py` (`RateLimiter`) — sliding window in-memory.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_allows_up_to_max_requests` / `test_blocks_after_max_requests` | Kuota per window ditegakkan |
+| `test_different_keys_independent` | Key berbeda (mis. sesi berbeda) tak saling memengaruhi kuota |
+| `test_window_expiry_allows_again` | Hit di luar window tak lagi dihitung |
+| `test_rejected_hit_not_counted` | Request yang DITOLAK tak ikut disimpan (retry setelah window lewat tak terhambat) |
+| `test_remaining_reflects_usage` / `test_remaining_never_negative` | `remaining()` akurat, tak pernah negatif |
+
+---
+
 ## Pola Test Async
 
 ```python

@@ -15,6 +15,10 @@ class AppConfig:
     ollama_base: str = "http://localhost:11434"
     anthropic_base: str = "https://api.anthropic.com"
     gemini_base: str = "https://generativelanguage.googleapis.com"
+    # Self-host auth (§P0 production-readiness): password shared satu-satunya user.
+    # Kosong (default) → auth DIMATIKAN, perilaku lama tetap jalan tanpa login
+    # (aman untuk localhost dev). Isi di .env untuk self-host di VPS publik.
+    auth_token: str = ""
     max_context_tokens: int = 28_000
     max_tool_hops: int = 5
     llm_max_retries: int = 3
@@ -152,6 +156,7 @@ class AppConfig:
             anthropic_base=os.environ.get("ANTHROPIC_BASE", "https://api.anthropic.com"),
             gemini_base=os.environ.get("GEMINI_BASE", "https://generativelanguage.googleapis.com"),
             workspace_root=os.environ.get("OPENCLAWN_WORKSPACE", "."),
+            auth_token=os.environ.get("OPENCLAWN_AUTH_TOKEN", ""),
         )
 
 

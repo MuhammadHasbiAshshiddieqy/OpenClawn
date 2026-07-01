@@ -63,6 +63,7 @@
                     </span>
                     {% if calibration.current_offset != 0 %}
                     <form method="post" action="/calibration/revert" class="inline-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <button type="submit" class="btn-ghost">{{ t('common.revert') }}</button>
                     </form>
                     {% endif %}
@@ -90,6 +91,7 @@
                 </ul>
                 {% if calibration.net_offset_delta != 0 %}
                 <form method="post" action="/calibration/apply" class="inline-form apply-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <input type="hidden" name="delta" value="{{ calibration.net_offset_delta }}">
                     <input type="hidden" name="reason"
                            value="{{ calibration.recommendations[0].label }}/{{ calibration.recommendations[0].issue }}">

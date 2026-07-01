@@ -42,6 +42,7 @@
                         {% if b.detail %}<div class="blocker-detail">{{ b.detail }}</div>{% endif %}
                     </div>
                     <form method="post" action="/blockers/resolve">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <input type="hidden" name="blocker_id" value="{{ b.id }}">
                         <button type="submit" class="btn-resolve">{{ t('activity.resolve') }}</button>
                     </form>

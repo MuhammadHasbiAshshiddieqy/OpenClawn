@@ -580,18 +580,43 @@ decisions, not technical debt:
 
 | Not included | Why (deliberate) |
 |---|---|
-| Authentication | Single-user by design — you run it for yourself, behind your own machine/network |
-| Rate limiting | Only relevant when exposed to untrusted/multiple clients |
+| Multi-user accounts | Single-user by design — one shared login for the one operator, not a user system |
 | PostgreSQL / horizontal scaling | SQLite (WAL) is sufficient for one user; no multi-instance state |
 | Multi-tenancy | One workspace, one user |
 
 Adopting these would change the project's identity, so they are not on the roadmap unless
 that direction is chosen explicitly.
 
+### Self-hosting on a public VPS (opt-in hardening)
+
+By default (`OPENCLAWN_AUTH_TOKEN` unset) OpenCLAWN runs with **no login** — correct for
+localhost or a VPN/Tailscale overlay, where the network boundary *is* the access control.
+If you expose it on a public IP, enable the built-in hardening first:
+
+1. **Set `OPENCLAWN_AUTH_TOKEN`** in `.env` (see `.env.example`) — a single shared password
+   gate. Requests without a valid session are redirected to `/login`; no session state is
+   kept server-side (signed cookie, HMAC-SHA256, pure stdlib — no new dependency).
+2. **Put a TLS reverse proxy in front** — see `Caddyfile.example` (auto Let's Encrypt).
+   Never bind uvicorn directly to a public IP without TLS; credentials and chat content
+   would travel in plaintext.
+3. **CSRF is enforced automatically** once `OPENCLAWN_AUTH_TOKEN` is set — every POST form
+   carries a signed token validated server-side.
+4. **Rate limiting is on automatically** for `/chat/stream` and `/converse/stream` (in-memory
+   sliding window, no Redis needed — single-process is enough for one user).
+5. **`/health`** now also reports Ollama reachability, which cloud API keys are configured,
+   and whether auth is enabled — wire it into your process manager or `docker-compose`
+   healthcheck (already configured in `docker-compose.yml`).
+
+None of this turns OpenCLAWN into a multi-tenant product — it is still one operator, one
+password, one workspace. It closes the gap between "safe on a trusted network" and "safe to
+expose on the open internet" for that one operator.
+
 **What "production-ready" means here** (for single-user self-hosting): reliable for one
-person. That posture is already largely met — Docker-sandboxed execution, SSRF guard,
-HITL approval, fail-safe error handling, CI on every push, a `/health` endpoint, and stale
-draft-skill cleanup. Remaining polish is tracked in [CHANGELOG.md](CHANGELOG.md).
+person, safely reachable from the internet if you choose to. That posture is met —
+Docker-sandboxed execution, SSRF guard, HITL approval, fail-safe error handling, CI on every
+push, opt-in auth + CSRF + rate limiting, a dependency-aware `/health` endpoint, custom
+error pages (no leaked stack traces), and stale draft-skill cleanup. Remaining polish is
+tracked in [CHANGELOG.md](CHANGELOG.md).
 
 > **Common review misread:** OpenCLAWN is *not* an under-built multi-user product. `shell_run`
 > and `code_run` run **only** in the Docker sandbox (never on the host); the DB is never

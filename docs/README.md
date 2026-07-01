@@ -20,6 +20,7 @@ Referensi teknis lengkap untuk semua modul dan fungsi dalam OpenCLAWN. Dibaca be
 | Role PM/QA/Dev/Data/Security, handoff contract, soul.toml | [roles.md](roles.md) |
 | Vault, Shield (+**SSRF guard**), ApprovalGate HITL (+proposal queue) | [security.md](security.md) · [tools.md](tools.md) |
 | **Guardrails** (ala NeMo): input/output rails, PII redaction, prompt-leak block | [security.md](security.md) |
+| **Self-host auth** (opt-in login), CSRF, rate limiting — untuk deploy di VPS publik | [security.md](security.md) · [web.md](web.md) · `README.md` § Scope and Production Posture |
 | Tool file/web/code/**blocker**, Docker sandbox | [tools.md](tools.md) |
 | Endpoint FastAPI, SSE streaming, Web UI, **/settings** | [web.md](web.md) |
 | Pilih/override model (Gemini, dll.) | [infra.md](infra.md) · [web.md](web.md) |

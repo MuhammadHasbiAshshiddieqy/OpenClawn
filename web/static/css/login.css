@@ -1,0 +1,23 @@
+/* ── Login (self-host auth, §P0 production-readiness) ───────────────────── */
+.login-shell {
+    min-height: 100vh; display: grid; place-items: center; padding: 20px;
+}
+.login-card {
+    width: 100%; max-width: 360px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 28px 26px;
+    box-shadow: 0 20px 60px -20px rgba(0,0,0,.6);
+}
+.login-card label { font-size: .85rem; color: var(--text-dim); }
+.login-card input[type=password] {
+    width: 100%; background: var(--bg-2); color: var(--text);
+    border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+    padding: 11px 13px; font-family: inherit; font-size: .95rem; margin: 6px 0 4px;
+}
+.login-card input[type=password]:focus { outline: none; border-color: var(--purple-bright); }
+.login-error {
+    background: rgba(236,30,75,.1); border: 1px solid rgba(236,30,75,.3);
+    color: var(--red-soft); border-radius: var(--radius-sm);
+    padding: 9px 12px; font-size: .85rem; margin-bottom: 14px;
+}
+.login-hint { text-align: center; margin-top: 16px; font-size: .78rem; }

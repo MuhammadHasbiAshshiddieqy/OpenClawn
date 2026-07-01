@@ -1,18 +1,22 @@
 import json
+import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import (
     HTMLResponse,
+    JSONResponse,
     PlainTextResponse,
     RedirectResponse,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core.activity import ActivityTimeline
 from core.agent_loop import AgentConfig, AgentLoop
@@ -36,8 +40,37 @@ from infra.i18n import LOCALES, translator
 from infra.logging import log, setup_logging
 from infra.settings import KNOWN_MODELS, SettingsStore
 from security.approval import ApprovalGate
+from security.auth import (
+    SESSION_COOKIE,
+    SESSION_MAX_AGE_SEC,
+    create_session_token,
+    generate_csrf_token,
+    is_public_path,
+    verify_login_token,
+    verify_session_token,
+)
 from security.question import QuestionGate
+from security.rate_limit import RateLimiter
 from tools import TOOL_REGISTRY
+
+CSRF_COOKIE = "openclawn_csrf"
+# Endpoint yang menerima POST tapi TIDAK melalui form HTML biasa (SSE stream /
+# JSON API dipanggil oleh JS fetch dengan body terpisah dari form CSRF) —
+# dilindungi oleh auth (perlu session valid) tapi tak realistis membawa token
+# CSRF form karena dikirim via fetch() dengan FormData yang dibangun JS, bukan
+# form HTML statis. Tetap aman: auth cookie sudah memblokir origin lain (SameSite).
+_CSRF_EXEMPT_PATHS = {
+    "/chat/stream",
+    "/converse/stream",
+    "/converse/interject",
+    "/converse/stop",
+    "/answer",
+    "/approve",
+}
+# Endpoint LLM yang biaya per-request-nya nyata — dibatasi sliding window agar
+# self-host di VPS publik tak kena biaya tak terkendali / DoS sederhana (§P0).
+_RATE_LIMITED_PATHS = {"/chat/stream", "/converse/stream"}
+_rate_limiter = RateLimiter()
 
 db = DatabaseManager(CONFIG)
 # ApprovalGate & QuestionGate shared di tingkat app: AgentLoop dibuat baru tiap
@@ -107,23 +140,67 @@ def available_roles() -> list[str]:
     return known + extra
 
 
-async def _ui_ctx(page: str = "") -> dict:
-    """Konteks bahasa UI + halaman aktif untuk tiap TemplateResponse.
+async def _ui_ctx(page: str = "", request: Request | None = None) -> dict:
+    """Konteks bahasa UI + halaman aktif + token CSRF untuk tiap TemplateResponse.
 
     `page` (mis. "router") dipakai `_sidebar.html` (include bersama, ui-review.md
     P0 #1) untuk menandai nav-link aktif via class + aria-current. Bahasa TAMPILAN
     saja (label/tombol) — bukan bahasa respons agent (§1.5, agent selalu mengikuti
     bahasa pesan user). Dibaca per-request (bukan context_processor Starlette
     karena itu sinkron; get_ui_locale butuh await).
+
+    `csrf_token` diambil dari cookie (diset saat login) agar template bisa
+    menyuntikkannya ke tiap form POST (`security/auth.py`, §P0). Kosong bila
+    auth nonaktif (cookie tak pernah diset) — form tetap render, middleware
+    hanya menegakkan CSRF saat `CONFIG.auth_token` terisi.
     """
     locale = await SettingsStore(db).get_ui_locale()
-    return {"t": translator(locale), "locale": locale, "page": page}
+    csrf = request.cookies.get(CSRF_COOKIE, "") if request else ""
+    return {
+        "t": translator(locale),
+        "locale": locale,
+        "page": page,
+        "csrf_token": csrf,
+        "auth_enabled": bool(CONFIG.auth_token),
+    }
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
     await db.run_migration("migrations/001_initial.sql")
+    # Startup health check (§P0 production-readiness) — LAPORKAN, jangan blokir.
+    # Ollama down/API key hilang tak boleh mencegah server nyala (§8: "Ollama
+    # offline ≠ agent mati", fallback chain sudah menangani) — operator cukup
+    # diberi tahu lewat log agar tak salah asumsi semua provider siap.
+    ollama_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=2) as c:
+            r = await c.get(f"{CONFIG.ollama_base}/api/tags")
+            ollama_ok = r.status_code == 200
+    except Exception:  # noqa: BLE001 — hanya info startup, bukan kegagalan
+        pass
+    log.info(
+        "startup_health",
+        ollama=("up" if ollama_ok else "down"),
+        anthropic_key=bool(os.environ.get("ANTHROPIC_API_KEY")),
+        gemini_key=bool(os.environ.get("GOOGLE_API_KEY")),
+        auth_enabled=bool(CONFIG.auth_token),
+    )
+    if not ollama_ok and not (
+        os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    ):
+        log.warning(
+            "startup_no_llm_provider_reachable",
+            hint="Ollama down dan tak ada API key cloud terkonfigurasi — "
+            "agent tak akan bisa menjawab sampai salah satu tersedia.",
+        )
+    if not CONFIG.auth_token:
+        log.warning(
+            "startup_auth_disabled",
+            hint="OPENCLAWN_AUTH_TOKEN kosong — siapa pun yang reach port ini "
+            "bisa memakai agent tanpa login. Aman HANYA di localhost/VPN.",
+        )
     # Muat tool dari server MCP eksternal yang enabled → TOOL_REGISTRY (fail-safe).
     # Server tak terjangkau di-skip; tool MCP selalu requires_approval (§1).
     try:
@@ -142,6 +219,130 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="OpenCLAWN", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="web/static"), name="static")
 templates = Jinja2Templates(directory="web/templates")
+
+
+@app.middleware("http")
+async def auth_and_csrf_middleware(request: Request, call_next):
+    """Self-host auth + CSRF + rate limit (§P0 production-readiness).
+
+    Auth+CSRF DIMATIKAN bila `CONFIG.auth_token` kosong (default) — perilaku lama
+    tetap jalan tanpa login, aman untuk localhost dev. Diaktifkan hanya bila
+    OPENCLAWN_AUTH_TOKEN diisi di .env (self-host di VPS publik).
+
+    Rate limit SELALU aktif (independen dari auth) — endpoint LLM tetap perlu
+    dibatasi biayanya walau auth dimatikan (mis. localhost dev yang lupa
+    menyalakan auth tapi tetap ingin batas wajar).
+    """
+    path = request.url.path
+
+    if CONFIG.auth_token and not is_public_path(path):
+        session_valid = verify_session_token(request.cookies.get(SESSION_COOKIE), CONFIG.auth_token)
+        if not session_valid:
+            if request.method == "GET":
+                nxt = quote(str(request.url.path))
+                return RedirectResponse(url=f"/login?next={nxt}", status_code=303)
+            return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+        # CSRF: hanya untuk POST form HTML biasa. Endpoint SSE/fetch JS di-exempt
+        # (lihat _CSRF_EXEMPT_PATHS) karena sudah dilindungi cookie auth + SameSite.
+        if request.method == "POST" and path not in _CSRF_EXEMPT_PATHS:
+            cookie_csrf = request.cookies.get(CSRF_COOKIE)
+            form_csrf = None
+            try:
+                form = await request.form()
+                form_csrf = form.get("csrf_token")
+            except Exception:  # noqa: BLE001 — body bukan form (mis. JSON) → tolak
+                pass
+            if not cookie_csrf or not form_csrf or form_csrf != cookie_csrf:
+                return JSONResponse({"ok": False, "error": "csrf_failed"}, status_code=403)
+
+    # Rate limit endpoint LLM per sesi otentikasi (bukan per app session_id, agar
+    # satu user dengan banyak tab tetap dibatasi bersama). Fallback ke IP client
+    # bila auth nonaktif (tak ada cookie sesi).
+    if path in _RATE_LIMITED_PATHS:
+        key = request.cookies.get(
+            SESSION_COOKIE, request.client.host if request.client else "unknown"
+        )
+        if not _rate_limiter.allow(key):
+            return JSONResponse(
+                {"ok": False, "error": "rate_limited"},
+                status_code=429,
+                headers={"Retry-After": "60"},
+            )
+
+    return await call_next(request)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """404 kustom — jangan bocorkan detail internal, tampilkan halaman ramah."""
+    if exc.status_code == 404:
+        locale = await SettingsStore(db).get_ui_locale()
+        return templates.TemplateResponse(
+            request, "404.html", {"t": translator(locale)}, status_code=404
+        )
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """500 kustom — log traceback server-side, TIDAK bocorkan stack trace ke client."""
+    log.error("unhandled_exception", path=request.url.path, error=str(exc))
+    locale = await SettingsStore(db).get_ui_locale()
+    return templates.TemplateResponse(
+        request, "500.html", {"t": translator(locale)}, status_code=500
+    )
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, next: str = "/", error: bool = False):
+    if not CONFIG.auth_token:
+        return RedirectResponse(url="/", status_code=303)
+    locale = await SettingsStore(db).get_ui_locale()
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"t": translator(locale), "next": next, "error": error},
+    )
+
+
+@app.post("/login")
+async def login_submit(request: Request):
+    form = await request.form()
+    token = (form.get("token") or "").strip()
+    next_url = (form.get("next") or "/").strip()
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = "/"  # cegah open-redirect via ?next= ke domain eksternal
+
+    if not CONFIG.auth_token or not verify_login_token(token, CONFIG.auth_token):
+        log.warning("login_failed", ip=request.client.host if request.client else "unknown")
+        return RedirectResponse(url=f"/login?error=true&next={quote(next_url)}", status_code=303)
+
+    log.info("login_ok", ip=request.client.host if request.client else "unknown")
+    resp = RedirectResponse(url=next_url, status_code=303)
+    resp.set_cookie(
+        SESSION_COOKIE,
+        create_session_token(CONFIG.auth_token),
+        max_age=SESSION_MAX_AGE_SEC,
+        httponly=True,
+        samesite="lax",
+    )
+    resp.set_cookie(
+        CSRF_COOKIE,
+        generate_csrf_token(),
+        max_age=SESSION_MAX_AGE_SEC,
+        httponly=False,  # harus terbaca JS/Jinja untuk disuntik ke form
+        samesite="lax",
+    )
+    return resp
+
+
+@app.post("/logout")
+async def logout():
+    resp = RedirectResponse(url="/login", status_code=303)
+    resp.delete_cookie(SESSION_COOKIE)
+    resp.delete_cookie(CSRF_COOKIE)
+    return resp
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -163,17 +364,20 @@ async def index(request: Request, role: str = "pm"):
             "default_participants": list(CONFIG.conversation_default_participants),
             "session_id": str(uuid.uuid4()),
             "active_model": active_model,
-            **await _ui_ctx("chat"),
+            **await _ui_ctx("chat", request),
         },
     )
 
 
 @app.get("/health")
 async def health():
-    """Health check ringkas untuk monitoring self-hosted (single-user, §7).
+    """Health check untuk monitoring self-hosted (single-user, §7) + Docker healthcheck.
 
-    Verifikasi konektivitas DB lewat satu query murah. Mengembalikan JSON status —
-    bukan dashboard. `ok`=False bila DB tak terjangkau (mis. file terkunci/hilang).
+    Verifikasi DB (query murah) + Ollama (satu GET ringan, 2s timeout) + key cloud
+    yang terkonfigurasi. `ok` hanya butuh DB up — Ollama down TIDAK membuat `ok=False`
+    (§8: "Ollama offline ≠ agent mati", fallback chain tetap menangani), tapi
+    dilaporkan terpisah di `ollama` agar operator tahu tanpa menganggap seluruh
+    layanan mati.
     """
     db_ok = True
     try:
@@ -181,10 +385,25 @@ async def health():
     except Exception as e:  # noqa: BLE001 — health harus melaporkan, bukan meledak
         db_ok = False
         log.warning("health_db_check_failed", error=str(e))
+
+    ollama_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=2) as c:
+            r = await c.get(f"{CONFIG.ollama_base}/api/tags")
+            ollama_ok = r.status_code == 200
+    except Exception:  # noqa: BLE001 — Ollama down bukan kegagalan health, hanya info
+        pass
+
     return {
         "ok": db_ok,
         "service": "openclawn",
         "database": "up" if db_ok else "down",
+        "ollama": "up" if ollama_ok else "down",
+        "cloud_keys": {
+            "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
+            "gemini": bool(os.environ.get("GOOGLE_API_KEY")),
+        },
+        "auth_enabled": bool(CONFIG.auth_token),
         "tools": len(TOOL_REGISTRY),
     }
 
@@ -388,7 +607,7 @@ async def metrics(request: Request):
             "report": report,
             "calibration": calibration,
             "tool_stats": tool_stats,
-            **await _ui_ctx("metrics"),
+            **await _ui_ctx("metrics", request),
         },
     )
 
@@ -486,7 +705,7 @@ async def skills_page(request: Request):
             "confidence_threshold": CONFIG.confidence_threshold,
             "roles": available_roles(),
             "import_msg": request.query_params.get("import_msg"),
-            **await _ui_ctx("skills"),
+            **await _ui_ctx("skills", request),
         },
     )
 
@@ -584,7 +803,7 @@ async def conversations_page(request: Request):
     return templates.TemplateResponse(
         request,
         "conversations.html",
-        {"conversations": convos, **await _ui_ctx("conversations")},
+        {"conversations": convos, **await _ui_ctx("conversations", request)},
     )
 
 
@@ -615,7 +834,7 @@ async def activity_page(request: Request, role: str | None = None):
             "roles": roles,
             "active_role": active_role,
             "open_blockers": open_blockers,
-            **await _ui_ctx("activity"),
+            **await _ui_ctx("activity", request),
         },
     )
 
@@ -659,7 +878,7 @@ async def autopilots_page(request: Request):
             "runs": runs,
             "proposals": proposals,
             "roles": available_roles(),
-            **await _ui_ctx("autopilots"),
+            **await _ui_ctx("autopilots", request),
         },
     )
 
@@ -726,7 +945,7 @@ async def mcp_page(request: Request):
     return templates.TemplateResponse(
         request,
         "mcp.html",
-        {"servers": servers, "discovered": discovered, **await _ui_ctx("mcp")},
+        {"servers": servers, "discovered": discovered, **await _ui_ctx("mcp", request)},
     )
 
 
@@ -804,7 +1023,7 @@ async def router_page(request: Request, saved: bool = False):
             "known_models": KNOWN_MODELS,
             "overridden": overridden,
             "saved": saved,
-            **await _ui_ctx("router"),
+            **await _ui_ctx("router", request),
         },
     )
 
@@ -843,7 +1062,7 @@ async def settings_page(request: Request, saved: bool = False):
             "compaction": compaction,
             "saved": saved,
             "locales": LOCALES,
-            **await _ui_ctx("settings"),
+            **await _ui_ctx("settings", request),
         },
     )
 

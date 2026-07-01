@@ -54,6 +54,7 @@
                             <h3>{{ t('skills.import') }}</h3>
                             <p class="muted">{{ t('skills.import_hint')|safe }}</p>
                             <form method="post" action="/skills/import" class="pack-import-form">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <textarea name="pack_text" placeholder="{{ t('skills.import_paste_placeholder') }}"></textarea>
                                 <div class="pack-import-row">
                                     <input type="text" name="url" placeholder="{{ t('skills.import_url_placeholder') }}">
@@ -160,6 +161,7 @@
                             {% if c.action == 'merge' and c.status == 'pending' and not ns.pending_shown %}
                             {% set ns.pending_shown = true %}
                             <form method="post" action="/skills/apply-merge" style="margin:0">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="role" value="{{ c.role }}">
                                 <input type="hidden" name="curation_id" value="{{ c.id }}">
                                 <button type="submit" class="btn-ghost">{{ t('skills.apply') }}</button>
@@ -167,6 +169,7 @@
                             {% elif c.action == 'merge' and c.status == 'applied' and not ns.applied_shown %}
                             {% set ns.applied_shown = true %}
                             <form method="post" action="/skills/revert-merge" style="margin:0">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="role" value="{{ c.role }}">
                                 <button type="submit" class="btn-ghost">{{ t('skills.revert') }}</button>
                             </form>
