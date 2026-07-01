@@ -8,6 +8,7 @@ Murni di atas DatabaseManager (CLAUDE.md §1.6) — tabel app_settings key-value
 """
 
 from infra.database import DatabaseManager
+from infra.i18n import DEFAULT_LOCALE, LOCALES
 
 # Pilihan model yang diketahui, untuk dropdown /settings.
 # Bukan pembatas keras — hanya saran tampilan. (provider, model, label).
@@ -29,6 +30,7 @@ KNOWN_MODELS: list[tuple[str, str, str]] = [
 _KEY_PROVIDER = "model_override_provider"
 _KEY_MODEL = "model_override_model"
 _KEY_COMPACTION = "compaction_mode"
+_KEY_UI_LOCALE = "ui_locale"
 
 # Mode compaction yang valid (lihat core/compactor.py). off = truncation lama (aman).
 COMPACTION_MODES = ("off", "local", "cloud")
@@ -83,3 +85,18 @@ class SettingsStore:
         if mode not in COMPACTION_MODES:
             mode = None  # set() menghapus baris → get_compaction_mode pakai default 'off'
         await self.set(_KEY_COMPACTION, mode)
+
+    async def get_ui_locale(self) -> str:
+        """Bahasa tampilan WEB UI (bukan bahasa respons agent, §1.5). Default English.
+
+        Terpisah total dari locale agent — agent selalu mengikuti bahasa pesan user.
+        Nilai tak dikenal → fail-safe ke DEFAULT_LOCALE (bukan exception).
+        """
+        value = await self.get(_KEY_UI_LOCALE)
+        return value if value in LOCALES else DEFAULT_LOCALE
+
+    async def set_ui_locale(self, locale: str | None) -> None:
+        """Set bahasa tampilan UI. None/'' atau nilai tak dikenal → kembali ke default English."""
+        if locale not in LOCALES:
+            locale = None  # set() menghapus baris → get_ui_locale pakai DEFAULT_LOCALE
+        await self.set(_KEY_UI_LOCALE, locale)

@@ -352,21 +352,25 @@ Satu baris per run autopilot, untuk ditinjau di `/autopilots`.
 
 ### `curation_log` — Jejak Konsolidasi Skill (I1)
 
-Setiap merge/revert skill mirip dicatat oleh `SkillCuratorManager`. Loser tidak dihapus (revertible); tabel ini membuat keputusan merge kasat mata di `/skills`.
+Setiap usulan/merge/revert skill mirip dicatat oleh `SkillCuratorManager`. Loser tidak dihapus (revertible); tabel ini membuat keputusan merge kasat mata di `/skills`.
 
 | Kolom | Tipe | Keterangan |
 |---|---|---|
 | `id` | INTEGER PK | — |
 | `role` | TEXT | Role pemilik skill |
 | `action` | TEXT | `merge` \| `revert_merge` |
+| `status` | TEXT | `pending` \| `applied` \| `reverted` (default `applied`) — lihat catatan gating di bawah |
 | `winner_id` | INTEGER | Skill yang bertahan (hasil sintesis) |
-| `loser_ids` | TEXT | JSON array id skill yang diserap (status `merged`) |
+| `loser_ids` | TEXT | JSON array id skill yang diserap (status `merged` setelah diterapkan) |
 | `similarity` | REAL | Skor pre-filter leksikal Jaccard (0..1) |
 | `judge_confidence` | INTEGER | 1..5 dari LLM judge |
+| `merged_content` | TEXT | Konten sintesis judge; disimpan di baris `pending` sampai di-apply |
 | `reasoning` | TEXT | Satu kalimat alasan judge |
 | `created_at` | TIMESTAMP | — |
 
-**Index:** `idx_curation_role` pada `(role, created_at DESC)`. Merge hanya bila judge ≥ `curation_judge_min_confidence`.
+**Index:** `idx_curation_role` pada `(role, created_at DESC)`. Merge diusulkan hanya bila judge ≥ `curation_judge_min_confidence`.
+
+**Gating `curation_auto` (§8, default `False`):** judge yang menyetujui merge TIDAK langsung mengubah skill — baris `curation_log` ditulis dengan `status='pending'` dan `skills` tetap `active`, menunggu tombol **Terapkan** manusia di `/skills` (`POST /skills/apply-merge` → `SkillCuratorManager.apply_pending_merge`). Bila `curation_auto=True`, merge diterapkan langsung dengan `status='applied'`. `revert_last_merge` hanya melihat baris `status='applied'` — usulan `pending` belum mengubah apa pun sehingga tidak perlu (dan tidak bisa) di-revert.
 
 ---
 

@@ -32,6 +32,7 @@ from core.conversation import (
 )
 from infra.config import CONFIG
 from infra.database import DatabaseManager
+from infra.i18n import LOCALES, translator
 from infra.logging import log, setup_logging
 from infra.settings import KNOWN_MODELS, SettingsStore
 from security.approval import ApprovalGate
@@ -106,6 +107,19 @@ def available_roles() -> list[str]:
     return known + extra
 
 
+async def _ui_ctx(page: str = "") -> dict:
+    """Konteks bahasa UI + halaman aktif untuk tiap TemplateResponse.
+
+    `page` (mis. "router") dipakai `_sidebar.html` (include bersama, ui-review.md
+    P0 #1) untuk menandai nav-link aktif via class + aria-current. Bahasa TAMPILAN
+    saja (label/tombol) — bukan bahasa respons agent (§1.5, agent selalu mengikuti
+    bahasa pesan user). Dibaca per-request (bukan context_processor Starlette
+    karena itu sinkron; get_ui_locale butuh await).
+    """
+    locale = await SettingsStore(db).get_ui_locale()
+    return {"t": translator(locale), "locale": locale, "page": page}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
@@ -149,6 +163,7 @@ async def index(request: Request, role: str = "pm"):
             "default_participants": list(CONFIG.conversation_default_participants),
             "session_id": str(uuid.uuid4()),
             "active_model": active_model,
+            **await _ui_ctx("chat"),
         },
     )
 
@@ -369,7 +384,12 @@ async def metrics(request: Request):
     return templates.TemplateResponse(
         request,
         "metrics.html",
-        {"report": report, "calibration": calibration, "tool_stats": tool_stats},
+        {
+            "report": report,
+            "calibration": calibration,
+            "tool_stats": tool_stats,
+            **await _ui_ctx("metrics"),
+        },
     )
 
 
@@ -446,8 +466,9 @@ async def skills_page(request: Request):
            FROM crystallization_log ORDER BY id DESC LIMIT 20"""
     )
     # I1 observability: jejak merge skill (curation) — kasat mata & dapat di-revert.
+    # `id` disertakan agar usulan `pending` bisa di-apply lewat tombol (curation_auto=False, §8).
     curation = await db.fetchall(
-        """SELECT role, action, winner_id, loser_ids, similarity, judge_confidence,
+        """SELECT id, role, action, status, winner_id, loser_ids, similarity, judge_confidence,
                   reasoning, created_at
            FROM curation_log ORDER BY id DESC LIMIT 20"""
     )
@@ -465,6 +486,7 @@ async def skills_page(request: Request):
             "confidence_threshold": CONFIG.confidence_threshold,
             "roles": available_roles(),
             "import_msg": request.query_params.get("import_msg"),
+            **await _ui_ctx("skills"),
         },
     )
 
@@ -481,6 +503,20 @@ async def skills_revert_merge(request: Request):
             role=role,
             **{k: v for k, v in result.items() if k != "restored"},
         )
+    return RedirectResponse(url="/skills", status_code=303)
+
+
+@app.post("/skills/apply-merge")
+async def skills_apply_merge(request: Request):
+    """Terapkan usulan merge pending (curation_auto=False, default §8 — manusia klik apply)."""
+    form = await request.form()
+    role = (form.get("role") or "").strip()
+    curation_id_raw = (form.get("curation_id") or "").strip()
+    if role in available_roles() and curation_id_raw.isdigit():
+        result = await SkillCuratorManager(role, db, None, CONFIG).apply_pending_merge(
+            int(curation_id_raw)
+        )
+        log.info("skill_merge_applied", role=role, **result)
     return RedirectResponse(url="/skills", status_code=303)
 
 
@@ -548,7 +584,7 @@ async def conversations_page(request: Request):
     return templates.TemplateResponse(
         request,
         "conversations.html",
-        {"conversations": convos},
+        {"conversations": convos, **await _ui_ctx("conversations")},
     )
 
 
@@ -579,6 +615,7 @@ async def activity_page(request: Request, role: str | None = None):
             "roles": roles,
             "active_role": active_role,
             "open_blockers": open_blockers,
+            **await _ui_ctx("activity"),
         },
     )
 
@@ -622,6 +659,7 @@ async def autopilots_page(request: Request):
             "runs": runs,
             "proposals": proposals,
             "roles": available_roles(),
+            **await _ui_ctx("autopilots"),
         },
     )
 
@@ -688,7 +726,7 @@ async def mcp_page(request: Request):
     return templates.TemplateResponse(
         request,
         "mcp.html",
-        {"servers": servers, "discovered": discovered},
+        {"servers": servers, "discovered": discovered, **await _ui_ctx("mcp")},
     )
 
 
@@ -766,6 +804,7 @@ async def router_page(request: Request, saved: bool = False):
             "known_models": KNOWN_MODELS,
             "overridden": overridden,
             "saved": saved,
+            **await _ui_ctx("router"),
         },
     )
 
@@ -803,13 +842,15 @@ async def settings_page(request: Request, saved: bool = False):
             "current": current,  # None artinya mode otomatis (router)
             "compaction": compaction,
             "saved": saved,
+            "locales": LOCALES,
+            **await _ui_ctx("settings"),
         },
     )
 
 
 @app.post("/settings")
 async def settings_save(request: Request):
-    """Simpan override + mode compaction. 'auto'/kosong → router otomatis."""
+    """Simpan override + mode compaction + bahasa UI. 'auto'/kosong → router otomatis."""
     form = await request.form()
     choice = (form.get("model_choice") or "").strip()
     store = SettingsStore(db)
@@ -824,5 +865,8 @@ async def settings_save(request: Request):
 
     # Mode compaction headroom (opt-in): off (default aman) | local | cloud.
     await store.set_compaction_mode((form.get("compaction_mode") or "off").strip())
+
+    # Bahasa tampilan UI (§1.5: tidak menyentuh bahasa respons agent). Default English.
+    await store.set_ui_locale((form.get("ui_locale") or "en").strip())
 
     return RedirectResponse(url="/settings?saved=true", status_code=303)

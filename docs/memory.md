@@ -115,14 +115,18 @@ Menggerakkan revive (I2) & refine (I3) berdasarkan apakah turn yang memakai skil
 
 ## `memory/curator.py` — Compounding I1 (Skill Curator)
 
-Gabung/dedup skill mirip agar library tak terfragmentasi. Throttled (`curation_interval_sec`), gated (judge ≥ `curation_judge_min_confidence`). Anti kehilangan data (§1): loser jadi `merged` (bukan dihapus), revertible.
+Gabung/dedup skill mirip agar library tak terfragmentasi. Throttled (`curation_interval_sec`), gated (judge ≥ `curation_judge_min_confidence`) **dan** gated oleh `curation_auto` (§8, default `False`): merge yang disetujui judge hanya **diusulkan** sampai manusia klik Terapkan di `/skills` — tidak langsung mengubah skill. Anti kehilangan data (§1): loser jadi `merged` (bukan dihapus), revertible.
 
 ### Kelas: `SkillCuratorManager`
 - **`maybe_run_curation_pass() → dict`** *(async)* — throttled (pola decay), dipanggil post-turn.
 - **`_find_candidate_pairs() → list`** *(async, private)* — pre-filter leksikal **Jaccard token** (bukan FTS5 — FTS5 di repo ini hanya untuk `memory_l4`); pasangan dengan similarity ≥ threshold.
 - **`_judge(a, b) → dict`** *(async, private)* — LLM judge tier-ringan → keputusan merge terstruktur; parse gagal/error → jangan merge (fail-safe).
-- **`_merge(a, b, sim, judge)`** *(async, private)* — winner (decay_score tertinggi) menyerap metrik terbaik + konten sintesis; konten lama → `skill_versions`; loser → `merged`; catat `curation_log`.
-- **`revert_last_merge() → dict`** *(async)* — pulihkan loser → active, winner ke konten/versi sebelum merge. Tombol di `/skills`.
+- **`_pick_winner(a, b) → tuple`** *(private)* — winner = skill dengan `decay_score` tertinggi; dipakai `_merge`, `_propose`, dan `apply_pending_merge`.
+- **`_merge(a, b, sim, judge)`** *(async, private)* — jalur `curation_auto=True`: terapkan merge langsung lewat `_apply_merge` (`status='applied'`).
+- **`_propose(a, b, sim, judge)`** *(async, private)* — jalur default (`curation_auto=False`, §8): tulis `curation_log` dengan `status='pending'` + `merged_content` tersintesis, **tanpa** mengubah baris `skills` apa pun.
+- **`_apply_merge(...)`** *(async, private)* — logika bersama: konten winner lama → `skill_versions`; winner menyerap metrik terbaik (`decay_score`/`use_count`/`confidence` MAX/SUM) + konten sintesis; loser → `merged`; catat `curation_log`.
+- **`apply_pending_merge(curation_log_id) → dict`** *(async)* — terapkan satu usulan `pending` (tombol Terapkan di `/skills`, `POST /skills/apply-merge`). No-op aman bila id tak ditemukan/sudah diproses, atau skill sudah berubah sejak diusulkan (baris ditandai `reverted`).
+- **`revert_last_merge() → dict`** *(async)* — pulihkan loser → active, winner ke konten/versi sebelum merge. Hanya melihat baris `status='applied'` (usulan `pending` belum mengubah apa pun). Tombol di `/skills`.
 
 ---
 

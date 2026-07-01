@@ -1,0 +1,87 @@
+{# Sidebar bersama — dulunya diduplikasi di 9 template (ui-review.md P0 #1).
+   Include dengan context var `page` (mis. "chat", "activity", "router") untuk
+   menandai nav-link aktif via aria-current + class. `page` default "" (tak ada
+   yang aktif) bila caller lupa mengisinya — aman, tak crash. #}
+<aside class="sidebar">
+    <div class="brand">
+        <img src="/static/logo.png" alt="OpenCLAWN">
+        <div>
+            <div class="name">Open<b>CLAWN</b></div>
+            <div class="tag">playful · sharp</div>
+        </div>
+    </div>
+
+    {% if page == "chat" %}
+    <div class="role-group" id="role-group">
+        <div class="side-label">
+            {{ t('nav.roles') }}
+            <span class="role-group-note">{{ t('nav.single_agent') }}</span>
+        </div>
+        <div class="roles">
+            {% for r in available_roles %}
+            <a href="/?role={{ r }}" class="role-link {{ 'active' if r == role else '' }}">
+                <span class="dot"></span>
+                <span class="meta">
+                    {{ r.upper() }}
+                    <small>{{ roles_meta.get(r, ['agent', ''])[1] }}</small>
+                </span>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div>
+        <div class="side-label">{{ t('nav.workspace') }}</div>
+        <nav class="nav-links">
+            <a href="/" class="nav-link {{ 'active' if page == 'chat' else '' }}" {{ 'aria-current="page"'|safe if page == 'chat' else '' }}>
+                <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v7a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm4 8v2m4-2v2M0 4h16"/></svg>
+                {{ t('nav.chat') }}
+            </a>
+            <a href="/activity" class="nav-link {{ 'active' if page == 'activity' else '' }}" {{ 'aria-current="page"'|safe if page == 'activity' else '' }}>
+                <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg>
+                {{ t('nav.activity') }}
+            </a>
+            <a href="/autopilots" class="nav-link {{ 'active' if page == 'autopilots' else '' }}" {{ 'aria-current="page"'|safe if page == 'autopilots' else '' }}>
+                <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5V8l2.5 1.5"/></svg>
+                {{ t('nav.autopilots') }}
+            </a>
+            <a href="/mcp" class="nav-link {{ 'active' if page == 'mcp' else '' }}" {{ 'aria-current="page"'|safe if page == 'mcp' else '' }}>
+                <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="5.5" y="9" width="5" height="5" rx="1"/><path d="M4.5 7v2h7V7"/></svg>
+                {{ t('nav.mcp') }}
+            </a>
+            <a href="/metrics" class="nav-link {{ 'active' if page == 'metrics' else '' }}" {{ 'aria-current="page"'|safe if page == 'metrics' else '' }}>
+                <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="9" width="3" height="6" rx=".5"/><rect x="6.5" y="5" width="3" height="10" rx=".5"/><rect x="12" y="1" width="3" height="14" rx=".5"/></svg>
+                {{ t('nav.metrics') }}
+            </a>
+            <a href="/skills" class="nav-link {{ 'active' if page == 'skills' else '' }}" {{ 'aria-current="page"'|safe if page == 'skills' else '' }}>
+                <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3-6 3-6-3 6-3z"/><path d="M2 8l6 3 6-3M2 11.5l6 3 6-3"/></svg>
+                {{ t('nav.skills') }}
+            </a>
+            <a href="/conversations" class="nav-link {{ 'active' if page == 'conversations' else '' }}" {{ 'aria-current="page"'|safe if page == 'conversations' else '' }}>
+                <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 3h12v8H6l-3 3V3z"/></svg>
+                {{ t('nav.conversations') }}
+            </a>
+            <a href="/router" class="nav-link {{ 'active' if page == 'router' else '' }}" {{ 'aria-current="page"'|safe if page == 'router' else '' }}>
+                <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="3.5" r="1.5"/><circle cx="12.5" cy="12.5" r="1.5"/><path d="M5 8h3l3-4.5M8 8l3 4.5"/></svg>
+                {{ t('nav.router') }}
+            </a>
+            <a href="/settings" class="nav-link {{ 'active' if page == 'settings' else '' }}" {{ 'aria-current="page"'|safe if page == 'settings' else '' }}>
+                <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
+                {{ t('nav.settings') }}
+            </a>
+        </nav>
+    </div>
+
+    <div class="spacer"></div>
+
+    {% if page == "chat" %}
+    <div class="model-card">
+        <div class="label">{{ t('common.model') }}</div>
+        <div class="row">
+            <span class="pulse"></span>
+            <span class="val">{{ active_model or t('common.auto_router') }}</span>
+        </div>
+    </div>
+    {% endif %}
+</aside>

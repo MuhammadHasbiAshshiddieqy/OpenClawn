@@ -1,0 +1,95 @@
+/* ── Content page (metrics / settings) ─────────────────────────────────── */
+
+.page {
+    max-width: 860px; margin: 0 auto; width: 100%;
+    padding: 30px 26px 60px;
+    overflow-y: auto;
+}
+.page h2 { font-size: 1.05rem; margin: 26px 0 12px; letter-spacing: -.01em; }
+.page p { color: var(--text-dim); font-size: .92rem; margin-bottom: 12px; }
+.page .muted { color: var(--text-faint); }
+.page hr { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
+
+.card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+}
+
+/* Table */
+table {
+    width: 100%; border-collapse: collapse;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+th, td { padding: 12px 16px; text-align: left; font-size: .88rem; border-bottom: 1px solid var(--border); }
+th { color: var(--text-dim); font-weight: 600; text-transform: uppercase; font-size: .72rem; letter-spacing: .08em; background: var(--bg-2); }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--panel-2); }
+tr.warn td { background: rgba(236,30,75,.08); }
+
+/* Recommendation list */
+.rec { list-style: none; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 10px; background: var(--panel); }
+.rec strong { color: var(--text); }
+.tag { display: inline-block; font-size: .68rem; padding: 2px 9px; border-radius: 999px; background: var(--purple-deep); color: #fff; margin-left: 6px; letter-spacing: .04em; }
+.rec p { margin-top: 6px; margin-bottom: 0; }
+ul { list-style: none; }
+
+/* Calibration loop tertutup #1: offset aktif + apply/revert + riwayat */
+.offset-bar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 14px; margin-bottom: 16px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.offset-pill {
+    font-weight: 700; font-size: .9rem; padding: 3px 12px; border-radius: 999px;
+    background: var(--grad-brand); color: #fff; letter-spacing: .02em;
+}
+.offset-pill.zero { background: var(--border-2); color: var(--text-dim); }
+.inline-form { display: inline-flex; align-items: center; gap: 10px; margin: 0; }
+.apply-form { margin-top: 12px; }
+.btn-primary {
+    background: var(--grad-brand); color: #fff; border: none;
+    border-radius: var(--radius-sm); padding: 9px 18px;
+    cursor: pointer; font-size: .88rem; font-weight: 600;
+    box-shadow: 0 6px 18px -8px rgba(124,58,237,.8);
+    transition: filter .12s, transform .12s;
+}
+.btn-primary:hover { filter: brightness(1.1); transform: translateY(-1px); }
+.btn-ghost {
+    background: transparent; color: var(--text-dim);
+    border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+    padding: 6px 14px; cursor: pointer; font-size: .82rem; font-weight: 500;
+    transition: color .12s, border-color .12s;
+}
+.btn-ghost:hover { color: var(--text); border-color: var(--purple-bright); }
+.tag.active { background: var(--green); }
+tr.active-row td { background: rgba(80,200,120,.07); }
+
+/* Editor peta tier→model (/router) */
+.router-actions { display: flex; gap: 12px; align-items: center; margin-top: 16px; }
+.page td select { width: 100%; max-width: 360px; margin-bottom: 0; }
+
+/* Forms */
+label { display: block; margin-bottom: 8px; font-size: .9rem; }
+select, .page input[type=text] {
+    width: 100%; background: var(--bg-2); color: var(--text);
+    border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+    padding: 11px 13px; font-family: inherit; font-size: .92rem;
+    margin-bottom: 14px;
+}
+select:focus { outline: none; border-color: var(--purple-bright); }
+.btn {
+    background: var(--grad-brand); color: #fff; border: none;
+    border-radius: var(--radius-sm); padding: 11px 22px;
+    cursor: pointer; font-size: .92rem; font-weight: 600;
+    box-shadow: 0 6px 18px -8px rgba(124,58,237,.8);
+    transition: filter .12s, transform .12s;
+}
+.btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
+.saved { color: var(--green); font-weight: 600; margin-bottom: 12px; }
+.current-status { background: var(--panel-2); padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border); }

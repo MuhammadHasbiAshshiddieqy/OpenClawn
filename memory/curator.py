@@ -68,8 +68,15 @@ class SkillCuratorManager:
         return await self._run_pass()
 
     async def _run_pass(self) -> dict:
+        """Jalankan satu pass kurasi.
+
+        `curation_auto=False` (default, §8): merge yang disetujui judge HANYA
+        diusulkan (curation_log.status='pending') — ditunggu klik apply manusia
+        di /skills. `curation_auto=True`: merge langsung diterapkan (tetap revertible).
+        """
         pairs = await self._find_candidate_pairs()
         merged = 0
+        proposed = 0
         for id_a, id_b, sim in pairs[: self.config.curation_max_pairs_per_pass]:
             a = await self.db.fetchone("SELECT * FROM skills WHERE id=?", (id_a,))
             b = await self.db.fetchone("SELECT * FROM skills WHERE id=?", (id_b,))
@@ -80,9 +87,18 @@ class SkillCuratorManager:
                 judge["should_merge"]
                 and judge["confidence"] >= self.config.curation_judge_min_confidence
             ):
-                await self._merge(a, b, sim, judge)
-                merged += 1
-        return {"skipped": False, "candidates": len(pairs), "merged": merged}
+                if self.config.curation_auto:
+                    await self._merge(a, b, sim, judge)
+                    merged += 1
+                else:
+                    await self._propose(a, b, sim, judge)
+                    proposed += 1
+        return {
+            "skipped": False,
+            "candidates": len(pairs),
+            "merged": merged,
+            "proposed": proposed,
+        }
 
     async def _find_candidate_pairs(self) -> list[tuple[int, int, float]]:
         """Pre-filter leksikal: pasangan skill active dengan Jaccard ≥ threshold.
@@ -142,12 +158,52 @@ class SkillCuratorManager:
         except (json.JSONDecodeError, ValueError):
             return {"should_merge": False, "confidence": 1, "merged_content": ""}
 
-    async def _merge(self, a: dict, b: dict, similarity: float, judge: dict) -> None:
-        """Terapkan merge: winner menyerap, loser jadi 'merged' (revertible). Audit penuh."""
-        # Winner = skill dengan decay_score tertinggi (lebih relevan); loser yang lain.
-        winner, loser = (a, b) if (a["decay_score"] or 0) >= (b["decay_score"] or 0) else (b, a)
-        merged_content = judge.get("merged_content") or winner["skill_content"]
+    def _pick_winner(self, a: dict, b: dict) -> tuple[dict, dict]:
+        """Winner = skill dengan decay_score tertinggi (lebih relevan); loser yang lain."""
+        return (a, b) if (a["decay_score"] or 0) >= (b["decay_score"] or 0) else (b, a)
 
+    async def _merge(self, a: dict, b: dict, similarity: float, judge: dict) -> None:
+        """Terapkan merge langsung (curation_auto=True): winner menyerap, loser 'merged'."""
+        winner, loser = self._pick_winner(a, b)
+        merged_content = judge.get("merged_content") or winner["skill_content"]
+        await self._apply_merge(a, b, winner, loser, merged_content, similarity, judge)
+
+    async def _propose(self, a: dict, b: dict, similarity: float, judge: dict) -> None:
+        """Usulkan merge (curation_auto=False, default): catat pending, JANGAN ubah skill.
+
+        Skill tetap 'active' sampai manusia meng-apply lewat /skills (§8).
+        """
+        winner, loser = self._pick_winner(a, b)
+        merged_content = judge.get("merged_content") or winner["skill_content"]
+        await self.db.execute(
+            """INSERT INTO curation_log (role, action, status, winner_id, loser_ids,
+                   similarity, judge_confidence, merged_content, reasoning)
+               VALUES (?, 'merge', 'pending', ?, ?, ?, ?, ?, ?)""",
+            (
+                self.role,
+                winner["id"],
+                json.dumps([loser["id"]]),
+                similarity,
+                judge["confidence"],
+                merged_content,
+                judge.get("reasoning", ""),
+            ),
+        )
+        log.info("skill_merge_proposed", role=self.role, winner=winner["id"], loser=loser["id"])
+
+    async def _apply_merge(
+        self,
+        a: dict,
+        b: dict,
+        winner: dict,
+        loser: dict,
+        merged_content: str,
+        similarity: float,
+        judge: dict,
+        *,
+        log_status: str = "applied",
+    ) -> None:
+        """Tulis efek merge ke skills + curation_log. Dipakai oleh `_merge` & apply-pending."""
         # Simpan konten winner LAMA ke versi (revertible) sebelum diganti hasil sintesis.
         await self.db.execute(
             """INSERT INTO skill_versions (skill_id, version, skill_content, reason)
@@ -179,11 +235,12 @@ class SkillCuratorManager:
             (winner["id"], loser["id"]),
         )
         await self.db.execute(
-            """INSERT INTO curation_log (role, action, winner_id, loser_ids, similarity,
+            """INSERT INTO curation_log (role, action, status, winner_id, loser_ids, similarity,
                    judge_confidence, reasoning)
-               VALUES (?, 'merge', ?, ?, ?, ?, ?)""",
+               VALUES (?, 'merge', ?, ?, ?, ?, ?, ?)""",
             (
                 self.role,
+                log_status,
                 winner["id"],
                 json.dumps([loser["id"]]),
                 similarity,
@@ -193,14 +250,59 @@ class SkillCuratorManager:
         )
         log.info("skill_merged", role=self.role, winner=winner["id"], loser=loser["id"])
 
-    async def revert_last_merge(self) -> dict:
-        """Pulihkan merge terakhir: loser → active, winner version-1 + konten lama.
+    async def apply_pending_merge(self, curation_log_id: int) -> dict:
+        """Terapkan satu usulan merge pending (tombol Apply di /skills, §8).
 
-        Untuk tombol di /skills. Mengembalikan ringkasan; no-op bila tak ada merge.
+        Mengubah baris pending yang sama menjadi 'applied' agar riwayat tetap satu jejak
+        per keputusan (bukan menduplikasi baris curation_log).
+        """
+        row = await self.db.fetchone(
+            """SELECT * FROM curation_log
+               WHERE id=? AND role=? AND action='merge' AND status='pending'""",
+            (curation_log_id, self.role),
+        )
+        if not row:
+            return {"applied": False, "reason": "usulan tidak ditemukan atau sudah diproses"}
+        try:
+            loser_ids = json.loads(row["loser_ids"])
+        except (json.JSONDecodeError, TypeError):
+            loser_ids = []
+        if len(loser_ids) != 1:
+            return {"applied": False, "reason": "format usulan tidak valid"}
+
+        winner = await self.db.fetchone("SELECT * FROM skills WHERE id=?", (row["winner_id"],))
+        loser = await self.db.fetchone("SELECT * FROM skills WHERE id=?", (loser_ids[0],))
+        if not winner or not loser or winner["status"] != "active" or loser["status"] != "active":
+            await self.db.execute(
+                "UPDATE curation_log SET status='reverted' WHERE id=?", (curation_log_id,)
+            )
+            return {"applied": False, "reason": "skill sudah berubah sejak diusulkan"}
+
+        merged_content = row["merged_content"] or winner["skill_content"]
+        await self._apply_merge(
+            winner,
+            loser,
+            winner,
+            loser,
+            merged_content,
+            row["similarity"] or 0.0,
+            {"confidence": row["judge_confidence"], "reasoning": row["reasoning"] or ""},
+        )
+        # Baris pending asli ditandai selesai (jejak baru sudah ditulis oleh _apply_merge).
+        await self.db.execute(
+            "UPDATE curation_log SET status='applied' WHERE id=?", (curation_log_id,)
+        )
+        return {"applied": True, "winner_id": winner["id"], "loser_id": loser["id"]}
+
+    async def revert_last_merge(self) -> dict:
+        """Pulihkan merge terakhir yang SUDAH diterapkan: loser → active, winner version-1.
+
+        Untuk tombol di /skills. Mengembalikan ringkasan; no-op bila tak ada merge diterapkan.
+        Usulan `pending` tidak termasuk (belum mengubah skill apa pun, tak perlu revert).
         """
         last = await self.db.fetchone(
             """SELECT id, winner_id, loser_ids FROM curation_log
-               WHERE role=? AND action='merge' ORDER BY id DESC LIMIT 1""",
+               WHERE role=? AND action='merge' AND status='applied' ORDER BY id DESC LIMIT 1""",
             (self.role,),
         )
         if not last:
@@ -226,6 +328,8 @@ class SkillCuratorManager:
                 "UPDATE skills SET skill_content=?, version=? WHERE id=?",
                 (ver["skill_content"], ver["version"], last["winner_id"]),
             )
+        # Tandai baris merge asli selesai-di-revert agar tidak ditemukan lagi oleh query ini.
+        await self.db.execute("UPDATE curation_log SET status='reverted' WHERE id=?", (last["id"],))
         await self.db.execute(
             """INSERT INTO curation_log (role, action, winner_id, loser_ids, reasoning)
                VALUES (?, 'revert_merge', ?, ?, 'revert merge sebelumnya')""",

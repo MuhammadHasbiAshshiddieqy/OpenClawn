@@ -40,7 +40,7 @@ def test_metrics_renders_empty(client):
     assert resp.status_code == 200
     assert "Tuning Recommendations" in resp.text
     # Belum ada event → blok 'data belum cukup' atau tabel kosong
-    assert "Data audit belum cukup" in resp.text or "Belum ada data" in resp.text
+    assert "Not enough audit data" in resp.text or "No data yet" in resp.text
 
 
 def test_index_renders(client):
@@ -112,7 +112,7 @@ def test_approvals_empty(client):
 def test_metrics_shows_active_offset(client):
     """/metrics menampilkan offset threshold aktif (loop tertutup #1)."""
     html = client.get("/metrics").text
-    assert "Offset threshold aktif" in html
+    assert "Active threshold offset" in html
 
 
 def test_calibration_apply_then_revert_roundtrip(client):
@@ -120,21 +120,21 @@ def test_calibration_apply_then_revert_roundtrip(client):
     # Apply -1: redirect ke /metrics (TestClient mengikuti redirect → 200).
     resp = client.post("/calibration/apply", data={"delta": "-1", "reason": "uji"})
     assert resp.status_code == 200
-    # Offset aktif kini -1 → pill menampilkan tanda & teks "naik tier lebih cepat".
-    assert "naik tier lebih cepat" in resp.text
-    assert "Riwayat Kalibrasi" in resp.text  # baris audit muncul
+    # Offset aktif kini -1 → pill menampilkan tanda & teks "upgrades tier sooner".
+    assert "upgrades tier sooner" in resp.text
+    assert "Calibration History" in resp.text  # baris audit muncul
 
-    # Revert: kembali ke 0 → teks "belum dikalibrasi".
+    # Revert: kembali ke 0 → teks "not yet calibrated".
     resp = client.post("/calibration/revert")
     assert resp.status_code == 200
-    assert "belum dikalibrasi" in resp.text
+    assert "not yet calibrated" in resp.text
 
 
 def test_calibration_apply_zero_delta_is_noop(client):
     """delta=0 tidak mengubah offset, tetap redirect 200 tanpa baris audit."""
     resp = client.post("/calibration/apply", data={"delta": "0"})
     assert resp.status_code == 200
-    assert "belum dikalibrasi" in resp.text
+    assert "not yet calibrated" in resp.text
 
 
 def test_skills_page_renders_empty(client):
@@ -142,7 +142,7 @@ def test_skills_page_renders_empty(client):
     resp = client.get("/skills")
     assert resp.status_code == 200
     assert "Skill Decay" in resp.text
-    assert "Belum ada skill" in resp.text
+    assert "No skills crystallized yet" in resp.text
 
 
 def test_skills_page_shows_seeded_skill(client, tmp_path, monkeypatch):
@@ -185,7 +185,7 @@ def test_skills_page_shows_crystallization_attempt(client):
     conn.close()
 
     html = client.get("/skills").text
-    assert "Kristalisasi" in html
+    assert "Crystallization" in html
     assert "build_api" in html
     assert "solid" in html
 
@@ -245,7 +245,7 @@ def test_skills_page_shows_curation(client):
     html = client.get("/skills").text
     assert "Curation" in html
     assert "dua skill identik" in html
-    assert "Batalkan" in html
+    assert "Revert" in html
 
 
 def test_skills_revert_merge_endpoint(client):
@@ -289,7 +289,7 @@ def test_conversations_page_renders_empty(client):
     resp = client.get("/conversations")
     assert resp.status_code == 200
     assert "Conversations" in resp.text
-    assert "Belum ada percakapan" in resp.text
+    assert "No archived conversations yet" in resp.text
 
 
 def test_conversations_page_shows_archived_run(client):
@@ -401,8 +401,8 @@ def test_activity_page_renders_empty(client):
     resp = client.get("/activity")
     assert resp.status_code == 200
     assert "Activity" in resp.text
-    assert "Belum ada aktivitas" in resp.text
-    assert "Semua peran" in resp.text
+    assert "No activity yet" in resp.text
+    assert "All roles" in resp.text
 
 
 def test_activity_page_shows_seeded_events(client):
@@ -451,13 +451,13 @@ def test_activity_shows_open_blocker_and_resolve(client):
     conn.close()
 
     html = client.get("/activity").text
-    assert "Hambatan terbuka" in html
+    assert "Open blockers" in html
     assert "butuh API key" in html
 
     # Resolve → redirect 200, blocker tak lagi di banner.
     resp = client.post("/blockers/resolve", data={"blocker_id": str(bid)})
     assert resp.status_code == 200
-    assert "Hambatan terbuka" not in resp.text
+    assert "Open blockers" not in resp.text
 
 
 def test_autopilots_page_renders_empty(client):
@@ -465,8 +465,8 @@ def test_autopilots_page_renders_empty(client):
     resp = client.get("/autopilots")
     assert resp.status_code == 200
     assert "Autopilots" in resp.text
-    assert "Aman by design" in resp.text
-    assert "Belum ada autopilot" in resp.text
+    assert "Safe by design" in resp.text
+    assert "No autopilots yet" in resp.text
 
 
 def test_autopilots_create_then_listed(client):
@@ -510,11 +510,11 @@ def test_autopilots_toggle_and_delete(client):
 
     resp = client.post("/autopilots/toggle", data={"autopilot_id": str(ap_id), "enabled": "0"})
     assert resp.status_code == 200
-    assert "Aktifkan" in resp.text  # tombol berubah jadi 'Aktifkan' saat jeda
+    assert "Activate" in resp.text  # tombol berubah jadi 'Activate' saat jeda
 
     resp = client.post("/autopilots/delete", data={"autopilot_id": str(ap_id)})
     assert resp.status_code == 200
-    assert "Belum ada autopilot" in resp.text
+    assert "No autopilots yet" in resp.text
 
 
 def test_mcp_page_renders_empty(client):
@@ -522,8 +522,8 @@ def test_mcp_page_renders_empty(client):
     resp = client.get("/mcp")
     assert resp.status_code == 200
     assert "MCP Servers" in resp.text
-    assert "Aman by design" in resp.text
-    assert "Belum ada server MCP" in resp.text
+    assert "Safe by design" in resp.text
+    assert "No MCP servers yet" in resp.text
 
 
 def test_mcp_add_stdio_server(client):
@@ -545,7 +545,7 @@ def test_mcp_add_http_rejects_internal(client):
     assert resp.status_code == 200
     # Server tercatat, tapi tak ada tool (SSRF memblokir discover).
     assert "evil" in resp.text
-    assert "Belum ada tool MCP" in resp.text
+    assert "No MCP tools loaded yet" in resp.text
 
 
 def test_mcp_toggle_and_delete(client):
@@ -563,11 +563,11 @@ def test_mcp_toggle_and_delete(client):
 
     resp = client.post("/mcp/toggle", data={"server_id": str(sid), "enabled": "0"})
     assert resp.status_code == 200
-    assert "Aktifkan" in resp.text
+    assert "Activate" in resp.text
 
     resp = client.post("/mcp/delete", data={"server_id": str(sid)})
     assert resp.status_code == 200
-    assert "Belum ada server MCP" in resp.text
+    assert "No MCP servers yet" in resp.text
 
 
 def test_router_page_renders_tiers(client):
@@ -584,8 +584,8 @@ def test_router_save_then_reflected(client):
     """Simpan peta → tier terpilih berubah di /router; reset → kembali default."""
     resp = client.post("/router", data={"tier_trivial": "gemini|gemini-2.0-flash"})
     assert resp.status_code == 200
-    assert "Peta kustom aktif" in resp.text
+    assert "Custom map active" in resp.text
 
     resp = client.post("/router", data={"action": "reset"})
     assert resp.status_code == 200
-    assert "memakai peta default" in resp.text
+    assert "default map" in resp.text

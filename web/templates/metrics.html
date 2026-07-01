@@ -11,63 +11,13 @@
 </head>
 <body>
 <div class="app">
-    <aside class="sidebar">
-        <div class="brand">
-            <img src="/static/logo.png" alt="OpenCLAWN">
-            <div>
-                <div class="name">Open<b>CLAWN</b></div>
-                <div class="tag">playful · sharp</div>
-            </div>
-        </div>
-        <div>
-            <div class="side-label">Workspace</div>
-            <nav class="nav-links">
-                <a href="/" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v7a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm4 8v2m4-2v2M0 4h16"/></svg>
-                    Chat
-                </a>
-                <a href="/activity" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg>
-                    Activity
-                </a>
-                <a href="/autopilots" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5V8l2.5 1.5"/></svg>
-                    Autopilots
-                </a>
-                <a href="/mcp" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="5.5" y="9" width="5" height="5" rx="1"/><path d="M4.5 7v2h7V7"/></svg>
-                    MCP
-                </a>
-                <a href="/metrics" class="nav-link active">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="9" width="3" height="6" rx=".5"/><rect x="6.5" y="5" width="3" height="10" rx=".5"/><rect x="12" y="1" width="3" height="14" rx=".5"/></svg>
-                    Metrics
-                </a>
-                <a href="/skills" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3-6 3-6-3 6-3z"/><path d="M2 8l6 3 6-3M2 11.5l6 3 6-3"/></svg>
-                    Skills
-                </a>
-                <a href="/conversations" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 3h12v8H6l-3 3V3z"/></svg>
-                    Conversations
-                </a>
-                <a href="/router" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="3.5" r="1.5"/><circle cx="12.5" cy="12.5" r="1.5"/><path d="M5 8h3l3-4.5M8 8l3 4.5"/></svg>
-                    Router
-                </a>
-                <a href="/settings" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
-                    Settings
-                </a>
-            </nav>
-        </div>
-        <div class="spacer"></div>
-    </aside>
+    {% include '_sidebar.html' %}
 
     <main class="main">
         <div class="topbar">
             <div>
-                <h1>Routing Calibration</h1>
-                <div class="sub">audit keputusan router — Inovasi #1</div>
+                <h1>{{ t('metrics.title') }}</h1>
+                <div class="sub">{{ t('metrics.subtitle') }}</div>
             </div>
         </div>
 
@@ -75,11 +25,11 @@
             <table>
                 <thead>
                     <tr>
-                        <th>Complexity</th>
-                        <th>Total</th>
-                        <th>Corrections</th>
-                        <th>Correction Rate</th>
-                        <th>Avg Cost (USD)</th>
+                        <th>{{ t('metrics.complexity') }}</th>
+                        <th>{{ t('metrics.total') }}</th>
+                        <th>{{ t('metrics.corrections') }}</th>
+                        <th>{{ t('metrics.correction_rate') }}</th>
+                        <th>{{ t('metrics.avg_cost') }}</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -93,48 +43,47 @@
                     </tr>
                     {% endfor %}
                     {% if not report %}
-                    <tr><td colspan="5" class="muted">Belum ada data. Mulai mengobrol dulu!</td></tr>
+                    <tr><td colspan="5" class="muted">{{ t('metrics.no_data') }}</td></tr>
                     {% endif %}
                 </tbody>
             </table>
 
             <section>
-                <h2>Tuning Recommendations</h2>
+                <h2>{{ t('metrics.tuning_recs') }}</h2>
 
                 <div class="offset-bar">
-                    <span class="muted">Offset threshold aktif:</span>
+                    <span class="muted">{{ t('metrics.active_offset') }}</span>
                     <span class="offset-pill {{ 'zero' if calibration.current_offset == 0 else '' }}">
                         {{ '%+d'|format(calibration.current_offset) }}
                     </span>
                     <span class="muted">
-                        {% if calibration.current_offset < 0 %}router naik tier lebih cepat
-                        {% elif calibration.current_offset > 0 %}router bertahan tier murah lebih lama
-                        {% else %}perilaku router asli (belum dikalibrasi){% endif %}
+                        {% if calibration.current_offset < 0 %}{{ t('metrics.offset_upgrade') }}
+                        {% elif calibration.current_offset > 0 %}{{ t('metrics.offset_downgrade') }}
+                        {% else %}{{ t('metrics.offset_neutral') }}{% endif %}
                     </span>
                     {% if calibration.current_offset != 0 %}
                     <form method="post" action="/calibration/revert" class="inline-form">
-                        <button type="submit" class="btn-ghost">Revert</button>
+                        <button type="submit" class="btn-ghost">{{ t('common.revert') }}</button>
                     </form>
                     {% endif %}
-                    <span class="tag {{ 'status-active' if calibration.auto_apply else '' }}" title="Auto-apply opt-in (config). Tetap clamp ±1 & revertible.">
-                        auto-tune: {{ 'ON' if calibration.auto_apply else 'OFF' }}
+                    <span class="tag {{ 'status-active' if calibration.auto_apply else '' }}" title="{{ t('metrics.auto_tune_title') }}">
+                        {{ t('metrics.auto_tune') }}: {{ 'ON' if calibration.auto_apply else 'OFF' }}
                     </span>
                 </div>
 
                 {% if not calibration.has_enough_data %}
                 <p class="muted">
-                    Data audit belum cukup ({{ calibration.total_events }} events).
-                    Rekomendasi muncul setelah cukup banyak keputusan routing terkumpul.
+                    {{ t('metrics.not_enough_data', n=calibration.total_events) }}
                 </p>
                 {% elif not calibration.recommendations %}
-                <p class="muted">Routing tampak terkalibrasi baik — tidak ada saran perubahan.</p>
+                <p class="muted">{{ t('metrics.well_calibrated') }}</p>
                 {% else %}
                 <ul>
                     {% for rec in calibration.recommendations %}
                     <li class="rec rec-{{ rec.issue }}">
                         <strong>{{ rec.label }}</strong>
                         <span class="tag">{{ rec.issue }}</span>
-                        <span class="muted">({{ rec.correction_rate }}% dari {{ rec.sample_size }} events)</span>
+                        <span class="muted">({{ rec.correction_rate }}% {{ t('metrics.of') }} {{ rec.sample_size }} {{ t('metrics.events') }})</span>
                         <p>{{ rec.suggestion }}</p>
                     </li>
                     {% endfor %}
@@ -145,22 +94,22 @@
                     <input type="hidden" name="reason"
                            value="{{ calibration.recommendations[0].label }}/{{ calibration.recommendations[0].issue }}">
                     <button type="submit" class="btn-primary">
-                        Terapkan saran ({{ '%+d'|format(calibration.net_offset_delta) }} ke offset)
+                        {{ t('metrics.apply_suggestion', delta=('%+d'|format(calibration.net_offset_delta))) }}
                     </button>
-                    <span class="muted">Mengubah perilaku router — tercatat di riwayat & bisa di-revert.</span>
+                    <span class="muted">{{ t('metrics.apply_note') }}</span>
                 </form>
                 {% else %}
-                <p class="muted">Saran saling meniadakan; tidak ada arah geser tunggal yang jelas.</p>
+                <p class="muted">{{ t('metrics.no_clear_direction') }}</p>
                 {% endif %}
                 {% endif %}
             </section>
 
             {% if calibration.history %}
             <section>
-                <h2>Riwayat Kalibrasi</h2>
+                <h2>{{ t('metrics.history') }}</h2>
                 <table>
                     <thead>
-                        <tr><th>Waktu</th><th>Dari</th><th>Ke</th><th>Sumber</th><th>Alasan</th><th></th></tr>
+                        <tr><th>{{ t('metrics.time') }}</th><th>{{ t('metrics.from') }}</th><th>{{ t('metrics.to') }}</th><th>{{ t('metrics.source') }}</th><th>{{ t('metrics.reason') }}</th><th></th></tr>
                     </thead>
                     <tbody>
                         {% for h in calibration.history %}
@@ -170,7 +119,7 @@
                             <td>{{ '%+d'|format(h.new_offset) }}</td>
                             <td><span class="tag">{{ h.source }}</span></td>
                             <td class="muted">{{ h.reason }}</td>
-                            <td>{% if h.active %}<span class="tag active">aktif</span>{% endif %}</td>
+                            <td>{% if h.active %}<span class="tag active">{{ t('common.active') }}</span>{% endif %}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -179,23 +128,23 @@
             {% endif %}
 
             <section>
-                <h2>Penggunaan Tool</h2>
+                <h2>{{ t('metrics.tool_usage') }}</h2>
                 {% if not tool_stats %}
-                <p class="muted">Belum ada tool dipanggil. Statistik muncul setelah agent memakai tool.</p>
+                <p class="muted">{{ t('metrics.no_tools') }}</p>
                 {% else %}
                 <table>
                     <thead>
-                        <tr><th>Tool</th><th>Dipakai</th><th>Error</th><th>Timeout</th><th>Fail Rate</th><th>Avg Latency</th></tr>
+                        <tr><th>{{ t('metrics.tool') }}</th><th>{{ t('metrics.used') }}</th><th>{{ t('metrics.error') }}</th><th>{{ t('metrics.timeout') }}</th><th>{{ t('metrics.fail_rate') }}</th><th>{{ t('metrics.avg_latency') }}</th></tr>
                     </thead>
                     <tbody>
-                        {% for t in tool_stats %}
-                        <tr class="{{ 'warn' if t.fail_rate and t.fail_rate > 20 else '' }}">
-                            <td><strong>{{ t.tool_name }}</strong></td>
-                            <td>{{ t.total }}</td>
-                            <td>{{ t.errors }}</td>
-                            <td>{{ t.timeouts }}</td>
-                            <td>{{ t.fail_rate }}%</td>
-                            <td class="muted">{{ t.avg_latency_ms }}ms</td>
+                        {% for tool in tool_stats %}
+                        <tr class="{{ 'warn' if tool.fail_rate and tool.fail_rate > 20 else '' }}">
+                            <td><strong>{{ tool.tool_name }}</strong></td>
+                            <td>{{ tool.total }}</td>
+                            <td>{{ tool.errors }}</td>
+                            <td>{{ tool.timeouts }}</td>
+                            <td>{{ tool.fail_rate }}%</td>
+                            <td class="muted">{{ tool.avg_latency_ms }}ms</td>
                         </tr>
                         {% endfor %}
                     </tbody>

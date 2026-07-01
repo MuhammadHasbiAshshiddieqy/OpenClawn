@@ -1,0 +1,37 @@
+/* ── Toast notifications ────────────────────────────────────────────────── */
+.toast-container {
+    position: fixed; bottom: 24px; right: 24px; z-index: 100;
+    display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+}
+.toast {
+    pointer-events: auto;
+    padding: 10px 16px; border-radius: var(--radius-sm);
+    font-size: .84rem; font-weight: 600;
+    background: var(--elevated); border: 1px solid var(--border-2);
+    color: var(--text); box-shadow: 0 8px 24px -8px rgba(0,0,0,.6);
+    animation: toast-in .25s ease both;
+    max-width: 360px;
+}
+.toast.success { border-color: var(--green); color: var(--green); background: rgba(52,199,89,.1); }
+.toast.error { border-color: var(--red); color: var(--red-soft); background: rgba(236,30,75,.1); }
+.toast.removing { animation: toast-out .2s ease forwards; }
+@keyframes toast-in { from { opacity: 0; transform: translateX(20px) } to { opacity: 1; transform: none } }
+@keyframes toast-out { to { opacity: 0; transform: translateX(20px) } }
+
+/* ── Drag-drop zone ─────────────────────────────────────────────────────── */
+.composer.dragover {
+    border-color: var(--purple-bright); box-shadow: var(--glow-purple);
+    background: rgba(124,58,237,.08);
+}
+.drop-indicator {
+    position: fixed; inset: 0; z-index: 50;
+    display: grid; place-items: center;
+    background: rgba(13,11,20,.7); backdrop-filter: blur(4px);
+    pointer-events: none; opacity: 0; transition: opacity .15s;
+}
+.drop-indicator.show { opacity: 1; }
+.drop-indicator div {
+    background: var(--grad-brand); color: #fff; padding: 20px 32px;
+    border-radius: var(--radius-lg); font-weight: 700; font-size: 1.1rem;
+    box-shadow: var(--glow-purple);
+}

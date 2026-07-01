@@ -22,12 +22,14 @@ class ActivityTimeline:
     """
 
     # Peta jenis peristiwa → label tampil. Disimpan di sini agar UI tinggal pakai.
+    # Framing "evidence" (§UI-IMPROVEMENT Cyber Detective): linimasa dibaca sebagai
+    # berkas bukti audit, bukan cuma log — cocok dengan positioning audit-first.
     KINDS = {
-        "route": "Routing",
-        "tool": "Tool",
-        "handoff": "Handoff",
-        "conversation": "Conversation",
-        "crystallize": "Crystallize",
+        "route": "Routing evidence",
+        "tool": "Tool evidence",
+        "handoff": "Handoff evidence",
+        "conversation": "Conversation evidence",
+        "crystallize": "Crystallize evidence",
         "blocker": "Blocker",
     }
 

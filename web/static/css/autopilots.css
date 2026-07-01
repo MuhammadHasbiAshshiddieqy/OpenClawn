@@ -1,0 +1,44 @@
+/* ── Autopilots ─────────────────────────────────────────────────────────── */
+/* Kartu/list generik (.autopilot-list, .run-list, dst) juga dipakai halaman
+   /mcp (server list, discovered tools) — tak ada aturan khusus MCP yang
+   berbeda, jadi disatukan di sini alih-alih file terpisah nyaris kosong. */
+.autopilot-safety { font-size: .84rem; line-height: 1.55; border-color: rgba(52,199,89,.3); background: rgba(52,199,89,.05); }
+.autopilot-form { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.autopilot-form input[type=text], .autopilot-form select, .autopilot-form textarea {
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: 9px; padding: 9px 12px; font-size: .88rem; font-family: inherit;
+}
+.autopilot-form textarea { min-height: 64px; resize: vertical; }
+.autopilot-interval { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.autopilot-interval span { color: var(--text-dim); font-size: .86rem; }
+.autopilot-interval input[type=number] { width: 70px; background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px; }
+.autopilot-interval select { background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px; }
+.btn-primary { background: var(--purple-bright); color: #fff; border: none; border-radius: 9px; padding: 9px 18px; font-weight: 600; cursor: pointer; }
+.btn-primary:hover { filter: brightness(1.08); }
+
+.autopilot-list { display: flex; flex-direction: column; gap: 10px; }
+.autopilot-row {
+    display: flex; gap: 14px; align-items: flex-start; justify-content: space-between;
+    background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--green);
+    border-radius: 10px; padding: 13px 16px;
+}
+.autopilot-row.off { border-left-color: var(--text-faint); opacity: .6; }
+.ap-main { min-width: 0; }
+.ap-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ap-name { font-weight: 600; font-size: .92rem; }
+.ap-status { font-size: .7rem; color: var(--text-faint); }
+.ap-prompt { font-size: .84rem; color: var(--text-dim); margin: 5px 0; }
+.ap-meta { font-size: .72rem; }
+.ap-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.btn-ghost { background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: .76rem; cursor: pointer; }
+.btn-ghost:hover { color: var(--text); border-color: var(--purple-bright); }
+.btn-ghost.danger:hover { color: var(--red-soft); border-color: var(--red-soft); }
+
+.proposal-list, .run-list { display: flex; flex-direction: column; gap: 7px; }
+.proposal-row, .run-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: .82rem; padding: 8px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; }
+.proposal-input { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px; }
+.run-status { font-size: .68rem; text-transform: uppercase; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); }
+.run-status.status-done { color: var(--green); border-color: rgba(52,199,89,.3); }
+.run-status.status-error { color: var(--red-soft); border-color: rgba(255,77,109,.3); }
+.run-status.status-running { color: var(--amber); }
+.run-err { color: var(--red-soft); font-size: .76rem; }

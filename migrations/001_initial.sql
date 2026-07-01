@@ -223,10 +223,12 @@ CREATE TABLE IF NOT EXISTS curation_log (
     id INTEGER PRIMARY KEY,
     role TEXT NOT NULL,
     action TEXT NOT NULL,                    -- merge | revert_merge
+    status TEXT NOT NULL DEFAULT 'applied',  -- pending | applied | reverted (curation_auto=False → pending)
     winner_id INTEGER,                       -- skill yang bertahan / hasil sintesis
     loser_ids TEXT,                          -- JSON array id yang diserap
     similarity REAL,                         -- skor pre-filter leksikal (0..1)
     judge_confidence INTEGER,                -- 1..5 dari LLM judge
+    merged_content TEXT,                     -- konten sintesis judge, disimpan sampai di-apply
     reasoning TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

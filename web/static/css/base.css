@@ -1,0 +1,78 @@
+/* ============================================================================
+   OpenCLAWN — tema "playful clown × sharp claw"
+   Palet diturunkan dari logo: ungu (topi/ring), hijau (cakar), merah (hidung),
+   di atas kanvas charcoal gelap. Layout terinspirasi Claude Desktop (sidebar).
+   ============================================================================ */
+
+:root {
+    /* Brand */
+    --purple:        #7c3aed;
+    --purple-bright: #9d5cff;
+    --purple-deep:   #5b21b6;
+    --green:         #34c759;
+    --green-deep:    #1f9d4d;
+    --red:           #ec1e4b;   /* "hidung badut" — aksen pop */
+    --red-soft:      #ff4d6d;
+    --cyan:          #2dd4bf;   /* data analyst — biru-hijau */
+    --cyan-soft:     #5eead4;
+    --amber:         #f0c45a;   /* privacy & security — kuning waspada */
+    --amber-soft:    #f6d77e;
+
+    /* Surfaces (charcoal kebiruan, bukan hitam pekat) */
+    --bg:        #0d0b14;
+    --bg-2:      #141120;
+    --panel:     #181426;
+    --panel-2:   #1f1a30;
+    --elevated:  #241d38;
+    --border:    #2c2542;
+    --border-2:  #3a3155;
+
+    /* Text */
+    --text:      #ece8f6;
+    --text-dim:  #a99fc4;
+    --text-faint:#7d73a0;
+
+    /* Gradients */
+    --grad-brand: linear-gradient(135deg, var(--purple-bright) 0%, var(--purple) 45%, var(--purple-deep) 100%);
+    --grad-claw:  linear-gradient(135deg, var(--green) 0%, var(--green-deep) 100%);
+    --glow-purple: 0 0 0 1px rgba(157,92,255,.35), 0 8px 30px -8px rgba(124,58,237,.55);
+
+    --radius:    14px;
+    --radius-sm: 10px;
+    --radius-lg: 20px;
+    --sidebar-w: 264px;
+    --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+    font-family: var(--font);
+    background:
+        radial-gradient(1200px 600px at 12% -8%, rgba(124,58,237,.18), transparent 60%),
+        radial-gradient(900px 500px at 105% 110%, rgba(52,199,89,.10), transparent 55%),
+        var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.55;
+}
+
+a { color: inherit; }
+code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .85em; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--purple-deep); background-clip: content-box; }
+
+/* A11y: hormati preferensi OS "reduce motion" — animasi/transisi jadi nyaris
+   instan alih-alih dihilangkan total (tetap ada state akhir yang benar). */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}

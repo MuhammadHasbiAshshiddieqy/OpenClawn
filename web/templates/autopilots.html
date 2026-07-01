@@ -11,95 +11,43 @@
 </head>
 <body>
 <div class="app">
-    <aside class="sidebar">
-        <div class="brand">
-            <img src="/static/logo.png" alt="OpenCLAWN">
-            <div>
-                <div class="name">Open<b>CLAWN</b></div>
-                <div class="tag">playful · sharp</div>
-            </div>
-        </div>
-        <div>
-            <div class="side-label">Workspace</div>
-            <nav class="nav-links">
-                <a href="/" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v7a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm4 8v2m4-2v2M0 4h16"/></svg>
-                    Chat
-                </a>
-                <a href="/activity" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg>
-                    Activity
-                </a>
-                <a href="/autopilots" class="nav-link active">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5V8l2.5 1.5"/></svg>
-                    Autopilots
-                </a>
-                <a href="/mcp" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="5.5" y="9" width="5" height="5" rx="1"/><path d="M4.5 7v2h7V7"/></svg>
-                    MCP
-                </a>
-                <a href="/metrics" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="9" width="3" height="6" rx=".5"/><rect x="6.5" y="5" width="3" height="10" rx=".5"/><rect x="12" y="1" width="3" height="14" rx=".5"/></svg>
-                    Metrics
-                </a>
-                <a href="/skills" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3-6 3-6-3 6-3z"/><path d="M2 8l6 3 6-3M2 11.5l6 3 6-3"/></svg>
-                    Skills
-                </a>
-                <a href="/conversations" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 3h12v8H6l-3 3V3z"/></svg>
-                    Conversations
-                </a>
-                <a href="/router" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="3.5" r="1.5"/><circle cx="12.5" cy="12.5" r="1.5"/><path d="M5 8h3l3-4.5M8 8l3 4.5"/></svg>
-                    Router
-                </a>
-                <a href="/settings" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
-                    Settings
-                </a>
-            </nav>
-        </div>
-        <div class="spacer"></div>
-    </aside>
+    {% include '_sidebar.html' %}
 
     <main class="main">
         <div class="topbar">
             <div>
-                <h1>Autopilots</h1>
-                <div class="sub">tugas agent terjadwal — berjalan read-only; aksi destruktif jadi proposal</div>
+                <h1>{{ t('autopilots.title') }}</h1>
+                <div class="sub">{{ t('autopilots.subtitle') }}</div>
             </div>
         </div>
 
         <div class="page">
             <div class="card autopilot-safety">
-                🔒 <b>Aman by design:</b> autopilot berjalan tanpa Anda di depan. Tool read-only
-                (riset, audit, ringkasan) dijalankan langsung; aksi yang butuh persetujuan
-                <b>tidak dieksekusi</b> — diantri sebagai <b>proposal</b> di bawah untuk Anda tinjau.
+                🔒 {{ t('autopilots.safety_note')|safe }}
             </div>
 
-            <h2>Jadwal baru</h2>
+            <h2>{{ t('autopilots.new_schedule') }}</h2>
             <form method="post" action="/autopilots" class="autopilot-form">
-                <input type="text" name="name" placeholder="Nama (mis. Audit keamanan harian)" required>
+                <input type="text" name="name" placeholder="{{ t('autopilots.name_placeholder') }}" required>
                 <select name="role">
                     {% for r in roles %}<option value="{{ r }}">{{ r|upper }}</option>{% endfor %}
                 </select>
-                <textarea name="prompt" placeholder="Instruksi tugas (mis. 'Audit dependency proyek & ringkas risiko keamanan')" required></textarea>
+                <textarea name="prompt" placeholder="{{ t('autopilots.prompt_placeholder') }}" required></textarea>
                 <div class="autopilot-interval">
-                    <span>Tiap</span>
+                    <span>{{ t('autopilots.every') }}</span>
                     <input type="number" name="every" min="1" value="1" required>
                     <select name="unit">
-                        <option value="minute">menit</option>
-                        <option value="hour" selected>jam</option>
-                        <option value="day">hari</option>
+                        <option value="minute">{{ t('autopilots.unit_minute') }}</option>
+                        <option value="hour" selected>{{ t('autopilots.unit_hour') }}</option>
+                        <option value="day">{{ t('autopilots.unit_day') }}</option>
                     </select>
-                    <button type="submit" class="btn-primary">Buat</button>
+                    <button type="submit" class="btn-primary">{{ t('autopilots.create') }}</button>
                 </div>
             </form>
 
-            <h2>Jadwal aktif</h2>
+            <h2>{{ t('autopilots.active_schedules') }}</h2>
             {% if not autopilots %}
-            <p class="muted">Belum ada autopilot. Buat satu di atas.</p>
+            <p class="muted">{{ t('autopilots.no_autopilots') }}</p>
             {% else %}
             <div class="autopilot-list">
                 {% for a in autopilots %}
@@ -108,20 +56,20 @@
                         <div class="ap-head">
                             <span class="ap-name">{{ a.name }}</span>
                             <span class="tag role-tag-{{ a.role }}">{{ a.role|upper }}</span>
-                            <span class="ap-status">{{ 'aktif' if a.enabled else 'jeda' }}</span>
+                            <span class="ap-status">{{ t('autopilots.status_active') if a.enabled else t('autopilots.status_paused') }}</span>
                         </div>
                         <div class="ap-prompt">{{ a.prompt }}</div>
-                        <div class="ap-meta muted">tiap {{ a.interval_sec }}s · terakhir: {{ a.last_run_at or 'belum' }} · berikutnya: {{ a.next_run_at or '—' }}</div>
+                        <div class="ap-meta muted">{{ t('autopilots.meta', interval=a.interval_sec, last=(a.last_run_at or t('autopilots.never')), next=(a.next_run_at or '—')) }}</div>
                     </div>
                     <div class="ap-actions">
                         <form method="post" action="/autopilots/toggle">
                             <input type="hidden" name="autopilot_id" value="{{ a.id }}">
                             <input type="hidden" name="enabled" value="{{ '0' if a.enabled else '1' }}">
-                            <button type="submit" class="btn-ghost">{{ 'Jeda' if a.enabled else 'Aktifkan' }}</button>
+                            <button type="submit" class="btn-ghost">{{ t('autopilots.pause') if a.enabled else t('autopilots.activate') }}</button>
                         </form>
-                        <form method="post" action="/autopilots/delete" onsubmit="return confirm('Hapus autopilot ini?')">
+                        <form method="post" action="/autopilots/delete" onsubmit="return confirm('{{ t('autopilots.confirm_delete') }}')">
                             <input type="hidden" name="autopilot_id" value="{{ a.id }}">
-                            <button type="submit" class="btn-ghost danger">Hapus</button>
+                            <button type="submit" class="btn-ghost danger">{{ t('autopilots.delete') }}</button>
                         </form>
                     </div>
                 </div>
@@ -130,8 +78,8 @@
             {% endif %}
 
             {% if proposals %}
-            <h2>Proposal menunggu tinjauan ({{ proposals|length }})</h2>
-            <p class="muted">Aksi yang dihasilkan autopilot tapi butuh persetujuan. Tinjau lalu setujui di halaman Chat (HITL).</p>
+            <h2>{{ t('autopilots.proposals_pending', n=proposals|length) }}</h2>
+            <p class="muted">{{ t('autopilots.proposals_hint') }}</p>
             <div class="proposal-list">
                 {% for p in proposals %}
                 <div class="proposal-row">
@@ -143,16 +91,16 @@
             </div>
             {% endif %}
 
-            <h2>Riwayat run</h2>
+            <h2>{{ t('autopilots.run_history') }}</h2>
             {% if not runs %}
-            <p class="muted">Belum ada run.</p>
+            <p class="muted">{{ t('autopilots.no_runs') }}</p>
             {% else %}
             <div class="run-list">
                 {% for r in runs %}
                 <div class="run-row">
                     <span class="run-status status-{{ r.status }}">{{ r.status }}</span>
                     <span class="run-name">{{ r.autopilot_name or ('#' ~ r.autopilot_id) }}</span>
-                    {% if r.proposals %}<span class="tag">{{ r.proposals }} proposal</span>{% endif %}
+                    {% if r.proposals %}<span class="tag">{{ r.proposals }} {{ t('autopilots.proposal_count') }}</span>{% endif %}
                     {% if r.error %}<span class="run-err">{{ r.error }}</span>{% endif %}
                     <span class="muted">{{ r.created_at }}</span>
                 </div>

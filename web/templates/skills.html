@@ -11,107 +11,57 @@
 </head>
 <body>
 <div class="app">
-    <aside class="sidebar">
-        <div class="brand">
-            <img src="/static/logo.png" alt="OpenCLAWN">
-            <div>
-                <div class="name">Open<b>CLAWN</b></div>
-                <div class="tag">playful · sharp</div>
-            </div>
-        </div>
-        <div>
-            <div class="side-label">Workspace</div>
-            <nav class="nav-links">
-                <a href="/" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v7a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm4 8v2m4-2v2M0 4h16"/></svg>
-                    Chat
-                </a>
-                <a href="/activity" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg>
-                    Activity
-                </a>
-                <a href="/autopilots" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5V8l2.5 1.5"/></svg>
-                    Autopilots
-                </a>
-                <a href="/mcp" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="5.5" y="9" width="5" height="5" rx="1"/><path d="M4.5 7v2h7V7"/></svg>
-                    MCP
-                </a>
-                <a href="/metrics" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="9" width="3" height="6" rx=".5"/><rect x="6.5" y="5" width="3" height="10" rx=".5"/><rect x="12" y="1" width="3" height="14" rx=".5"/></svg>
-                    Metrics
-                </a>
-                <a href="/skills" class="nav-link active">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3-6 3-6-3 6-3z"/><path d="M2 8l6 3 6-3M2 11.5l6 3 6-3"/></svg>
-                    Skills
-                </a>
-                <a href="/conversations" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 3h12v8H6l-3 3V3z"/></svg>
-                    Conversations
-                </a>
-                <a href="/router" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="3.5" r="1.5"/><circle cx="12.5" cy="12.5" r="1.5"/><path d="M5 8h3l3-4.5M8 8l3 4.5"/></svg>
-                    Router
-                </a>
-                <a href="/settings" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
-                    Settings
-                </a>
-            </nav>
-        </div>
-        <div class="spacer"></div>
-    </aside>
+    {% include '_sidebar.html' %}
 
     <main class="main">
         <div class="topbar">
             <div>
-                <h1>Skill Decay</h1>
-                <div class="sub">skill memudar eksponensial (base {{ decay_base }}) — Inovasi #2</div>
+                <h1>{{ t('skills.title') }}</h1>
+                <div class="sub">{{ t('skills.subtitle', base=decay_base) }}</div>
             </div>
         </div>
 
         <div class="page">
             <div class="skill-counts">
                 <div class="count-chip active">
-                    <span class="num">{{ counts.active }}</span> active
+                    <span class="num">{{ counts.active }}</span> {{ t('skills.active') }}
                 </div>
                 <div class="count-chip draft">
-                    <span class="num">{{ counts.draft }}</span> draft
+                    <span class="num">{{ counts.draft }}</span> {{ t('skills.draft') }}
                 </div>
                 <div class="count-chip archived">
-                    <span class="num">{{ counts.archived }}</span> archived
+                    <span class="num">{{ counts.archived }}</span> {{ t('skills.archived') }}
                 </div>
                 <span class="muted">
-                    Skor di bawah {{ threshold }} ({{ threshold_pct }}%) → diarsipkan; dipakai lagi → revive.
+                    {{ t('skills.threshold_note', threshold=threshold, pct=threshold_pct) }}
                 </span>
             </div>
 
             <details class="skill-pack">
-                <summary>📦 Skill packs — ekspor & impor (berbagi antar-instalasi)</summary>
+                <summary>📦 {{ t('skills.packs_summary') }}</summary>
                 <div class="skill-pack-body">
                     {% if import_msg %}<div class="pack-msg">{{ import_msg }}</div>{% endif %}
                     <div class="pack-cols">
                         <div class="pack-col">
-                            <h3>Ekspor</h3>
-                            <p class="muted">Unduh skill aktif sebagai berkas Markdown untuk dibagikan.</p>
+                            <h3>{{ t('skills.export') }}</h3>
+                            <p class="muted">{{ t('skills.export_hint') }}</p>
                             <div class="pack-export-links">
-                                <a href="/skills/export" class="btn-ghost">Semua</a>
+                                <a href="/skills/export" class="btn-ghost">{{ t('skills.export_all') }}</a>
                                 {% for r in roles %}<a href="/skills/export?role={{ r }}" class="btn-ghost">{{ r|upper }}</a>{% endfor %}
                             </div>
                         </div>
                         <div class="pack-col">
-                            <h3>Impor</h3>
-                            <p class="muted">Masuk sebagai <b>draft</b> (discan keamanan, tidak otomatis dipakai — Anda aktifkan manual).</p>
+                            <h3>{{ t('skills.import') }}</h3>
+                            <p class="muted">{{ t('skills.import_hint')|safe }}</p>
                             <form method="post" action="/skills/import" class="pack-import-form">
-                                <textarea name="pack_text" placeholder="Tempel isi skill pack (Markdown)…"></textarea>
+                                <textarea name="pack_text" placeholder="{{ t('skills.import_paste_placeholder') }}"></textarea>
                                 <div class="pack-import-row">
-                                    <input type="text" name="url" placeholder="atau URL pack (https://…)">
+                                    <input type="text" name="url" placeholder="{{ t('skills.import_url_placeholder') }}">
                                     <select name="target_role">
-                                        <option value="">role asli</option>
+                                        <option value="">{{ t('skills.original_role') }}</option>
                                         {% for r in roles %}<option value="{{ r }}">→ {{ r|upper }}</option>{% endfor %}
                                     </select>
-                                    <button type="submit" class="btn-primary">Impor</button>
+                                    <button type="submit" class="btn-primary">{{ t('skills.import_btn') }}</button>
                                 </div>
                             </form>
                         </div>
@@ -120,18 +70,18 @@
             </details>
 
             {% if not skills %}
-            <p class="muted">Belum ada skill terkristalisasi. Skill lahir saat agent menilai solusinya layak disimpan (Inovasi #3).</p>
+            <p class="muted">{{ t('skills.no_skills') }}</p>
             {% else %}
             <table class="skills-table">
                 <thead>
                     <tr>
-                        <th>Skill</th>
-                        <th>Role</th>
-                        <th>Status</th>
-                        <th>Decay (terproyeksi)</th>
-                        <th>Idle</th>
-                        <th>Dipakai</th>
-                        <th>Confidence</th>
+                        <th>{{ t('skills.col_skill') }}</th>
+                        <th>{{ t('skills.col_role') }}</th>
+                        <th>{{ t('skills.col_status') }}</th>
+                        <th>{{ t('skills.col_decay') }}</th>
+                        <th>{{ t('skills.col_idle') }}</th>
+                        <th>{{ t('skills.col_used') }}</th>
+                        <th>{{ t('skills.col_confidence') }}</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -141,7 +91,7 @@
                         <td><span class="role-dot role-{{ s.role }}"></span>{{ s.role }}</td>
                         <td><span class="tag status-{{ s.status }}">{{ s.status }}</span></td>
                         <td>
-                            <div class="decay-track" title="skor {{ s.projected_score }} (ambang arsip {{ threshold }})">
+                            <div class="decay-track" title="{{ t('skills.score_title', score=s.projected_score, threshold=threshold) }}">
                                 <div class="decay-threshold" style="left: {{ threshold_pct }}%"></div>
                                 <div class="decay-fill {{ 'low' if s.near_archive else '' }}" style="width: {{ s.score_pct }}%"></div>
                             </div>
@@ -156,18 +106,16 @@
             </table>
             {% endif %}
 
-            <h2 style="margin-top:30px">Kristalisasi (Inovasi #3)</h2>
+            <h2 style="margin-top:30px">{{ t('skills.crystallization_title') }}</h2>
             <p class="muted">
-                Agent menilai kualitas solusinya sebelum menyimpan sebagai skill. Confidence ≥
-                {{ confidence_threshold }}/5 <b>dan</b> tanpa gap kritis → <b>active</b>; selain itu →
-                <b>draft</b> (tak masuk auto-context). Evaluator minimal setara generator.
+                {{ t('skills.crystallization_note', threshold=confidence_threshold)|safe }}
             </p>
             {% if not crystallization %}
-            <p class="muted">Belum ada percobaan kristalisasi. Muncul setelah agent menyelesaikan tugas multi-tool.</p>
+            <p class="muted">{{ t('skills.no_crystallization') }}</p>
             {% else %}
             <table>
                 <thead>
-                    <tr><th>Skill</th><th>Role</th><th>Status</th><th>Confidence</th><th>Gap kritis</th><th>Generator → Evaluator</th><th>Alasan</th></tr>
+                    <tr><th>{{ t('skills.col_skill') }}</th><th>{{ t('skills.col_role') }}</th><th>{{ t('skills.col_status') }}</th><th>{{ t('skills.col_confidence') }}</th><th>{{ t('skills.col_critical_gaps') }}</th><th>{{ t('skills.col_gen_eval') }}</th><th>{{ t('skills.col_reason') }}</th></tr>
                 </thead>
                 <tbody>
                     {% for c in crystallization %}
@@ -176,7 +124,7 @@
                         <td><span class="role-dot role-{{ c.role }}"></span>{{ c.role }}</td>
                         <td><span class="tag status-{{ c.status }}">{{ c.status }}</span></td>
                         <td>{{ c.confidence }}/5</td>
-                        <td>{{ 'ya' if c.critical_gaps else '—' }}</td>
+                        <td>{{ t('skills.yes') if c.critical_gaps else '—' }}</td>
                         <td class="muted">{{ c.generator_model }} → {{ c.evaluator_model }}</td>
                         <td class="muted">{{ c.reasoning }}</td>
                     </tr>
@@ -185,23 +133,23 @@
             </table>
             {% endif %}
 
-            <h2 style="margin-top:30px">Curation — konsolidasi skill (I1)</h2>
+            <h2 style="margin-top:30px">{{ t('skills.curation_title') }}</h2>
             <p class="muted">
-                Skill mirip digabung (gated judge ≥ {{ confidence_threshold }}/5) agar library tak
-                terfragmentasi. Loser <b>tidak dihapus</b> (status <code>merged</code>) — setiap merge
-                <b>dapat dibatalkan</b>.
+                {{ t('skills.curation_note', threshold=confidence_threshold)|safe }}
             </p>
             {% if not curation %}
-            <p class="muted">Belum ada konsolidasi. Berjalan otomatis (throttled ~1×/hari) saat ada skill tumpang tindih.</p>
+            <p class="muted">{{ t('skills.no_curation') }}</p>
             {% else %}
+            {% set ns = namespace(applied_shown=false, pending_shown=false) %}
             <table>
                 <thead>
-                    <tr><th>Aksi</th><th>Role</th><th>Winner</th><th>Diserap</th><th>Similarity</th><th>Judge</th><th>Alasan</th><th></th></tr>
+                    <tr><th>{{ t('skills.col_action') }}</th><th>{{ t('skills.col_status') }}</th><th>{{ t('skills.col_role') }}</th><th>{{ t('skills.col_winner') }}</th><th>{{ t('skills.col_absorbed') }}</th><th>{{ t('skills.col_similarity') }}</th><th>{{ t('skills.col_judge') }}</th><th>{{ t('skills.col_reason') }}</th><th></th></tr>
                 </thead>
                 <tbody>
                     {% for c in curation %}
                     <tr>
                         <td><span class="tag">{{ c.action }}</span></td>
+                        <td><span class="tag">{{ c.status }}</span></td>
                         <td><span class="role-dot role-{{ c.role }}"></span>{{ c.role }}</td>
                         <td>#{{ c.winner_id }}</td>
                         <td class="muted">{{ c.loser_ids }}</td>
@@ -209,10 +157,18 @@
                         <td>{{ c.judge_confidence or '—' }}{% if c.judge_confidence %}/5{% endif %}</td>
                         <td class="muted">{{ c.reasoning }}</td>
                         <td>
-                            {% if c.action == 'merge' and loop.first %}
+                            {% if c.action == 'merge' and c.status == 'pending' and not ns.pending_shown %}
+                            {% set ns.pending_shown = true %}
+                            <form method="post" action="/skills/apply-merge" style="margin:0">
+                                <input type="hidden" name="role" value="{{ c.role }}">
+                                <input type="hidden" name="curation_id" value="{{ c.id }}">
+                                <button type="submit" class="btn-ghost">{{ t('skills.apply') }}</button>
+                            </form>
+                            {% elif c.action == 'merge' and c.status == 'applied' and not ns.applied_shown %}
+                            {% set ns.applied_shown = true %}
                             <form method="post" action="/skills/revert-merge" style="margin:0">
                                 <input type="hidden" name="role" value="{{ c.role }}">
-                                <button type="submit" class="btn-ghost">Batalkan</button>
+                                <button type="submit" class="btn-ghost">{{ t('skills.revert') }}</button>
                             </form>
                             {% endif %}
                         </td>

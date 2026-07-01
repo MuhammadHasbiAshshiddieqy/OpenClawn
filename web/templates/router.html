@@ -11,92 +11,42 @@
 </head>
 <body>
 <div class="app">
-    <aside class="sidebar">
-        <div class="brand">
-            <img src="/static/logo.png" alt="OpenCLAWN">
-            <div>
-                <div class="name">Open<b>CLAWN</b></div>
-                <div class="tag">playful · sharp</div>
-            </div>
-        </div>
-        <div>
-            <div class="side-label">Workspace</div>
-            <nav class="nav-links">
-                <a href="/" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v7a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm4 8v2m4-2v2M0 4h16"/></svg>
-                    Chat
-                </a>
-                <a href="/activity" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg>
-                    Activity
-                </a>
-                <a href="/autopilots" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5V8l2.5 1.5"/></svg>
-                    Autopilots
-                </a>
-                <a href="/mcp" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="5.5" y="9" width="5" height="5" rx="1"/><path d="M4.5 7v2h7V7"/></svg>
-                    MCP
-                </a>
-                <a href="/metrics" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="9" width="3" height="6" rx=".5"/><rect x="6.5" y="5" width="3" height="10" rx=".5"/><rect x="12" y="1" width="3" height="14" rx=".5"/></svg>
-                    Metrics
-                </a>
-                <a href="/skills" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3-6 3-6-3 6-3z"/><path d="M2 8l6 3 6-3M2 11.5l6 3 6-3"/></svg>
-                    Skills
-                </a>
-                <a href="/conversations" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 3h12v8H6l-3 3V3z"/></svg>
-                    Conversations
-                </a>
-                <a href="/router" class="nav-link active">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="3.5" r="1.5"/><circle cx="12.5" cy="12.5" r="1.5"/><path d="M5 8h3l3-4.5M8 8l3 4.5"/></svg>
-                    Router
-                </a>
-                <a href="/settings" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
-                    Settings
-                </a>
-            </nav>
-        </div>
-        <div class="spacer"></div>
-    </aside>
+    {% include '_sidebar.html' %}
 
     <main class="main">
         <div class="topbar">
             <div>
-                <h1>Router Model Map</h1>
-                <div class="sub">pilih model tiap tier — router tetap memutuskan tier otomatis</div>
+                <h1>{{ t('router.title') }}</h1>
+                <div class="sub">{{ t('router.subtitle') }}</div>
             </div>
         </div>
 
         <div class="page">
-            {% if saved %}<div class="saved">Tersimpan.</div>{% endif %}
+            {% if saved %}<div class="saved">{{ t('common.saved') }}</div>{% endif %}
             <p class="muted">
-                SmartRouter menilai kompleksitas tiap permintaan lalu memilih <b>tier</b>
-                (TRIVIAL→CRITICAL). Di sini kamu menentukan <b>model</b> untuk tiap tier.
-                Bila model lokal sedang offline, fallback chain otomatis dipakai.
-                {% if overridden %}<br><b>Peta kustom aktif.</b>{% else %}<br>Saat ini memakai peta default.{% endif %}
+                {% set tier_b = '<b>tier</b>'|safe %}
+                {% set model_b = '<b>model</b>'|safe %}
+                {{ t('router.explain', tier=tier_b, model=model_b)|safe }}
+                {% if overridden %}<br><b>{{ t('router.custom_map_active') }}</b>{% else %}<br>{{ t('router.default_map') }}{% endif %}
             </p>
 
             <form method="post" action="/router">
                 <table>
                     <thead>
-                        <tr><th>Tier</th><th>Model</th></tr>
+                        <tr><th>{{ t('router.tier') }}</th><th>{{ t('common.model') }}</th></tr>
                     </thead>
                     <tbody>
-                        {% for t in tiers %}
+                        {% for tier in tiers %}
                         <tr>
                             <td>
-                                <strong>{{ t.label }}</strong>
-                                {% if t.is_default %}<span class="tag">default</span>{% endif %}
+                                <strong>{{ tier.label }}</strong>
+                                {% if tier.is_default %}<span class="tag">default</span>{% endif %}
                             </td>
                             <td>
-                                <select name="tier_{{ t.key }}">
+                                <select name="tier_{{ tier.key }}">
                                     {% for prov, model, label in known_models %}
                                     <option value="{{ prov }}|{{ model }}"
-                                        {{ 'selected' if (prov == t.provider and model == t.model) else '' }}>
+                                        {{ 'selected' if (prov == tier.provider and model == tier.model) else '' }}>
                                         {{ label }}
                                     </option>
                                     {% endfor %}
@@ -107,8 +57,8 @@
                     </tbody>
                 </table>
                 <div class="router-actions">
-                    <button type="submit" class="btn">Simpan peta</button>
-                    <button type="submit" name="action" value="reset" class="btn-ghost">Reset ke default</button>
+                    <button type="submit" class="btn">{{ t('router.save_map') }}</button>
+                    <button type="submit" name="action" value="reset" class="btn-ghost">{{ t('common.reset_default') }}</button>
                 </div>
             </form>
         </div>

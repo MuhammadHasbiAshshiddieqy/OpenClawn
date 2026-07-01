@@ -11,69 +11,20 @@
 </head>
 <body>
 <div class="app">
-    <aside class="sidebar">
-        <div class="brand">
-            <img src="/static/logo.png" alt="OpenCLAWN">
-            <div>
-                <div class="name">Open<b>CLAWN</b></div>
-                <div class="tag">playful · sharp</div>
-            </div>
-        </div>
-        <div>
-            <div class="side-label">Workspace</div>
-            <nav class="nav-links">
-                <a href="/" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 4h12v7a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm4 8v2m4-2v2M0 4h16"/></svg>
-                    Chat
-                </a>
-                <a href="/activity" class="nav-link active">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg>
-                    Activity
-                </a>
-                <a href="/autopilots" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5V8l2.5 1.5"/></svg>
-                    Autopilots
-                </a>
-                <a href="/mcp" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="5.5" y="9" width="5" height="5" rx="1"/><path d="M4.5 7v2h7V7"/></svg>
-                    MCP
-                </a>
-                <a href="/metrics" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="9" width="3" height="6" rx=".5"/><rect x="6.5" y="5" width="3" height="10" rx=".5"/><rect x="12" y="1" width="3" height="14" rx=".5"/></svg>
-                    Metrics
-                </a>
-                <a href="/skills" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3-6 3-6-3 6-3z"/><path d="M2 8l6 3 6-3M2 11.5l6 3 6-3"/></svg>
-                    Skills
-                </a>
-                <a href="/conversations" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 3h12v8H6l-3 3V3z"/></svg>
-                    Conversations
-                </a>
-                <a href="/router" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="3.5" r="1.5"/><circle cx="12.5" cy="12.5" r="1.5"/><path d="M5 8h3l3-4.5M8 8l3 4.5"/></svg>
-                    Router
-                </a>
-                <a href="/settings" class="nav-link">
-                    <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
-                    Settings
-                </a>
-            </nav>
-        </div>
-        <div class="spacer"></div>
-    </aside>
+    {% include '_sidebar.html' %}
 
     <main class="main">
         <div class="topbar">
             <div>
-                <h1>Activity</h1>
-                <div class="sub">linimasa aksi agent — routing · tool · handoff · conversation · crystallize</div>
+                <h1>{{ t('activity.title') }}</h1>
+                <div class="sub">{{ t('activity.subtitle') }}</div>
             </div>
         </div>
 
         <div class="page">
+            <p class="case-file-note muted">{{ t('activity.case_note') }}</p>
             <div class="activity-filter">
-                <a href="/activity" class="chip-filter {{ 'on' if not active_role }}">Semua peran</a>
+                <a href="/activity" class="chip-filter {{ 'on' if not active_role }}">{{ t('activity.all_roles') }}</a>
                 {% for r in roles %}
                 <a href="/activity?role={{ r }}" class="chip-filter {{ 'on' if active_role == r }}">{{ r|upper }}</a>
                 {% endfor %}
@@ -81,7 +32,7 @@
 
             {% if open_blockers %}
             <div class="blocker-panel">
-                <div class="blocker-panel-head">⚠ Hambatan terbuka ({{ open_blockers|length }})</div>
+                <div class="blocker-panel-head">⚠ {{ t('activity.open_blockers') }} ({{ open_blockers|length }})</div>
                 {% for b in open_blockers %}
                 <div class="blocker-row sev-{{ b.severity }}">
                     <span class="blocker-sev">{{ b.severity }}</span>
@@ -92,7 +43,7 @@
                     </div>
                     <form method="post" action="/blockers/resolve">
                         <input type="hidden" name="blocker_id" value="{{ b.id }}">
-                        <button type="submit" class="btn-resolve">Selesai</button>
+                        <button type="submit" class="btn-resolve">{{ t('activity.resolve') }}</button>
                     </form>
                 </div>
                 {% endfor %}
@@ -100,7 +51,7 @@
             {% endif %}
 
             {% if not events %}
-            <p class="muted">Belum ada aktivitas{% if active_role %} untuk peran {{ active_role|upper }}{% endif %}. Mulai percakapan di Chat agar linimasa terisi.</p>
+            <p class="muted">{{ t('activity.no_events') }}{% if active_role %} {{ t('activity.no_events_for_role') }} {{ active_role|upper }}{% endif %}. {{ t('activity.no_events_hint') }}</p>
             {% else %}
             <ol class="timeline">
                 {% for e in events %}

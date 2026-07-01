@@ -1,0 +1,106 @@
+/* ── Activity timeline ──────────────────────────────────────────────────── */
+/* Framing "evidence" (Cyber Detective, UI-IMPROVEMENT.md): linimasa dibaca
+   sebagai berkas bukti audit, bukan sekadar log — selaras positioning audit-first. */
+.case-file-note {
+    font-size: .8rem; margin-bottom: 16px; padding: 8px 12px;
+    border-left: 2px dashed var(--border-2); background: var(--panel);
+    border-radius: 0 8px 8px 0;
+}
+.activity-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.chip-filter {
+    font-size: .74rem; padding: 5px 12px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--text-faint);
+    text-decoration: none; transition: all .15s;
+}
+.chip-filter:hover { color: var(--text); border-color: var(--purple-bright); }
+.chip-filter.on { background: var(--purple-bright); color: #fff; border-color: var(--purple-bright); }
+
+.timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.tl-item {
+    /* Kolom kind cukup lebar untuk label terpanjang ("Conversation evidence")
+       tanpa overflow menabrak kolom judul (regresi framing "evidence" — label
+       jadi lebih panjang dari "Route"/"Tool" tapi lebar kolom lama tak disesuaikan). */
+    display: grid; grid-template-columns: 132px 1fr auto; gap: 12px; align-items: start;
+    background: var(--panel); border: 1px solid var(--border);
+    border-left: 3px solid var(--border); border-radius: 10px; padding: 11px 14px;
+}
+/* warna garis kiri per role (selaras skema role di chat) */
+.tl-item.role-pm  { border-left-color: var(--purple-bright); }
+.tl-item.role-dev { border-left-color: var(--green); }
+.tl-item.role-qa  { border-left-color: var(--red-soft); }
+.tl-item.role-data     { border-left-color: var(--cyan); }
+.tl-item.role-security { border-left-color: var(--amber); }
+
+.tl-kind {
+    font-size: .64rem; text-transform: uppercase; letter-spacing: .08em;
+    padding: 3px 8px; border-radius: 6px; text-align: center;
+    background: var(--panel-2); color: var(--text-faint);
+    /* Boleh membungkus (bukan nowrap) — label terpanjang tetap harus muat di
+       kolom sempit di layar kecil tanpa menabrak kolom judul di sebelahnya. */
+    white-space: normal; line-height: 1.3;
+}
+.kind-route       { color: var(--purple-bright); }
+.kind-tool        { color: var(--cyan); }
+.kind-handoff     { color: var(--green); }
+.kind-conversation{ color: var(--amber); }
+.kind-crystallize { color: var(--red-soft); }
+
+/* Micro-animation per jenis peristiwa (baris timeline PALING ATAS saja — animasi
+   berulang di semua baris akan ramai & mengganggu pembacaan audit trail). */
+.timeline li:first-child.tl-item { animation: tl-enter .3s ease both; }
+@keyframes tl-enter { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.timeline li:first-child .kind-route  { animation: kind-glow 1.6s ease-in-out .3s 2; }
+.timeline li:first-child .kind-tool   { animation: kind-ripple .5s ease-out .3s; }
+.timeline li:first-child .kind-crystallize { animation: kind-sparkle 1.4s ease-in-out .3s 2; }
+@keyframes kind-glow {
+    0%, 100% { box-shadow: none; }
+    50% { box-shadow: 0 0 0 3px rgba(157,92,255,.25); }
+}
+@keyframes kind-ripple {
+    0% { box-shadow: 0 0 0 0 rgba(45,212,191,.4); }
+    100% { box-shadow: 0 0 0 8px rgba(45,212,191,0); }
+}
+@keyframes kind-sparkle {
+    0%, 100% { text-shadow: none; }
+    50% { text-shadow: 0 0 6px rgba(255,77,109,.8); }
+}
+
+.tl-body { min-width: 0; }
+.tl-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.tl-role { font-weight: 700; font-size: .72rem; color: var(--text-faint); letter-spacing: .04em; }
+.tl-title { font-size: .88rem; color: var(--text); font-weight: 500; }
+.tl-detail {
+    font-size: .78rem; color: var(--text-dim); margin-top: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.tl-outcome { font-size: .66rem; padding: 2px 7px; border-radius: 5px; color: var(--text-faint); border: 1px solid var(--border); }
+.outcome-ok, .outcome-valid, .outcome-active, .outcome-strategy_done { color: var(--green); border-color: rgba(52,199,89,.3); }
+.outcome-error, .outcome-timeout, .outcome-corrected, .outcome-degraded { color: var(--red-soft); border-color: rgba(255,77,109,.3); }
+.outcome-draft, .outcome-duplicate, .outcome-max_turns, .outcome-stopped { color: var(--amber); border-color: rgba(240,196,90,.3); }
+.tl-time { font-size: .7rem; white-space: nowrap; }
+
+/* ── Blocker panel (proactive reporting) ────────────────────────────────── */
+.blocker-panel {
+    border: 1px solid rgba(255,77,109,.35); background: rgba(255,77,109,.06);
+    border-radius: 12px; padding: 14px 16px; margin-bottom: 22px;
+}
+.blocker-panel-head { font-weight: 700; font-size: .82rem; color: var(--red-soft); margin-bottom: 10px; }
+.blocker-row {
+    display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; align-items: center;
+    padding: 9px 0; border-top: 1px solid var(--border);
+}
+.blocker-row:first-of-type { border-top: none; }
+.blocker-sev {
+    font-size: .64rem; text-transform: uppercase; letter-spacing: .06em; text-align: center;
+    padding: 3px 7px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-faint);
+}
+.blocker-row.sev-high .blocker-sev   { color: var(--red-soft); border-color: rgba(255,77,109,.4); }
+.blocker-row.sev-medium .blocker-sev { color: var(--amber); border-color: rgba(240,196,90,.4); }
+.blocker-role { font-weight: 700; font-size: .7rem; color: var(--text-faint); margin-right: 8px; }
+.blocker-summary { font-size: .88rem; color: var(--text); }
+.blocker-detail { font-size: .78rem; color: var(--text-dim); margin-top: 3px; }
+.btn-resolve {
+    font-size: .74rem; padding: 5px 12px; border-radius: 8px; cursor: pointer;
+    background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border);
+}
+.btn-resolve:hover { color: var(--green); border-color: var(--green); }

@@ -1,6 +1,24 @@
 import aiosqlite
 from infra.config import AppConfig
 
+# Kolom yang ditambahkan ke tabel yang SUDAH ADA setelah rilis awal (mis. Skill
+# Curator/Compounding I1-I3). `CREATE TABLE IF NOT EXISTS` di migrations/001_initial.sql
+# adalah no-op pada tabel existing, jadi kolom baru tak pernah muncul di DB lama →
+# "no such column" saat runtime. Daftar ini di-cek tiap startup (idempoten, aman
+# dijalankan berkali-kali) agar instalasi lama otomatis dapat kolom baru tanpa
+# migrasi manual atau menghapus data.
+_ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "skills": [
+        ("merged_into", "INTEGER REFERENCES skills(id)"),
+        ("version", "INTEGER NOT NULL DEFAULT 1"),
+        ("draft_success_count", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "curation_log": [
+        ("status", "TEXT NOT NULL DEFAULT 'applied'"),
+        ("merged_content", "TEXT"),
+    ],
+}
+
 
 class DatabaseManager:
     """
@@ -41,11 +59,28 @@ class DatabaseManager:
             return dict(row) if row else None
 
     async def run_migration(self, sql_path: str) -> None:
-        """Jalankan migration SQL dari file."""
+        """Jalankan migration SQL dari file, lalu tambal kolom baru di tabel lama."""
         with open(sql_path) as f:
             sql = f.read()
         db = await self.conn()
         await db.executescript(sql)
+        await db.commit()
+        await self._ensure_columns()
+
+    async def _ensure_columns(self) -> None:
+        """Tambal kolom yang hilang di tabel EXISTING (lihat `_ADDED_COLUMNS`).
+
+        `CREATE TABLE IF NOT EXISTS` tak menyentuh tabel yang sudah ada, jadi kolom
+        yang ditambahkan setelah rilis awal tak pernah muncul di DB lama tanpa ini.
+        Idempoten: hanya ALTER kolom yang benar-benar belum ada (PRAGMA table_info).
+        """
+        db = await self.conn()
+        for table, columns in _ADDED_COLUMNS.items():
+            async with db.execute(f"PRAGMA table_info({table})") as cursor:
+                existing = {row[1] async for row in cursor}
+            for name, decl in columns:
+                if name not in existing:
+                    await db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
         await db.commit()
 
     async def close(self) -> None:

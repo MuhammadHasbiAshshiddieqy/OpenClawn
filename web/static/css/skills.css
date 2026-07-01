@@ -1,0 +1,50 @@
+/* Skill decay visualizer (Inovasi #2) */
+.skill-counts { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.count-chip {
+    display: inline-flex; align-items: baseline; gap: 6px;
+    padding: 8px 16px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); background: var(--panel);
+    font-size: .82rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em;
+}
+.count-chip .num { font-size: 1.3rem; font-weight: 800; color: var(--text); }
+.count-chip.active { border-color: var(--green-deep); }
+.count-chip.active .num { color: var(--green); }
+.count-chip.draft { border-color: #4a3c1c; }
+.count-chip.draft .num { color: #f0c45a; }
+.count-chip.archived .num { color: var(--text-faint); }
+.tag.status-active { background: var(--green-deep); }
+.tag.status-draft { background: #8a6d1f; }
+.tag.status-archived { background: var(--border-2); color: var(--text-dim); }
+.tag.status-duplicate { background: var(--border-2); color: var(--text-faint); }
+
+.skills-table .role-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.skills-table tr.is-archived td { opacity: .55; }
+tr.near-archive td { background: rgba(240,196,90,.06); }
+/* Decay bar: ambang arsip ditandai garis, fill mengecil saat skor turun */
+.decay-track {
+    position: relative; display: inline-block; width: 140px; height: 8px;
+    background: var(--bg-2); border-radius: 999px; overflow: hidden; vertical-align: middle;
+}
+.decay-fill { height: 100%; border-radius: 999px; background: var(--grad-claw); transition: width .3s; }
+.decay-fill.low { background: linear-gradient(90deg, #f0c45a, #ec1e4b); }
+.decay-threshold { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text-faint); z-index: 2; }
+.decay-num { margin-left: 8px; font-size: .8rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* ── Skill packs (export/import) ────────────────────────────────────────── */
+.skill-pack { margin: 18px 0 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.skill-pack summary { cursor: pointer; padding: 12px 16px; font-weight: 600; font-size: .88rem; }
+.skill-pack summary:hover { color: var(--purple-bright); }
+.skill-pack-body { padding: 4px 16px 16px; }
+.pack-msg { background: rgba(52,199,89,.08); border: 1px solid rgba(52,199,89,.3); color: var(--green); border-radius: 8px; padding: 9px 12px; margin-bottom: 12px; font-size: .82rem; }
+.pack-cols { display: grid; grid-template-columns: 1fr 1.4fr; gap: 20px; }
+.pack-col h3 { font-size: .82rem; margin: 0 0 4px; }
+.pack-export-links { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.pack-import-form textarea {
+    width: 100%; min-height: 80px; resize: vertical; font-family: inherit; font-size: .82rem;
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 9px; padding: 9px 11px; margin-bottom: 8px; box-sizing: border-box;
+}
+.pack-import-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.pack-import-row input[type=text] { flex: 1; min-width: 160px; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 11px; font-size: .82rem; }
+.pack-import-row select { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px; font-size: .82rem; }
+@media (max-width: 720px) { .pack-cols { grid-template-columns: 1fr; } }
