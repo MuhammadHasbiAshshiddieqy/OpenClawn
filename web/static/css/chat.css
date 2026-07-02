@@ -169,6 +169,30 @@
 .convo-hint { font-size: .74rem; color: var(--green); }
 .convo-hint[hidden] { display: none; }
 
+/* Working directory adaptif (§ user request) — pill kecil di mode-bar, tak menonjol
+   saat kosong (default server dipakai), berubah aksen ungu saat user mengisi. */
+.workdir-pick {
+    display: flex; align-items: center; gap: 6px;
+    margin-left: auto; flex: 0 1 260px; min-width: 0;
+    color: var(--text-faint);
+}
+.workdir-pick svg { width: 14px; height: 14px; flex: none; }
+.workdir-pick input {
+    flex: 1; min-width: 0;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border-2); border-radius: 999px;
+    padding: 6px 12px; font-family: inherit; font-size: .78rem;
+}
+.workdir-pick input:focus { outline: none; border-color: var(--purple-bright); }
+.workdir-pick input:not(:placeholder-shown) { border-color: var(--purple-bright); color: var(--text); }
+/* Umpan balik validasi live (/workdir/check): border + ikon berubah warna sesuai
+   status agar user tahu SEGERA folder valid/tidak, bukan gagal di tengah turn. */
+.workdir-pick.valid input { border-color: var(--green); color: var(--text); }
+.workdir-pick.valid svg { color: var(--green); }
+.workdir-pick.invalid input { border-color: var(--red-soft); }
+.workdir-pick.invalid svg { color: var(--red-soft); }
+.workdir-pick.checking svg { opacity: .5; }
+
 /* Konfigurasi percakapan (peserta + ronde) di atas composer */
 .convo-config {
     max-width: 760px; margin: 0 auto 8px;
@@ -298,6 +322,25 @@
 .action.fallback { color: #f0c45a; border-color: #4a3c1c; background: #221b0e; }
 .action.error { color: var(--red-soft); border-color: #4a1f2c; background: #220e15; }
 .action.ask { color: var(--cyan-soft); border-color: rgba(45,212,191,.35); background: rgba(45,212,191,.08); }
+.action.file { color: var(--green); border-color: rgba(52,199,89,.3); background: rgba(52,199,89,.06); }
+.action.file code { background: rgba(0,0,0,.2); }
+
+/* Kartu action/tool/approval yang kini bisa muncul DI DALAM bubble jawaban
+   (§ perbaikan urutan: thinking → tool/approval → jawaban, satu alur, mirip
+   Claude Code/Claude.ai — lihat _turnInsertionPoint di chat.js). Di luar bubble
+   (chatBox langsung) mereka masih memakai max-width relatif lebar chat; di
+   dalam bubble, lebar itu tak masuk akal (bubble sendiri sudah dibatasi lebar
+   pesan) — sesuaikan jadi margin di dalam padding bubble.
+   */
+.msg.assistant .action,
+.msg.assistant .tool-card {
+    max-width: 100%;
+    margin: 8px 14px;
+}
+.msg.assistant .action:first-child,
+.msg.assistant .tool-card:first-child {
+    margin-top: 10px;
+}
 
 /* Status tag (label pill dalam action chip atau status-line) */
 .status-tag {
@@ -317,6 +360,17 @@
 .status-tag.fall  { background: rgba(240,196,90,.1); color: #d4a845; border-color: rgba(240,196,90,.2); }
 .status-tag.stop  { background: rgba(236,30,75,.15); color: var(--red-soft); border-color: rgba(236,30,75,.3); }
 .status-tag.ask   { background: rgba(45,212,191,.18); color: var(--cyan-soft); border-color: rgba(45,212,191,.35); }
+.status-tag.file  { background: rgba(52,199,89,.18); color: var(--green); border-color: rgba(52,199,89,.35); }
+
+/* Link download di chip file_created — pill hijau kecil, terlihat sebagai aksi */
+.file-download-link {
+    display: inline-block; margin-left: 6px;
+    font-size: .74rem; font-weight: 600; text-decoration: none;
+    color: var(--green); border: 1px solid rgba(52,199,89,.4);
+    border-radius: 999px; padding: 2px 10px;
+    transition: background .12s;
+}
+.file-download-link:hover { background: rgba(52,199,89,.12); }
 
 /* Ringkasan biaya agregat di akhir percakapan */
 .usage-note { color: var(--text-faint); font-size: .76rem; }
@@ -454,6 +508,7 @@
     background: rgba(236,30,75,.2); color: var(--red-soft);
 }
 .tool-card .tc-approval.approved { background: rgba(52,199,89,.15); color: var(--green); }
+.tool-card .tc-approval.rejected { background: rgba(236,30,75,.15); color: var(--red-soft); }
 .tool-card .tc-body {
     padding: 8px 12px; font-size: .82rem; color: var(--text-dim);
     font-family: ui-monospace, monospace; white-space: pre-wrap; word-break: break-all;
@@ -464,6 +519,51 @@
     font-size: .82rem; color: var(--text-dim); max-height: 120px; overflow-y: auto;
 }
 .tool-card .tc-result.error { color: var(--red-soft); background: rgba(236,30,75,.05); }
+
+/* Kartu approval interaktif — tool destruktif menunggu keputusan manusia
+   (§ chat approval UI: dulu tak ada tombol, semua timeout diam-diam).
+   Pending diberi aksen amber + border berdenyut agar jelas "menunggu KAMU",
+   bukan sekadar log tool biasa. */
+.tool-card.approval-pending {
+    border-color: rgba(240,196,90,.5);
+    box-shadow: 0 0 0 1px rgba(240,196,90,.15);
+    animation: approval-pulse 1.8s ease-in-out infinite;
+}
+@keyframes approval-pulse {
+    0%, 100% { box-shadow: 0 0 0 1px rgba(240,196,90,.15); }
+    50%      { box-shadow: 0 0 0 3px rgba(240,196,90,.28); }
+}
+.tool-card.approval-pending .tc-head {
+    background: rgba(240,196,90,.12); color: #f0c45a;
+}
+.tool-card.approval-pending .tc-approval {
+    background: rgba(240,196,90,.2); color: #f0c45a;
+}
+/* Parameter yang akan dieksekusi (path/command) — user harus lihat sebelum setuju. */
+.tool-card .tc-body.approval-param {
+    max-height: 100px; color: var(--text);
+    border-bottom: 1px solid var(--border);
+}
+.status-tag.approval { background: rgba(240,196,90,.18); color: #f0c45a; border-color: rgba(240,196,90,.35); }
+.tc-approval-actions {
+    display: flex; gap: 8px; padding: 10px 12px;
+}
+.btn-approve, .btn-reject {
+    flex: 1; padding: 8px 12px; border-radius: 8px; border: none;
+    font-size: .82rem; font-weight: 600; cursor: pointer;
+    font-family: inherit; transition: filter .12s, transform .08s;
+}
+.btn-approve { background: var(--green); color: #fff; }
+.btn-reject { background: var(--panel-2); color: var(--red-soft); border: 1px solid rgba(236,30,75,.35); }
+.btn-approve:hover, .btn-reject:hover { filter: brightness(1.1); }
+.btn-approve:active, .btn-reject:active { transform: translateY(1px); }
+.btn-approve:disabled, .btn-reject:disabled { opacity: .5; cursor: default; }
+/* Setelah diputuskan: hentikan denyut, warnai sesuai keputusan. */
+.tool-card.approval-approved, .tool-card.approval-rejected { animation: none; box-shadow: none; }
+.tool-card.approval-approved { border-color: rgba(52,199,89,.4); }
+.tool-card.approval-rejected { border-color: rgba(236,30,75,.4); }
+.tool-card.approval-approved .tc-head { background: rgba(52,199,89,.08); color: var(--green); }
+.tool-card.approval-rejected .tc-head { background: rgba(236,30,75,.08); color: var(--red-soft); }
 
 /* ── Copy button (code blocks) ──────────────────────────────────────────── */
 .code-block-wrap { position: relative; }

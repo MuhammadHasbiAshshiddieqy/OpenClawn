@@ -73,6 +73,14 @@
                     </select>
                 </label>
                 <span id="convo-hint" class="convo-hint" hidden>{{ t('index.convo_hint') }}</span>
+                <!-- Working directory adaptif (§ user request, ala Claude Code/OpenClaw):
+                     folder kerja untuk SESI ini saja (bukan .env global). Kosong = pakai
+                     default server (OPENCLAWN_WORKSPACE). Divalidasi server-side sebelum
+                     dipakai (lihat web/main.py:_validate_workdir) — fail-closed. -->
+                <label class="workdir-pick" title="{{ t('index.workdir_title') }}">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1.5 4.5C1.5 3.67 2.17 3 3 3h3l1.5 1.5H13c.83 0 1.5.67 1.5 1.5v6c0 .83-.67 1.5-1.5 1.5H3c-.83 0-1.5-.67-1.5-1.5v-7z"/></svg>
+                    <input type="text" id="workdir-input" placeholder="{{ t('index.workdir_placeholder') }}" autocomplete="off">
+                </label>
             </div>
 
             <!-- Konfigurasi percakapan: muncul hanya saat mode non-single.
@@ -108,6 +116,7 @@
             <form id="chat-form" class="composer">
                 <input type="hidden" name="role" value="{{ role }}">
                 <input type="hidden" name="session_id" value="{{ session_id }}">
+                <input type="hidden" name="workdir" id="workdir-hidden" value="">
                 <textarea name="message" placeholder="{{ t('index.composer_placeholder') }}" rows="1" autofocus></textarea>
                 <button type="submit" class="send-btn" title="{{ t('index.send_title') }}">
                     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h12M11 5l5 5-5 5"/></svg>
@@ -146,6 +155,12 @@
             statusThinking: {{ t('index.status_thinking')|tojson }},
             statusTool: {{ t('index.status_tool')|tojson }},
             statusAsk: {{ t('index.status_ask')|tojson }},
+            statusApproval: {{ t('index.status_approval')|tojson }},
+            approve: {{ t('index.approve')|tojson }},
+            reject: {{ t('index.reject')|tojson }},
+            approved: {{ t('index.approved')|tojson }},
+            rejected: {{ t('index.rejected')|tojson }},
+            approvalFailed: {{ t('index.approval_failed')|tojson }},
             statusFall: {{ t('index.status_fall')|tojson }},
             statusFallbackTo: {{ t('index.status_fallback_to', detail='__D__')|tojson }},
             statusStop: {{ t('index.status_stop')|tojson }},
@@ -158,6 +173,8 @@
             statusWriting: {{ t('index.status_writing')|tojson }},
             statusNoResponse: {{ t('index.status_no_response')|tojson }},
             statusErr: {{ t('index.status_err')|tojson }},
+            statusFile: {{ t('index.status_file')|tojson }},
+            downloadFile: {{ t('index.download_file')|tojson }},
             errorNoAnswer: {{ t('index.error_no_answer')|tojson }},
             errorDisconnected: {{ t('index.error_disconnected')|tojson }},
             statusStart: {{ t('index.status_start')|tojson }},

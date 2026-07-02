@@ -15,6 +15,47 @@ const budgetMeter = document.getElementById('budget-meter');
 const budgetFill = document.getElementById('budget-fill');
 const budgetLabel = document.getElementById('budget-label');
 
+// Working directory adaptif (§ user request, ala Claude Code/OpenClaw): input
+// visible di mode-bar disinkron ke hidden field yang benar-benar dikirim ke
+// server (form.workdir tak boleh langsung berupa <input> terlihat karena field
+// ini juga dipakai runConversation lewat body terpisah, bukan hanya submit form).
+const workdirInput = document.getElementById('workdir-input');
+const workdirHidden = document.getElementById('workdir-hidden');
+const workdirPick = workdirInput ? workdirInput.closest('.workdir-pick') : null;
+// Validasi live folder kerja: ping /workdir/check (debounced) saat user mengetik
+// agar tahu SEGERA valid/tidak — bukan baru gagal di tengah turn. Kelas pada pill
+// (.valid/.invalid) memberi umpan balik warna; title memuat pesan/resolved path.
+let workdirTimer = null;
+async function checkWorkdir() {
+    if (!workdirPick) return;
+    const val = workdirInput.value.trim();
+    workdirPick.classList.remove('valid', 'invalid', 'checking');
+    if (!val) { workdirInput.title = ''; return; }  // kosong = default server, netral
+    workdirPick.classList.add('checking');
+    try {
+        const resp = await fetch('/workdir/check?path=' + encodeURIComponent(val));
+        const data = await resp.json();
+        workdirPick.classList.remove('checking');
+        if (data.ok && data.resolved) {
+            workdirPick.classList.add('valid');
+            workdirInput.title = '✓ ' + data.resolved;
+        } else if (!data.ok) {
+            workdirPick.classList.add('invalid');
+            workdirInput.title = data.error || '';
+        }
+    } catch (_) {
+        workdirPick.classList.remove('checking');
+    }
+}
+if (workdirInput && workdirHidden) {
+    workdirInput.addEventListener('input', () => {
+        workdirHidden.value = workdirInput.value;
+        clearTimeout(workdirTimer);
+        workdirTimer = setTimeout(checkWorkdir, 350);
+    });
+}
+function currentWorkdir() { return (workdirInput && workdirInput.value.trim()) || ''; }
+
 // Token budget meter (§1.4): perbarui dari event usage. Warna naik ke amber/merah
 // saat context mendekati batas, agar token blowout terlihat sebelum jadi masalah.
 function updateBudget(u) {
@@ -30,9 +71,11 @@ function updateBudget(u) {
     budgetMeter.hidden = false;
 }
 
-// Bila tidak ada frame apa pun (token/status) dalam jendela ini, anggap
-// server tidak merespons — beri tahu user, jangan biarkan diam menggantung.
-const STALL_MS = 20000;
+// Ambang watchdog: bila TAK ada frame apa pun (token/status/ping heartbeat) selama
+// jendela ini, tampilkan "masih bekerja". Dipilih > 2× interval heartbeat server
+// (_HEARTBEAT_SEC=10s) agar hanya menyala saat beberapa heartbeat berturut hilang
+// (lambat sungguhan), bukan saat model sekadar jeda antar-token.
+const STALL_MS = 25000;
 
 function escapeHtml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -56,6 +99,7 @@ function statusLabel(text, detail) {
         case 'routing':      return '<span class="status-tag route">' + T.statusRoute + '</span> ' + fillT(T.statusRouting, detail);
         case 'thinking':     return '<span class="status-tag think">' + T.statusThink + '</span> ' + T.statusThinking;
         case 'tool':         return '<span class="status-tag tool">' + T.statusTool + '</span> ' + detail;
+        case 'approval':     return '<span class="status-tag approval">' + T.statusApproval + '</span> ' + detail;
         case 'question':     return '<span class="status-tag ask">' + T.statusAsk + '</span> ' + escapeHtml(detail);
         case 'fallback':     return '<span class="status-tag fall">' + T.statusFall + '</span> ' + fillT(T.statusFallbackTo, detail);
         case 'loop_stopped': return '<span class="status-tag stop">' + T.statusStop + '</span> ' + fillT(T.statusLoopStopped, detail);
@@ -86,14 +130,35 @@ function hideStatus() {
     statusLine.innerHTML = '';
 }
 
+// Titik sisip untuk kartu action/tool/approval yang terjadi SELAMA satu giliran
+// (routing/tool/approval/fallback). Dulu: selalu disisipkan sebagai sibling
+// SEBELUM seluruh bubble (wrapEl) di level chatBox — akibatnya kartu yang tiba
+// SETELAH thinking sudah tampil (mis. approval) tetap terlihat DI ATAS thinking,
+// karena thinking ada DI DALAM bubble sedangkan kartu ada DI LUAR-nya (§ user
+// report: "approval selalu muncul di atas thinking").
+//
+// Perbaikan: bila `wrapOrNull` adalah bubble jawaban (`.msg`) yang masih berjalan,
+// kartu disisipkan DI DALAM bubble itu — SETELAH thinking-block (bila ada) tapi
+// SEBELUM msg-body — sehingga urutan visual mengikuti urutan kejadian nyata:
+// thinking → tool/approval → jawaban akhir, semua dalam satu bubble yang sama
+// (mirip Claude Code/Claude.ai). `null`/elemen lain (mis. ringkasan akhir
+// percakapan) tetap di-append ke akhir chatBox seperti sebelumnya.
+function _turnInsertionPoint(wrapOrNull) {
+    if (wrapOrNull && wrapOrNull.classList && wrapOrNull.classList.contains('msg')) {
+        const bodyEl = wrapOrNull.querySelector('.msg-body');
+        if (bodyEl) return { parent: wrapOrNull, before: bodyEl };
+    }
+    return { parent: chatBox, before: wrapOrNull };
+}
+
 // Action persisten: tertinggal di kolom chat sebagai jejak histori
-// (routing/tool/fallback/error). Disisipkan SEBELUM bubble jawaban
-// agar urutan terbaca: user → action → action → jawaban.
+// (routing/tool/fallback/error). Lihat _turnInsertionPoint untuk urutan.
 function appendAction(html, kind, beforeEl) {
     const el = document.createElement('div');
     el.className = 'action' + (kind ? ' ' + kind : '');
     el.innerHTML = html;
-    chatBox.insertBefore(el, beforeEl);
+    const { parent, before } = _turnInsertionPoint(beforeEl);
+    parent.insertBefore(el, before);
     return el;
 }
 
@@ -233,7 +298,7 @@ function userBubble(message) {
     el.className = 'msg user';
     el.textContent = message;
     chatBox.appendChild(el);
-    chatBox.scrollTop = chatBox.scrollHeight;
+    smartScroll();
 }
 
 // Buat bubble agent dengan header strip berlabel role dan body untuk konten.
@@ -258,7 +323,7 @@ function newAssistantBubble(role) {
     wrap.appendChild(body);
 
     chatBox.appendChild(wrap);
-    chatBox.scrollTop = chatBox.scrollHeight;
+    smartScroll();
     return body;  // caller menulis ke body, bukan ke wrap
 }
 
@@ -278,7 +343,7 @@ function appendThinking(bodyEl, piece) {
     }
     det.dataset.raw += piece;
     det.querySelector('.think-body').innerHTML = renderMarkdown(det.dataset.raw);
-    chatBox.scrollTop = chatBox.scrollHeight;
+    smartScroll();
 }
 
 // Jawaban final mulai → tutup blok thinking & ganti label (tetap bisa dibuka lagi).
@@ -305,6 +370,11 @@ function handleStatus(s, beforeEl) {
         const input = s.input || {};
         appendToolCard(s.detail, input, s.approval || '', beforeEl);
         showStatus(statusLabel(s.text, s.detail));
+    } else if (s.text === 'approval') {
+        // Tool butuh persetujuan manusia SEDANG menunggu (§ chat approval UI —
+        // dulu: tak ada tombol, semua tool butuh-approval selalu timeout).
+        appendApprovalCard(s.detail, s.approval_id, beforeEl);
+        showStatus(statusLabel(s.text, s.detail));
     } else {
         const kind = s.text === 'fallback' ? 'fallback'
                    : s.text === 'loop_stopped' ? 'error' : '';
@@ -328,14 +398,19 @@ function endAnswerMode() {
 async function runSingle(message) {
     userBubble(message);
     showStatus('<span class="status-tag think">' + T.statusWait + '</span> ' + T.statusSending);
-    const params = new URLSearchParams({ message, role: form.role.value, session_id: form.session_id.value });
+    const params = new URLSearchParams({ message, role: form.role.value, session_id: form.session_id.value, workdir: currentWorkdir() });
 
     // newAssistantBubble mengembalikan body-div; wrapEl = parentElement (bubble utuh)
     const bodyEl = newAssistantBubble('');
     const wrapEl = bodyEl.parentElement;
     let raw = '';
     let watchdog;
-    const arm = () => { clearTimeout(watchdog); watchdog = setTimeout(() => showStatus('<span class="status-tag stop">' + T.statusWarn + '</span> ' + T.statusNoResponse, 'warn'), STALL_MS); };
+    // Watchdog HANYA fallback: server kirim heartbeat `: ping` tiap ~10s (web/main.py
+    // _with_heartbeat), yang me-reset arm() lewat readSSE('ping'). Jadi warning ini
+    // baru muncul bila BEBERAPA heartbeat berturut hilang — indikasi lambat sungguhan
+    // (model besar/koneksi), BUKAN "server mati". Karena itu tag 'think' (bukan 'stop'
+    // merah) & teks "masih bekerja", agar user tak menyangka gagal padahal koneksi hidup.
+    const arm = () => { clearTimeout(watchdog); watchdog = setTimeout(() => showStatus('<span class="status-tag think">' + T.statusWait + '</span> ' + T.statusNoResponse), STALL_MS); };
 
     try {
         arm();
@@ -357,6 +432,9 @@ async function runSingle(message) {
             } else if (evType === 'error') {
                 let txt = data; try { txt = JSON.parse(data).text; } catch (_) {}
                 appendAction('<span class="status-tag stop">' + T.statusErr + '</span> ' + escapeHtml(txt), 'error', wrapEl); showStatus(escapeHtml(txt), 'error');
+            } else if (evType === 'file_created') {
+                let path = data; try { path = JSON.parse(data); } catch (_) {}
+                appendFileDownload(path, wrapEl);
             }
         });
         clearTimeout(watchdog);
@@ -376,6 +454,18 @@ async function runSingle(message) {
     }
 }
 
+// File yang berhasil ditulis agent (file_write/file_edit/dll.) → chip download
+// persisten di kolom chat, mirip appendAction tapi dengan link nyata ke
+// GET /workspace/download (dibatasi ke workspace_root, lihat web/main.py).
+function appendFileDownload(path, beforeEl) {
+    const url = '/workspace/download?path=' + encodeURIComponent(path);
+    const html =
+        '<span class="status-tag file">' + T.statusFile + '</span> ' +
+        '<code>' + escapeHtml(path) + '</code> ' +
+        '<a href="' + url + '" download class="file-download-link">' + T.downloadFile + '</a>';
+    appendAction(html, 'file', beforeEl);
+}
+
 // ── Mode CONVERSATION: banyak agent (endpoint /converse/stream) ───────────
 async function runConversation(message, pattern) {
     userBubble(message);
@@ -387,6 +477,7 @@ async function runConversation(message, pattern) {
         session_id: form.session_id.value,
         participants: activeRoles().join(','),
         rounds: String(rounds),
+        workdir: currentWorkdir(),
     });
 
     const controller = new AbortController();
@@ -426,8 +517,10 @@ async function runConversation(message, pattern) {
                 updateBudget(d.usage);  // peak context window lintas-giliran
             } else if (evType === 'error') {
                 appendAction('<span class="status-tag stop">' + T.statusErr + '</span> ' + escapeHtml(d.text || data), 'error', null);
+            } else if (evType === 'file_created') {
+                appendFileDownload(d.text, currentWrap);
             }
-            chatBox.scrollTop = chatBox.scrollHeight;
+            smartScroll();
         });
         hideStatus();
     } catch (err) {
@@ -458,6 +551,10 @@ async function readSSE(resp, onFrame) {
         while ((idx = buffer.indexOf('\n\n')) !== -1) {
             const frame = buffer.slice(0, idx);
             buffer = buffer.slice(idx + 2);
+            // Frame komentar SSE (`: ping` heartbeat server) — bukan event data.
+            // Teruskan sebagai 'ping' agar caller me-reset watchdog (koneksi hidup),
+            // tanpa dianggap token/status. Lihat _with_heartbeat di web/main.py.
+            if (frame.startsWith(':')) { onFrame('ping', ''); continue; }
             let evType = 'message', data = '';
             for (const line of frame.split('\n')) {
                 if (line.startsWith('event: ')) evType = line.slice(7);
@@ -519,7 +616,7 @@ async function sendMessage() {
     if (emptyState) emptyState.remove();
     textarea.value = ''; autoGrow();
     sendBtn.disabled = true;
-    chatBox.scrollTop = chatBox.scrollHeight;
+    smartScroll();
     try {
         if (mode === 'single') await runSingle(message);
         else await runConversation(message, mode);
@@ -607,19 +704,85 @@ function injectCopyButtons(el) {
 function appendToolCard(name, input, status, beforeEl) {
     const card = document.createElement('div');
     card.className = 'tool-card';
-    // Input sebagai JSON string pendek
+    // Input sebagai JSON string pendek. Tool tanpa argumen berarti (mis. list_dir
+    // pada direktori saat ini) berujung {} — tampilkan bar kosong itu tak bermakna
+    // bagi user, jadi baris .tc-body disembunyikan sepenuhnya kalau input kosong.
     let inputStr = '';
-    try { inputStr = JSON.stringify(input, null, 2); } catch(_) { inputStr = String(input); }
-    if (inputStr.length > 300) inputStr = inputStr.slice(0, 300) + '…';
+    const hasInput = input && typeof input === 'object' && Object.keys(input).length > 0;
+    if (hasInput) {
+        try { inputStr = JSON.stringify(input, null, 2); } catch (_) { inputStr = String(input); }
+        if (inputStr.length > 300) inputStr = inputStr.slice(0, 300) + '…';
+    }
     card.innerHTML =
         '<div class="tc-head">' +
         '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="4" height="4" rx="1"/><rect x="10" y="2" width="4" height="4" rx="1"/><path d="M4 6v3h2v4h4V9h2V6"/></svg>' +
         '<span class="tc-name">' + escapeHtml(name) + '</span>' +
         (status ? '<span class="tc-approval ' + status + '">' + status + '</span>' : '') +
         '</div>' +
-        '<div class="tc-body">' + escapeHtml(inputStr) + '</div>';
-    chatBox.insertBefore(card, beforeEl);
+        (hasInput ? '<div class="tc-body">' + escapeHtml(inputStr) + '</div>' : '');
+    const { parent, before } = _turnInsertionPoint(beforeEl);
+    parent.insertBefore(card, before);
     smartScroll();
+    return card;
+}
+
+// Kartu approval interaktif: tool butuh persetujuan manusia SEDANG menunggu
+// (ApprovalGate.request() blocking di backend). Dulu tak ada UI untuk ini sama
+// sekali — semua tool butuh-approval (file_write/shell_run/code_run/dll.) selalu
+// timeout setelah approval_timeout_sec karena user tak py cara approve. Tombol
+// di sini kirim POST /approve; begitu di-resolve, stream yang sedang menunggu
+// otomatis lanjut (Future di backend ter-resolve).
+function appendApprovalCard(detail, approvalId, beforeEl) {
+    const card = document.createElement('div');
+    card.className = 'tool-card approval-pending';
+    card.dataset.approvalId = approvalId;
+    // `detail` datang dari backend sebagai preview "tool_name(param)" (mis.
+    // "file_write(hello.go)" / "shell_run(go build)"). Pisahkan agar user melihat
+    // JELAS apa yang disetujui: nama tool tebal + parameter di baris tersendiri
+    // (dulu: hanya string mentah "tool(param)" di posisi nama — sulit dibaca cepat).
+    const m = /^([\w.]+)\((.*)\)$/s.exec(detail || '');
+    const toolName = m ? m[1] : (detail || '');
+    const param = m ? m[2] : '';
+    card.innerHTML =
+        '<div class="tc-head">' +
+        '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 1.5l6 3v4c0 3.5-2.5 5.5-6 6.5-3.5-1-6-3-6-6.5v-4l6-3z"/><path d="M6 8l1.5 1.5L10.5 6"/></svg>' +
+        '<span class="tc-name">' + escapeHtml(toolName) + '</span>' +
+        '<span class="tc-approval">' + T.statusApproval + '</span>' +
+        '</div>' +
+        (param ? '<div class="tc-body approval-param">' + escapeHtml(param) + '</div>' : '') +
+        '<div class="tc-approval-actions">' +
+        '<button type="button" class="btn-approve" data-decision="approve">' + T.approve + '</button>' +
+        '<button type="button" class="btn-reject" data-decision="reject">' + T.reject + '</button>' +
+        '</div>';
+    const { parent, before } = _turnInsertionPoint(beforeEl);
+    parent.insertBefore(card, before);
+    smartScroll();
+
+    card.querySelectorAll('button[data-decision]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+            try {
+                const resp = await fetch('/approve', {
+                    method: 'POST',
+                    body: new URLSearchParams({ approval_id: approvalId, decision: btn.dataset.decision }),
+                });
+                const data = await resp.json();
+                if (data.ok) {
+                    card.classList.remove('approval-pending');
+                    card.classList.add('approval-' + btn.dataset.decision + 'd');
+                    card.querySelector('.tc-approval-actions').innerHTML =
+                        '<span class="tc-approval ' + (btn.dataset.decision === 'approve' ? 'approved' : 'rejected') + '">' +
+                        (btn.dataset.decision === 'approve' ? T.approved : T.rejected) + '</span>';
+                } else {
+                    toast(T.approvalFailed, 'error');
+                    card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+                }
+            } catch (_) {
+                toast(T.approvalFailed, 'error');
+                card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+            }
+        });
+    });
     return card;
 }
 

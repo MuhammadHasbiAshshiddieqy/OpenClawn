@@ -61,6 +61,9 @@ Konfigurasi per-sesi agent.
 | `role` | Role aktif: `"pm"`, `"qa"`, atau `"dev"` |
 | `session_id` | ID sesi unik (UUID) |
 | `user_id` | ID user (default `"default"` — single-user mode) |
+| `autopilot` | `True` → tool butuh-approval TIDAK dieksekusi, diantri sebagai proposal (§1, §17). Default `False`. |
+| `workspace_override` | Folder kerja adaptif per-sesi; menggantikan `CONFIG.workspace_root` via ContextVar hanya selama turn. `None` = default server. Divalidasi di `web/main.py`. |
+| `persist_history` | `True` (default) → muat/simpan riwayat sesi ke `session_turns` (single-agent, agar turn berikutnya ingat konteks). `False` untuk multi-agent (strategy kelola transkrip sendiri). |
 
 ### Dataclass: `Turn`
 
@@ -84,10 +87,27 @@ Event yang di-stream `run()` ke Web UI. Memisahkan isi jawaban dari sinyal prose
 
 | Field | Keterangan |
 |---|---|
-| `type` | `"token"` (jawaban), `"thinking"` (reasoning model), `"status"` (sinyal proses), atau `"usage"` (ringkasan biaya turn di akhir) |
-| `text` | Untuk `token`/`thinking`: isi teks. Untuk `status`: label (`routing`/`thinking`/`tool`/`fallback`/`question`/`loop_stopped`) |
-| `detail` | Konteks status opsional (mis. `provider:model` saat `routing`, nama tool saat `tool`, teks pertanyaan saat `question`) |
+| `type` | `"token"` (jawaban), `"thinking"` (reasoning model), `"status"` (sinyal proses), `"usage"` (ringkasan biaya turn di akhir), atau `"file_created"` (tool penulis file sukses, § download) |
+| `text` | Untuk `token`/`thinking`: isi teks. Untuk `status`: label (`routing`/`thinking`/`tool`/`approval`/`fallback`/`question`/`loop_stopped`). Untuk `file_created`: path file (dalam workspace) |
+| `detail` | Konteks status opsional (mis. `provider:model` saat `routing`, nama tool saat `tool`/`approval`, teks pertanyaan saat `question`) |
 | `usage` | Untuk `usage`: `{tokens_in, tokens_out, cost_usd, latency_ms, model}` |
+| `approval_id` | Untuk `status` dengan `text="approval"`: ID approval yang bisa dikirim ke `POST /approve` (§ chat approval UI) |
+
+`type="file_created"` di-emit di `_run_tool_loop` saat tool di `_FILE_WRITE_TOOLS`
+(`file_write`, `file_edit`, `file_append`, `apply_patch`, `doc_write`, `pdf_write`)
+mengembalikan `{"ok": True, "path": ...}` — **bukan** dari input mentah model (path
+bisa berubah lewat workspace guard). Web UI (`web/main.py`, `chat.js`) merender ini
+sebagai chip link ke `GET /workspace/download?path=...` (dibatasi ke `workspace_root`,
+lihat `docs/web.md`).
+
+`type="status", text="approval"` di-emit **sebelum** memanggil `_execute_tool` untuk
+tool `requires_approval=True` di sesi interaktif (bukan autopilot) — regresi lama:
+semua tool butuh-approval selalu timeout karena Web UI tak pernah menampilkan tombol
+Approve/Reject. `approval_id` di-generate di `_run_tool_loop` (bukan di dalam
+`ApprovalGate.request`, yang blocking) lalu diteruskan ke `_execute_tool(name, input,
+approval_id=...)` → `ApprovalGate.request(..., approval_id=...)`, sehingga ID yang
+sama dipakai UI dan backend untuk sesi menunggu yang sama. Lihat `docs/web.md`
+§ `POST /approve` untuk alur UI lengkap.
 
 > `type="thinking"` di-emit dari reasoning model dan ditampilkan di blok collapsible terpisah di UI — **tidak** masuk `turn.content` (bukan jawaban final, jadi tidak di-crystallize/diarsipkan).
 
@@ -105,16 +125,20 @@ Pipeline utama per turn. Menghasilkan `AgentEvent` (`token` + `status`) ke Web U
 
 1. **Shield scan** — tolak input mencurigakan sebelum masuk pipeline
 2. **Correction check** — deteksi apakah turn sebelumnya dikoreksi user (audit feedback)
+2b. **Load session history** — bila `persist_history` & `self.history` kosong, muat giliran sesi ini dari `session_turns` (`MemoryManager.load_turns`, cap `session_history_turns`) → agent ingat percakapan lintas-request (§ user report). Multi-agent skip (kelola transkrip sendiri).
 3. **Load active skills** — ambil skill dari decay manager (Inovasi 2)
 4. **Load memory context** — L1/L2/L3/L4 (Inovasi 2 lanjutan)
-5. **Build messages** — compaction pre-pass opsional (`_maybe_compact`, off by default), lalu compactor merakit context dengan budget token
+5. **Build messages** — compaction pre-pass opsional (`_maybe_compact`, off by default), lalu compactor merakit context dengan budget token (termasuk history sesi yang dimuat di 2b)
 6. **Route + log decision** — soul-aware routing, catat ke audit DB (Inovasi 1). Jika ada **model override** dari `/settings` (`SettingsStore.get_model_override()`), provider/model dipaksa ke pilihan itu — keputusan router asli tetap tercatat di `reason` untuk transparansi audit
 7. **Tool loop** — iterasi tool call (tidak rekursif)
-8. **Finalize** — update audit record dengan latensi, cost, token
+8. **Finalize** — update audit record; persist giliran user+assistant ke `session_turns` (bila `persist_history`, setelah guardrail OUTPUT → versi teredaksi)
 9. **Post-turn** — background task: tulis L1 checkpoint, arsip L4, decay pass, crystallize
 
 **`_run_tool_loop(messages, route, tools_schema, turn) → AsyncGenerator[AgentEvent, None]`** *(async generator, private)*  
-Loop iteratif (bukan rekursif) untuk menangani tool call. Meng-emit `AgentEvent` (`thinking`/`token`/`tool`/`fallback`). Berhenti saat tidak ada tool call pending atau `max_tool_hops` tercapai.
+Loop iteratif (bukan rekursif) untuk menangani tool call. Meng-emit `AgentEvent` (`thinking`/`token`/`tool`/`approval`/`file_created`/`fallback`). Berhenti saat tidak ada tool call pending atau `max_tool_hops` tercapai.
+- **Writeback giliran tool:** setelah tool dieksekusi, DUA pesan ditulis kembali ke `messages` — giliran `assistant` yang MEMANGGIL tool (`tool_calls`, format Ollama/OpenAI-compatible) lalu hasilnya (`role="tool"`). Sebelumnya hanya hasil yang di-append; model lokal (Gemma/DeepSeek) tak melihat bahwa ia sudah memanggil tool, jadi memanggil ULANG tool yang sama (§ user report: menulis file berulang).
+- **Hasil tool diformat** lewat `_format_tool_result` (teks sukses/gagal eksplisit, bukan repr dict) agar model kecil mengenali "selesai".
+- **Deteksi loop 2 lapis:** (a) tool+input identik berturut-turut ≥2× → hard stop; (b) khusus `_FILE_WRITE_TOOLS`, path yang sama berturut-turut ≥1× (kali kedua) → hard stop (menulis ulang file identik bukan alur normal). Keduanya meng-emit `AgentEvent(type="status", text="loop_stopped")`.
 
 **`_execute_tool(name, input_data) → dict`** *(async, private)*  
 Eksekusi satu tool dengan jaring pengaman §1.3: cek keberadaan → cek izin role → **validasi input vs schema** (`_validate_tool_input`) → approval jika perlu → jalankan dalam `asyncio.wait_for(timeout=tool_timeout_sec)` dengan try/except yang mengubah exception/timeout apa pun menjadi `{"error": ...}` anggun → potong output seragam (`_truncate_tool_output`) → catat telemetri (`ToolAudit.record`). Satu tool yang gagal/menggantung tidak menjatuhkan turn.
@@ -124,6 +148,9 @@ Potong field teks hasil tool yang melebihi `tool_max_output` (token-first §1.4)
 
 **`_validate_tool_input(tool, input_data) → str | None`** *(module-level)*  
 Validasi ringan input vs `input_schema` (required fields ada & non-kosong). Return pesan error (dikirim balik ke model agar memperbaiki) atau `None`. Bukan validator JSON-Schema penuh — cukup menangkap kesalahan umum model lokal tanpa dependency.
+
+**`_format_tool_result(tool_name, result) → str`** *(module-level)*  
+Ubah dict hasil tool jadi teks jelas untuk model: `ERROR: ...` bila ada error, `SUCCESS: file written to ... Do NOT write it again` untuk tool `_FILE_WRITE_TOOLS` yang sukses (sinyal terminal agar model lokal tak mengulang), `SUCCESS: k=v...` untuk ok lain, `str(result)` sebagai fallback. Dipakai `_run_tool_loop` saat menulis hasil ke `messages`.
 
 **`_tool_allowed(name) → bool`** *(private)*  
 Cek apakah tool ada di daftar `soul.toml[tools][allowed]` untuk role aktif.
@@ -327,6 +354,18 @@ Teks penjelasan untuk audit record.
 | CRITICAL | `gemini-2.5-pro` | Gemini |
 
 > Tier lokal dibedakan **per kapasitas model** — makin sulit case, makin mampu model (gemma4:e4b ringan → deepseek-r1 → qwen3.5:9b paling mampu lokal). Fallback chain mengikuti urutan yang sama. `MODELS` adalah **default**; user bisa mengubah peta tier→model lewat `/router` (lihat `RouterConfigStore` di bawah) tanpa menyentuh kode.
+
+> ⚠️ **Peringatan operasional (ditemukan lewat bug report nyata):** tier COMPLEX/CRITICAL
+> secara default naik ke Gemini, tapi `_gemini()` (§ `core/llm_client.py` di bawah) **tidak
+> bisa memanggil tool sama sekali** — tak ada parameter `tools` dikirim, jadi model hanya
+> bisa menjawab teks. Bila task kompleks butuh tool (`file_write`, `code_run`, dll.), Gemini
+> akan menuliskan rencananya sebagai teks chat biasa alih-alih benar-benar memanggil tool —
+> terlihat seperti agent "macet berpikir" (approval yang seharusnya muncul tak pernah muncul,
+> karena tool tak pernah benar-benar dipanggil). Ini juga berlaku bila user memaksa override
+> manual ke Gemini di `/settings` untuk role yang butuh tool (pm/qa/dev). Sampai Gemini
+> function-calling diimplementasikan di `_gemini()`, hindari override manual ke Gemini untuk
+> task yang jelas butuh tool, atau pindahkan tier COMPLEX/CRITICAL ke Ollama/Claude lewat
+> `/router` bila akurasi tool-calling penting.
 
 ---
 

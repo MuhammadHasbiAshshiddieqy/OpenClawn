@@ -134,6 +134,8 @@ Label status: `routing` (model dipilih), `thinking` (LLM mulai), `tool` (`detail
 
 `event: done` selalu di-emit di blok `finally`, dan exception apa pun dari `agent.run()` ditangkap → `event: error` + di-log (`chat_stream_failed`). Jadi stream tidak pernah berakhir diam-diam tanpa penanda.
 
+**Heartbeat SSE** (`_with_heartbeat`, membungkus `generate()` di `/chat/stream` & `/converse/stream`): selama agent diam lama (model lokal lambat, reasoning tanpa token, tool berjalan), tak ada frame terkirim → watchdog frontend menyangka "server not responding" padahal koneksi HIDUP. Wrapper me-race event berikutnya vs timeout `_HEARTBEAT_SEC` (10s); bila timeout menang, kirim komentar SSE `: ping\n\n` lalu tunggu lagi. Parser SSE MENGABAIKAN baris komentar (tak jadi frame data), tapi kedatangannya me-reset watchdog client (`readSSE` meneruskannya sebagai `'ping'`) & menjaga koneksi hangat (proxy tak memutus idle). **Tak ada reconnect** — koneksi tak pernah putus, jadi tak ada yang perlu disambung ulang. Watchdog frontend (`STALL_MS`=25s, > 2× interval) kini hanya menyala saat beberapa heartbeat berturut hilang (lambat sungguhan) dengan teks "masih bekerja" (bukan "server tidak merespons" yang menakutkan).
+
 Frontend ([web/templates/index.html](../web/templates/index.html)) memisahkan dua jenis umpan balik:
 
 - **Action chips (persisten)** — disisipkan ke dalam kolom chat, sebelum bubble jawaban, sehingga **tertinggal sebagai jejak histori**. Untuk action bermakna: `routing`, `tool`, `fallback`, dan `error`. Urutan terbaca: user → action → action → jawaban.
@@ -182,7 +184,9 @@ Hentikan percakapan (cadangan; STOP utama lewat `AbortController.abort()` di fro
 
 #### `GET /approvals`
 
-**Daftar permintaan approval yang menunggu keputusan.**
+**Daftar permintaan approval yang menunggu keputusan.** Endpoint pendukung/introspeksi
+(mis. dashboard eksternal) — Web UI chat TIDAK melakukan polling terpisah ke endpoint
+ini (lihat catatan di bawah untuk bagaimana chat sesungguhnya menampilkan approval).
 
 Query params:
 - `session_id` (opsional) — filter per sesi
@@ -201,7 +205,23 @@ Response:
 }
 ```
 
-Dipakai Web UI untuk polling HITL — UI cek endpoint ini secara berkala dan tampilkan tombol Approve/Reject jika ada pending.
+---
+
+#### `GET /workdir/check`
+
+**Validasi live folder kerja adaptif per-sesi (§ working directory adaptif).**
+
+Query param:
+- `path` — folder yang diketik user (boleh kosong)
+
+Response:
+```json
+{"ok": true, "resolved": "/abs/path", "default": false}   // valid
+{"ok": true, "resolved": null, "default": true}           // kosong → pakai default server
+{"ok": false, "error": "Folder '...' tidak ditemukan atau tidak bisa diakses."}
+```
+
+Memakai `_validate_workdir` yang SAMA dengan jalur eksekusi (fail-closed) agar hasil UI konsisten dengan yang benar-benar dipakai. Dipanggil `chat.js` (debounced 350ms) saat user mengetik di `#workdir-input` → memberi umpan balik warna (border hijau valid / merah invalid) via kelas `.valid`/`.invalid` pada `.workdir-pick`, sehingga folder salah ketik ketahuan SEGERA, bukan gagal di tengah turn. GET → tidak butuh CSRF.
 
 ---
 
@@ -210,7 +230,7 @@ Dipakai Web UI untuk polling HITL — UI cek endpoint ini secara berkala dan tam
 **User memutuskan approve atau reject untuk tool destruktif.**
 
 Form data:
-- `approval_id` — ID approval dari `/approvals`
+- `approval_id` — ID approval
 - `decision` — `"approve"` atau `"reject"`
 
 Response:
@@ -224,6 +244,22 @@ Atau jika parameter tidak valid:
 ```
 
 Memanggil `approval_gate.resolve(approval_id, decision == "approve")` yang meng-unblock Future di `AgentLoop._execute_tool()`.
+
+**Bagaimana chat SESUNGGUHNYA menampilkan approval (§ chat approval UI):** sebelumnya
+`GET /approvals` didokumentasikan sebagai "dipolling Web UI", tapi `chat.js` sama sekali
+tidak pernah memanggilnya — setiap tool `requires_approval=True` selalu timeout diam-diam
+setelah `approval_timeout_sec` karena tak ada tombol Approve/Reject di mana pun. Perbaikan:
+`AgentLoop` kini men-generate `approval_id` **sebelum** memanggil `ApprovalGate.request()`
+(yang blocking) dan meng-emit `AgentEvent(type="status", text="approval", approval_id=...)`
+lewat SSE (`event: status` di `/chat/stream` & `/converse/stream`, field `approval_id`
+disertakan di payload JSON). `chat.js` (`appendApprovalCard`) merender kartu dengan tombol
+Approve/Reject yang langsung `POST /approve` dengan ID tersebut — begitu diklik, Future yang
+sedang ditunggu `ApprovalGate.request()` ter-resolve dan stream lanjut, tanpa perlu menunggu
+timeout. Kartu memisahkan `detail` (`tool_name(param)`) jadi nama tool + baris parameter
+tersendiri (user melihat JELAS path/command yang akan dijalankan sebelum setuju), dengan
+aksen amber berdenyut selama pending (`.approval-pending`, § `chat.css`) yang berhenti &
+berubah warna sesuai keputusan. Endpoint `GET /approvals` tetap ada sebagai introspeksi
+read-only, bukan jalur utama.
 
 ---
 
@@ -301,6 +337,20 @@ Template: `web/templates/conversations.html`
 Membaca 50 percakapan terakhir dari tabel `conversations` (diisi `ConversationOrchestrator._persist`). Tiap entri `<details>` menampilkan pattern, peserta, jumlah giliran, alasan akhir, biaya, dan transkrip penuh `[[role, content], ...]`. Read-only.
 
 Context: `conversations` — list dict `{pattern, participants, initial_message, transcript, turns, end_reason, cost_usd, created_at}`.
+
+---
+
+#### `GET /workspace/download`
+
+**Unduh file yang ditulis agent** (`?path=` relatif ke workspace). Dibatasi ke
+`CONFIG.workspace_root` lewat guard yang sama dipakai tool file (`resolve_in_workspace`,
+`infra/workspace.py`) — path traversal (`../`), path absolut di luar workspace, atau
+symlink yang keluar workspace semuanya ditolak. Path tak ditemukan, di luar workspace,
+atau menunjuk direktori → 404 seragam (tidak membedakan alasan ke client, agar tak
+membocorkan struktur filesystem di luar workspace). Dipicu dari chip download di chat
+(lihat `AgentEvent(type="file_created")` — `core/agent_loop.py` — dan `chat.js`
+`appendFileDownload()`), muncul otomatis tiap kali tool penulis file (`file_write`,
+`file_edit`, `file_append`, `apply_patch`, `doc_write`, `pdf_write`) sukses.
 
 ---
 

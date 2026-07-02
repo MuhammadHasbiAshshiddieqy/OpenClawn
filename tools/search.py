@@ -7,7 +7,7 @@ host, lebih mudah dipanggil model lokal ketimbang menyusun perintah `find`/`grep
 import re
 
 from infra.config import CONFIG
-from infra.workspace import WorkspaceViolation, resolve_in_workspace
+from infra.workspace import WorkspaceViolation, resolve_in_current_workspace
 from tools.base import Tool
 
 MAX_GLOB_RESULTS = 200
@@ -38,8 +38,8 @@ class GlobTool(Tool):
         if not pattern:
             return {"error": "pattern wajib diisi (mis. '*.py' atau '**/test_*.py')"}
         try:
-            root = resolve_in_workspace(".", CONFIG.workspace_root)
-            base = resolve_in_workspace(sub, CONFIG.workspace_root) if sub else root
+            root = resolve_in_current_workspace(".", CONFIG.workspace_root)
+            base = resolve_in_current_workspace(sub, CONFIG.workspace_root) if sub else root
         except WorkspaceViolation as e:
             return {"error": str(e)}
 
@@ -92,8 +92,8 @@ class GrepTool(Tool):
         except re.error as e:
             return {"error": f"Regex tidak valid: {e}"}
         try:
-            root = resolve_in_workspace(".", CONFIG.workspace_root)
-            _ = resolve_in_workspace(sub, CONFIG.workspace_root) if sub else root
+            root = resolve_in_current_workspace(".", CONFIG.workspace_root)
+            _ = resolve_in_current_workspace(sub, CONFIG.workspace_root) if sub else root
         except WorkspaceViolation as e:
             return {"error": str(e)}
 

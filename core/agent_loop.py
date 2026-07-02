@@ -1,6 +1,7 @@
 import asyncio
 import time
 import tomllib
+import uuid
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
@@ -8,6 +9,7 @@ from infra.config import AppConfig, CONFIG
 from infra.database import DatabaseManager
 from infra.logging import log
 from infra.settings import SettingsStore
+from infra.workspace import CURRENT_WORKSPACE_ROOT
 from core.router import SmartRouter
 from core.audit import RoutingAuditor
 from core.calibration import CalibrationStore
@@ -39,6 +41,18 @@ class AgentConfig:
     # Tool yang butuh approval TIDAK dieksekusi — diantri sebagai proposal pending
     # ke approval_log untuk ditinjau user nanti. Default False (sesi interaktif biasa).
     autopilot: bool = False
+    # Working directory adaptif per-sesi (§ user request, ala Claude Code/OpenClaw):
+    # folder pilihan user untuk SESI ini, menggantikan CONFIG.workspace_root global
+    # hanya selama turn ini berjalan. None (default) → pakai CONFIG.workspace_root
+    # (perilaku lama, tak ada perubahan). Divalidasi ada & directory di web/main.py
+    # SEBELUM sampai sini (fail-closed: path tak valid tak pernah masuk ContextVar).
+    workspace_override: str | None = None
+    # Persist & muat ulang riwayat percakapan per-sesi dari DB (session_turns).
+    # True (default) untuk single-agent chat: request web berikutnya (AgentLoop baru)
+    # memuat kembali turn sebelumnya → agent ingat konteks (§ user report). False untuk
+    # multi-agent: strategy sudah membangun transkrip sendiri di turn_input, memuat DB
+    # akan menduplikasi & mencampur giliran antar-role dalam satu session_id.
+    persist_history: bool = True
 
 
 @dataclass
@@ -54,12 +68,20 @@ class AgentEvent:
     label singkat untuk status, `detail` opsional (mis. nama model/tool).
     `type="usage"` → ringkasan biaya turn (tokens/cost/latency) di akhir run,
     dipakai conversation untuk mengagregasi total lintas-giliran.
+    `type="file_created"` → tool penulis file (`_FILE_WRITE_TOOLS`) sukses;
+    `text` = path file (dalam workspace) agar UI menampilkan link download
+    (`GET /workspace/download?path=...`).
+    `type="status", text="approval"` → tool butuh persetujuan manusia SEDANG
+    menunggu; `approval_id` dipakai UI untuk kirim `POST /approve` (Approve/Reject)
+    tanpa harus menunggu `approval_timeout_sec` (dulu: tak ada cara approve dari UI
+    chat, semua tool butuh-approval selalu timeout).
     """
 
     type: str
     text: str = ""
     detail: str = ""
     usage: dict | None = None
+    approval_id: str | None = None
 
 
 @dataclass
@@ -73,6 +95,13 @@ class Turn:
     cost_usd: float = 0.0
     latency_ms: int = 0
     fallback_used: bool = False
+
+
+# Tool yang menulis/menimpa file di workspace — sukses dari salah satu ini memicu
+# AgentEvent(type="file_created") agar UI bisa menawarkan link download.
+_FILE_WRITE_TOOLS = frozenset(
+    {"file_write", "file_edit", "file_append", "apply_patch", "doc_write", "pdf_write"}
+)
 
 
 def _format_tool_params(tool_name: str, params: dict) -> str:
@@ -93,6 +122,30 @@ def _format_tool_params(tool_name: str, params: dict) -> str:
             val = "…" + val[-57:]
         return f"{tool_name}({val})"
     return tool_name
+
+
+def _format_tool_result(tool_name: str, result: dict) -> str:
+    """Ubah hasil tool jadi teks yang JELAS untuk model, bukan repr dict Python.
+
+    Model lokal kecil (Gemma, DeepSeek) sering tak mengenali `{'ok': True, ...}`
+    sebagai "sukses, selesai" lalu mengulang panggilan (§ user report: menulis file
+    berulang). Kalimat eksplisit sukses/gagal + instruksi "jangan ulangi" jauh lebih
+    mudah dipatuhi. Fallback ke str(result) untuk bentuk tak terduga.
+    """
+    if not isinstance(result, dict):
+        return str(result)
+    if result.get("error"):
+        return f"ERROR: {result['error']}"
+    if tool_name in _FILE_WRITE_TOOLS and result.get("ok") and result.get("path"):
+        # Sinyal terminal yang tegas: file sudah ditulis, JANGAN tulis ulang.
+        return (
+            f"SUCCESS: file written to {result['path']} "
+            f"({result.get('bytes', result.get('appended', result.get('replacements', 0)))} bytes). "
+            "The file is now saved. Do NOT write it again — report completion to the user."
+        )
+    if result.get("ok"):
+        return "SUCCESS: " + ", ".join(f"{k}={v}" for k, v in result.items() if k != "ok")
+    return str(result)
 
 
 def _validate_tool_input(tool, input_data: dict) -> str | None:
@@ -218,6 +271,23 @@ class AgentLoop:
             return self.history
 
     async def run(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
+        # Working directory adaptif (§ user request): kalau user mengisi folder
+        # kerja untuk sesi ini, tool file/shell/git memakainya lewat ContextVar
+        # (bukan CONFIG.workspace_root global) untuk SELURUH turn ini. Token
+        # di-reset di finally agar tak "bocor" ke request lain yang berbagi loop
+        # event yang sama (contextvars per-Task, tapi reset eksplisit tetap lebih aman
+        # daripada mengandalkan garbage collection Task).
+        ws_token = None
+        if self.cfg.workspace_override:
+            ws_token = CURRENT_WORKSPACE_ROOT.set(self.cfg.workspace_override)
+        try:
+            async for ev in self._run(user_message):
+                yield ev
+        finally:
+            if ws_token is not None:
+                CURRENT_WORKSPACE_ROOT.reset(ws_token)
+
+    async def _run(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         start = time.monotonic()
 
         # 0. Guardrails — INPUT rails (ala NeMo). Lapisan kosmetik, BUKAN pertahanan
@@ -250,6 +320,16 @@ class AgentLoop:
 
         # 2. Load skill aktif (belum decayed) [#2]
         active_skills = await self.decay.get_active_skills(query=user_message)
+
+        # 2b. Muat riwayat percakapan SESI INI dari DB ke self.history (§ user report:
+        # agent seolah tak pernah baca chat sebelumnya, bahkan di sesi yang sama).
+        # AgentLoop dibuat baru tiap request web → self.history kosong; tanpa ini
+        # build() hanya melihat system + pesan baru, jadi "Mana file-nya?" tak punya
+        # rujukan. Muat hanya bila history di-memori masih kosong (hindari duplikasi
+        # bila loop yang sama dipakai ulang untuk >1 turn, mis. di test/CLI).
+        if self.cfg.persist_history and not self.history:
+            past = await self.memory.load_turns(limit=self.config.session_history_turns)
+            self.history = [Turn(role=t["role"], content=t["content"]) for t in past]
 
         # 3. Memory context (+ profil user I5 bila diaktifkan)
         memory_ctx = await self.memory.load_context(user_message, active_skills)
@@ -331,6 +411,13 @@ class AgentLoop:
         turn.cost_usd = route.cost_per_1k * (turn.tokens_in + turn.tokens_out) / 1000
         self.history.append(Turn(role="user", content=user_message))
         self.history.append(turn)
+        # Persist giliran sesi INI ke DB agar request BERIKUTNYA (AgentLoop baru)
+        # dapat memuatnya kembali (§ user report: konteks percakapan hilang). Simpan
+        # setelah guardrail OUTPUT agar transkrip = versi teredaksi, bukan teks asli.
+        # Hanya single-agent (persist_history); multi-agent kelola transkrip sendiri.
+        if self.cfg.persist_history:
+            await self.memory.append_turn("user", user_message)
+            await self.memory.append_turn("assistant", turn.content)
         await self.auditor.finalize(event_id, turn)
 
         # Ringkasan biaya turn → UI (conversation mengagregasi lintas-giliran).
@@ -375,6 +462,14 @@ class AgentLoop:
         # injeksi peringatan ke context agar model tidak stuck looping.
         last_call: tuple[str, str] | None = None
         repeat_count = 0
+        # Deteksi loop KEDUA, lebih longgar (§ user report: approval berkali-kali
+        # untuk task simpel): model kadang menulis ULANG file yang SAMA dengan isi
+        # SEDIKIT beda tiap kali (whitespace/newline) — deteksi input-identik di atas
+        # tak pernah kena karena call_key selalu "beda". Untuk tool penulis file,
+        # tool+path yang sama berturut-turut ≥3× dalam SATU turn sudah cukup
+        # mencurigakan (menulis file yang sama berulang bukan alur kerja normal).
+        last_write_target: tuple[str, str] | None = None
+        write_repeat_count = 0
 
         while hop <= self.config.max_tool_hops:
             pending_tool = None
@@ -425,26 +520,109 @@ class AgentLoop:
                 repeat_count = 0
             last_call = call_key
 
+            # Deteksi loop kedua (path sama, konten boleh beda) — hanya untuk tool
+            # penulis file, karena menulis file BERBEDA berulang (mis. banyak file
+            # dalam satu turn) adalah pola normal & tak boleh kena ini.
+            if pending_tool.tool_name in _FILE_WRITE_TOOLS:
+                write_target = (
+                    pending_tool.tool_name,
+                    str(pending_tool.tool_input.get("path", "")),
+                )
+                if write_target == last_write_target and write_target[1]:
+                    write_repeat_count += 1
+                    # Menulis path yang SAMA dua kali berturut-turut sudah cukup
+                    # mencurigakan (menulis ulang file identik bukan alur kerja normal).
+                    # Sebelumnya ≥3 — terlalu longgar, "hello world" pun ditulis 4×.
+                    if write_repeat_count >= 1:
+                        log.warning(
+                            "tool_loop_detected_same_path",
+                            tool=pending_tool.tool_name,
+                            path=write_target[1],
+                            repeat=write_repeat_count + 1,
+                            session=self.cfg.session_id,
+                        )
+                        yield AgentEvent(
+                            type="status",
+                            text="loop_stopped",
+                            detail=pending_tool.tool_name,
+                        )
+                        break  # hard stop — menulis path yang sama berulang kali
+                else:
+                    write_repeat_count = 0
+                last_write_target = write_target
+
             # ask_user menunggu input manusia → beri tahu UI agar memunculkan kotak
             # jawaban (detail = teks pertanyaan), bukan sekadar chip "tool".
+            approval_id = None
+            tool_obj = TOOL_REGISTRY.get(pending_tool.tool_name)
             if pending_tool.tool_name == "ask_user":
                 question = str(pending_tool.tool_input.get("question", "")).strip()
                 yield AgentEvent(type="status", text="question", detail=question)
+            elif tool_obj and tool_obj.requires_approval and not self.cfg.autopilot:
+                # Tool butuh approval manusia → pre-generate ID SEBELUM memanggil
+                # _execute_tool (yang akan blocking menunggu Future) agar UI dapat
+                # ID-nya lebih dulu dan bisa memasang tombol Approve/Reject sementara
+                # request masih menunggu (dulu: UI tak tahu apa-apa sampai timeout).
+                approval_id = uuid.uuid4().hex
+                param_preview = _format_tool_params(pending_tool.tool_name, pending_tool.tool_input)
+                yield AgentEvent(
+                    type="status", text="approval", detail=param_preview, approval_id=approval_id
+                )
             else:
                 # Status: tool akan dijalankan — tampilkan nama tool + parameter utamanya
                 # agar user bisa lihat path/command apa yang sedang dijelajahi.
                 param_preview = _format_tool_params(pending_tool.tool_name, pending_tool.tool_input)
                 yield AgentEvent(type="status", text="tool", detail=param_preview)
-            result = await self._execute_tool(pending_tool.tool_name, pending_tool.tool_input)
+            result = await self._execute_tool(
+                pending_tool.tool_name, pending_tool.tool_input, approval_id=approval_id
+            )
             turn.tool_calls.append(
                 {"name": pending_tool.tool_name, "input": pending_tool.tool_input}
             )
+            # Tool yang menulis file & berhasil → beri UI cara mengunduhnya (§ user
+            # request: "file harusnya bisa di-download"). Hanya `ok=True` dengan
+            # `path` yang dilaporkan tool itu sendiri (bukan input mentah model —
+            # path bisa saja di-resolve/berubah oleh workspace guard).
+            if (
+                pending_tool.tool_name in _FILE_WRITE_TOOLS
+                and isinstance(result, dict)
+                and result.get("ok")
+                and result.get("path")
+            ):
+                yield AgentEvent(type="file_created", text=str(result["path"]))
+            # Tulis KEMBALI giliran tool ke messages: (1) assistant yang MEMANGGIL tool,
+            # (2) hasil tool. Sebelumnya HANYA hasil yang di-append — model (terutama
+            # Gemma/DeepSeek lokal) tak melihat rekaman bahwa IA sendiri sudah memanggil
+            # tool, jadi ia memanggil ULANG tool yang sama (§ user report: "terus menerus
+            # write file"). Dengan giliran assistant+tool_call di history, model tahu
+            # aksi sudah dilakukan & hasilnya, lalu lanjut ke jawaban akhir. Format
+            # tool_calls Ollama/OpenAI-compatible; provider lain mengabaikan field asing.
             messages.append(
-                {"role": "tool", "name": pending_tool.tool_name, "content": str(result)}
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": pending_tool.tool_name,
+                                "arguments": pending_tool.tool_input,
+                            }
+                        }
+                    ],
+                }
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "name": pending_tool.tool_name,
+                    "content": _format_tool_result(pending_tool.tool_name, result),
+                }
             )
             hop += 1
 
-    async def _execute_tool(self, name: str, input_data: dict) -> dict:
+    async def _execute_tool(
+        self, name: str, input_data: dict, approval_id: str | None = None
+    ) -> dict:
         tool = TOOL_REGISTRY.get(name)
         if not tool:
             return {"error": f"Tool '{name}' tidak ditemukan"}
@@ -495,7 +673,9 @@ class AgentLoop:
                         "Lanjutkan tanpa hasil aksi ini."
                     ),
                 }
-            approved = await self.approval.request(self.cfg.session_id, name, input_data)
+            approved = await self.approval.request(
+                self.cfg.session_id, name, input_data, approval_id=approval_id
+            )
             if not approved:
                 return {"error": f"Tool '{name}' ditolak oleh user"}
 

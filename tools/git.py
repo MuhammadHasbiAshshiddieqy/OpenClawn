@@ -10,6 +10,7 @@ mencegah injeksi opsi git arbitrer.
 import shlex
 
 from infra.config import CONFIG
+from infra.workspace import effective_workspace_root
 from tools.base import Tool
 from tools.sandbox import DockerSandbox, SandboxUnavailable
 
@@ -29,7 +30,9 @@ class _GitToolBase(Tool):
         # `git -C /work` memastikan operasi di workspace yang dimount read-only.
         command = f"git -C /work {git_args}"
         try:
-            result = await self.sandbox.run_shell(command, CONFIG.workspace_root)
+            result = await self.sandbox.run_shell(
+                command, effective_workspace_root(CONFIG.workspace_root)
+            )
         except SandboxUnavailable as e:
             return {"error": f"{e}. Git tools butuh Docker; tidak jalan di host."}
         # Workspace tanpa .git → git keluar non-zero; ubah jadi pesan jelas.

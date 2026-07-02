@@ -1,13 +1,16 @@
+import asyncio
 import json
 import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncGenerator, AsyncIterator
 from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
@@ -39,6 +42,7 @@ from infra.database import DatabaseManager
 from infra.i18n import LOCALES, translator
 from infra.logging import log, setup_logging
 from infra.settings import KNOWN_MODELS, SettingsStore
+from infra.workspace import WorkspaceViolation, resolve_in_workspace
 from security.approval import ApprovalGate
 from security.auth import (
     SESSION_COOKIE,
@@ -138,6 +142,61 @@ def available_roles() -> list[str]:
     known = [r for r in _ROLE_ORDER if r in found]
     extra = sorted(found - set(known))
     return known + extra
+
+
+def _validate_workdir(raw: str) -> tuple[str | None, str | None]:
+    """Validasi folder kerja pilihan user (§ working directory adaptif) SEBELUM
+    dipakai sebagai workspace_override — fail-closed: path tak lolos TIDAK PERNAH
+    diteruskan ke AgentConfig/ContextVar. Return (resolved_path, None) bila valid,
+    (None, error_message) bila tidak. Sengaja permisif soal LOKASI (user boleh pilih
+    folder mana pun di mesinnya sendiri, ini kebalikan dari resolve_in_workspace yang
+    membatasi ke SATU root) — hanya mengecek path itu benar-benar ada & direktori,
+    agar tool tak gagal aneh di tengah turn karena folder salah ketik/tak ada.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None, None  # kosong = tak ada override, bukan error
+    try:
+        p = Path(raw).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None, f"Folder '{raw}' tidak ditemukan atau tidak bisa diakses."
+    if not p.is_dir():
+        return None, f"'{raw}' bukan direktori."
+    return str(p), None
+
+
+# Heartbeat SSE: selama agent diam lama (model lokal lambat, reasoning tanpa token,
+# tool berjalan), tak ada frame terkirim → watchdog frontend menyangka "server not
+# responding" padahal koneksi HIDUP & agent masih bekerja (§ user report: "diam
+# sebelum selesai"). Kirim komentar SSE (`: ping`) tiap interval sebagai keepalive:
+# parser SSE MENGABAIKAN baris komentar (tak jadi frame data), tapi kedatangannya
+# me-reset watchdog client & menjaga koneksi hangat (proxy tak memutus idle).
+_HEARTBEAT_SEC = 10.0
+
+
+async def _with_heartbeat(
+    events: AsyncIterator[str], interval: float = _HEARTBEAT_SEC
+) -> AsyncGenerator[str, None]:
+    """Bungkus generator frame SSE: sisipkan `: ping` bila diam > `interval`.
+
+    Merace event berikutnya vs timeout. Timeout menang → yield ping (koneksi hidup),
+    lalu tunggu lagi. Event datang → teruskan apa adanya. Selesai saat sumber habis.
+    Fail-safe: exception dari sumber diteruskan (ditangani caller seperti biasa).
+    """
+    ait = events.__aiter__()
+    while True:
+        nxt = asyncio.ensure_future(ait.__anext__())
+        while True:
+            try:
+                frame = await asyncio.wait_for(asyncio.shield(nxt), timeout=interval)
+            except asyncio.TimeoutError:
+                # Belum ada event dalam `interval` detik → keepalive, terus tunggu.
+                yield ": ping\n\n"
+                continue
+            except StopAsyncIteration:
+                return
+            break
+        yield frame
 
 
 async def _ui_ctx(page: str = "", request: Request | None = None) -> dict:
@@ -417,14 +476,22 @@ async def chat_stream(request: Request):
     if not message:
         return HTMLResponse("")
 
+    # Working directory adaptif (§ user request): folder pilihan user untuk sesi
+    # ini, divalidasi SEBELUM masuk AgentConfig (fail-closed — lihat _validate_workdir).
+    workdir, workdir_err = _validate_workdir(form.get("workdir", ""))
+
     agent = AgentLoop(
-        AgentConfig(role=role, session_id=session_id),
+        AgentConfig(role=role, session_id=session_id, workspace_override=workdir),
         db=db,
         approval=approval_gate,
         question_gate=question_gate,
     )
 
     async def generate():
+        if workdir_err:
+            yield f"event: error\ndata: {json.dumps({'text': workdir_err})}\n\n"
+            yield "event: done\ndata: [DONE]\n\n"
+            return
         # Protokol SSE bernama: frontend membedakan `token` (isi jawaban) dari
         # `status` (proses berjalan: routing/thinking/tool/fallback) agar user
         # tahu agent sedang apa. `error`/`done` menandai akhir stream.
@@ -438,7 +505,13 @@ async def chat_stream(request: Request):
                 elif event.type == "thinking":
                     yield f"event: thinking\ndata: {json.dumps(event.text)}\n\n"
                 elif event.type == "status":
-                    payload = json.dumps({"text": event.text, "detail": event.detail})
+                    payload = json.dumps(
+                        {
+                            "text": event.text,
+                            "detail": event.detail,
+                            "approval_id": event.approval_id,
+                        }
+                    )
                     yield f"event: status\ndata: {payload}\n\n"
                 elif event.type == "usage":
                     # Ringkasan turn termasuk meter budget token (context vs max, §1.4).
@@ -447,6 +520,10 @@ async def chat_stream(request: Request):
                     # Output rail menandai respons (blocked/redacted) — UI bisa rerender.
                     payload = json.dumps({"text": event.text, "detail": event.detail})
                     yield f"event: guardrail\ndata: {payload}\n\n"
+                elif event.type == "file_created":
+                    # Tool penulis file sukses → UI menampilkan link download
+                    # (GET /workspace/download, dibatasi ke workspace_root).
+                    yield f"event: file_created\ndata: {json.dumps(event.text)}\n\n"
         except Exception as exc:  # noqa: BLE001 — laporkan ke UI, jangan diam saat macet
             log.error("chat_stream_failed", session=session_id, error=str(exc))
             msg = json.dumps({"text": str(exc)})
@@ -455,7 +532,7 @@ async def chat_stream(request: Request):
             yield "event: done\ndata: [DONE]\n\n"
 
     return StreamingResponse(
-        generate(),
+        _with_heartbeat(generate()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -474,6 +551,13 @@ async def converse_stream(request: Request):
     if not message:
         return HTMLResponse("")
 
+    # Working directory adaptif (§ user request) — sama seperti /chat/stream.
+    workdir, workdir_err = _validate_workdir(form.get("workdir", ""))
+    if workdir_err:
+        return HTMLResponse(
+            f"event: error\ndata: {json.dumps({'text': workdir_err})}\n\nevent: done\ndata: [DONE]\n\n"
+        )
+
     try:
         strategy = make_strategy(pattern, participants, rounds, CONFIG)
     except ValueError as e:
@@ -485,7 +569,15 @@ async def converse_stream(request: Request):
 
     def agent_factory(role: str) -> AgentLoop:
         return AgentLoop(
-            AgentConfig(role=role, session_id=session_id),
+            # persist_history=False: multi-agent membangun transkrip sendiri di
+            # turn_input (strategy). Memuat/menyimpan session_turns akan menduplikasi
+            # & mencampur giliran antar-role dalam satu session_id.
+            AgentConfig(
+                role=role,
+                session_id=session_id,
+                workspace_override=workdir,
+                persist_history=False,
+            ),
             db=db,
             approval=approval_gate,
             question_gate=question_gate,
@@ -514,11 +606,21 @@ async def converse_stream(request: Request):
                     payload = json.dumps({"role": ev.role, "text": ev.text})
                     yield f"event: thinking\ndata: {payload}\n\n"
                 elif ev.type == "status":
-                    payload = json.dumps({"role": ev.role, "text": ev.text, "detail": ev.detail})
+                    payload = json.dumps(
+                        {
+                            "role": ev.role,
+                            "text": ev.text,
+                            "detail": ev.detail,
+                            "approval_id": ev.approval_id,
+                        }
+                    )
                     yield f"event: status\ndata: {payload}\n\n"
                 elif ev.type == "conversation_end":
                     end = {"reason": ev.detail, "usage": ev.usage}
                     yield f"event: conversation_end\ndata: {json.dumps(end)}\n\n"
+                elif ev.type == "file_created":
+                    payload = json.dumps({"role": ev.role, "text": ev.text})
+                    yield f"event: file_created\ndata: {payload}\n\n"
         except Exception as exc:  # noqa: BLE001 — laporkan ke UI, jangan diam
             log.error("converse_stream_failed", session=session_id, error=str(exc))
             yield f"event: error\ndata: {json.dumps({'text': str(exc)})}\n\n"
@@ -527,7 +629,7 @@ async def converse_stream(request: Request):
             yield "event: done\ndata: [DONE]\n\n"
 
     return StreamingResponse(
-        generate(),
+        _with_heartbeat(generate()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -562,6 +664,23 @@ async def converse_stop(request: Request):
 async def approvals(session_id: str | None = None):
     """Daftar approval yang menunggu keputusan — dipakai Web UI untuk polling HITL."""
     return {"pending": approval_gate.pending_list(session_id)}
+
+
+@app.get("/workdir/check")
+async def workdir_check(path: str = ""):
+    """Validasi folder kerja pilihan user secara live (§ working directory adaptif).
+
+    Dipanggil UI saat user mengetik path agar dapat umpan balik segera (valid /
+    tidak ada / bukan direktori) — bukan baru tahu gagal di tengah turn. Memakai
+    _validate_workdir yang SAMA dengan jalur eksekusi (fail-closed), jadi hasil di
+    UI konsisten dengan yang benar-benar dipakai. Kosong = pakai default server.
+    """
+    resolved, err = _validate_workdir(path)
+    if err:
+        return {"ok": False, "error": err}
+    if resolved is None:
+        return {"ok": True, "resolved": None, "default": True}
+    return {"ok": True, "resolved": resolved, "default": False}
 
 
 @app.post("/approve")
@@ -737,6 +856,25 @@ async def skills_apply_merge(request: Request):
         )
         log.info("skill_merge_applied", role=role, **result)
     return RedirectResponse(url="/skills", status_code=303)
+
+
+@app.get("/workspace/download")
+async def workspace_download(path: str):
+    """Unduh file yang ditulis agent ke workspace (§ user request: file harus bisa diunduh).
+
+    Dibatasi ke `workspace_root` lewat guard yang sama dipakai tool file_write
+    (`resolve_in_workspace`) — tidak ada jalur tambahan untuk keluar workspace
+    (path traversal, symlink) selain apa yang sudah dijaga di sana. Path tak
+    ditemukan atau di luar workspace → 404 (tidak membedakan alasan ke client,
+    hindari membocorkan struktur filesystem di luar workspace).
+    """
+    try:
+        safe = resolve_in_workspace(path, CONFIG.workspace_root)
+    except WorkspaceViolation:
+        raise StarletteHTTPException(status_code=404, detail="File tidak ditemukan")
+    if not safe.is_file():
+        raise StarletteHTTPException(status_code=404, detail="File tidak ditemukan")
+    return FileResponse(safe, filename=safe.name)
 
 
 @app.get("/skills/export")

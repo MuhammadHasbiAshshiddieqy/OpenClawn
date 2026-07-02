@@ -7,7 +7,7 @@ openpyxl, reportlab) — pengecualian dependency yang disetujui owner, lihat CLA
 from pypdf import PdfReader
 
 from infra.config import CONFIG
-from infra.workspace import WorkspaceViolation, resolve_in_workspace
+from infra.workspace import WorkspaceViolation, resolve_in_current_workspace
 from tools.base import Tool
 
 MAX_PDF_CHARS = CONFIG.tool_max_output
@@ -25,7 +25,7 @@ class PdfReadTool(Tool):
         if not path:
             return {"error": "path wajib diisi"}
         try:
-            safe = resolve_in_workspace(path, CONFIG.workspace_root)
+            safe = resolve_in_current_workspace(path, CONFIG.workspace_root)
         except WorkspaceViolation as e:
             return {"error": str(e)}
         if not safe.exists():
@@ -99,7 +99,7 @@ class DocWriteTool(Tool):
         if fmt not in DOC_FORMATS:
             return {"error": f"format harus salah satu: {', '.join(sorted(DOC_FORMATS))}"}
         try:
-            safe = resolve_in_workspace(path, CONFIG.workspace_root)
+            safe = resolve_in_current_workspace(path, CONFIG.workspace_root)
         except WorkspaceViolation as e:
             return {"error": str(e)}
 
@@ -247,7 +247,7 @@ class PdfWriteTool(Tool):
         if not isinstance(content, dict):
             return {"error": "content harus objek {title, sections}"}
         try:
-            safe = resolve_in_workspace(path, CONFIG.workspace_root)
+            safe = resolve_in_current_workspace(path, CONFIG.workspace_root)
         except WorkspaceViolation as e:
             return {"error": str(e)}
 

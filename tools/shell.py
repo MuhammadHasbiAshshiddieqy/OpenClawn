@@ -1,5 +1,9 @@
 from infra.config import CONFIG
-from infra.workspace import WorkspaceViolation, resolve_in_workspace
+from infra.workspace import (
+    WorkspaceViolation,
+    effective_workspace_root,
+    resolve_in_current_workspace,
+)
 from tools.base import Tool
 from tools.sandbox import DockerSandbox, SandboxUnavailable
 
@@ -27,7 +31,9 @@ class ShellRunTool(Tool):
         if len(command) > MAX_CMD_LEN:
             return {"error": f"command terlalu panjang (maks {MAX_CMD_LEN} karakter)"}
         try:
-            return await self.sandbox.run_shell(command, CONFIG.workspace_root)
+            return await self.sandbox.run_shell(
+                command, effective_workspace_root(CONFIG.workspace_root)
+            )
         except SandboxUnavailable as e:
             # Fail-safe: tidak ada Docker → tidak menjalankan apa pun di host.
             return {"error": f"{e}. shell_run butuh Docker dan tidak akan jalan di host."}
@@ -64,7 +70,7 @@ class ListDirTool(Tool):
     async def execute(self, input_data: dict, vault, db=None) -> dict:
         path = (input_data.get("path") or ".").strip()
         try:
-            p = resolve_in_workspace(path, CONFIG.workspace_root)
+            p = resolve_in_current_workspace(path, CONFIG.workspace_root)
         except WorkspaceViolation as e:
             return {"error": str(e)}
 
