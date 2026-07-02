@@ -5,6 +5,80 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 [SemVer](https://semver.org/). Versi 0.7.0 menandai keluarnya dari fase
 pre-release (`-alpha`) menjadi rilis stabil pertama.
 
+## [0.11.0] — 2026-07-02
+
+Rilis otonomi & riwayat chat: agent butuh lebih sedikit approval untuk aksi
+yang sudah aman lewat sandbox, bisa pindah folder lewat percakapan, dan chat
+tidak lagi reset saat reload. Ditambah dua bug fix dari laporan pengguna
+langsung. Semua backward-compatible, tanpa dependency baru.
+
+### Added — Trust mode & shell_run tanpa approval
+`shell_run` tak lagi `requires_approval` — Docker sandbox (`--network none`,
+`--read-only`, non-root) sudah jadi pertahanan nyata; approval di sini cuma
+gesekan. `code_run` TETAP selalu approval (CLAUDE.md §1, tidak bisa ditawar).
+- **`tools/shell.py`** — `requires_approval = False`.
+- **`core/agent_loop.py`** — `AgentConfig.trust_mode` (toggle per-sesi, tidak
+  persist antar reload) + `_TRUST_MODE_EXEMPT = frozenset({"code_run"})`
+  dicek di DUA titik (emit status UI & eksekusi) — defense-in-depth agar bug
+  di satu titik saja tak membuka celah `code_run` lolos tanpa approval.
+- **`security/approval.py`** — `auto_approve()` untuk jalur trust mode.
+- **Web UI** — toggle "Trust mode" di mode-bar, badge "trusted" di kartu tool.
+
+### Added — Pindah folder kerja lewat chat (persist sepanjang sesi)
+Sebelumnya folder kerja per-sesi hanya bisa diubah lewat field UI (v0.10.0).
+Kini agent bisa pindah folder saat diminta di tengah percakapan, dan
+perubahan itu bertahan untuk sisa sesi — bukan cuma giliran saat itu.
+- **`tools/workspace_tool.py`** (`SetWorkdirTool`, baru) + **`infra/workspace.py`**
+  (`SessionWorkspaceStore`) + tabel **`session_workspace`** (baru).
+- **`core/agent_loop.py`** — `run()` memuat override tersimpan dari DB saat
+  `workspace_override` kosong, bukan hanya dari parameter per-request.
+- Ditambahkan ke `allowed` tools semua role + instruksi soul.toml.
+
+### Added — Riwayat chat: sidebar, sesi baru, lanjutkan, hapus
+Sebelumnya `session_id` di-generate ulang tiap render halaman → chat selalu
+"reset". Kini sesi bertahan lintas reload dan bisa dikelola dari UI.
+- **`infra/chat_sessions.py`** (`ChatSessionStore`, baru) + tabel
+  **`chat_sessions`** (baru). Judul dibuat LLM ringan dari 20 kata awal + 10
+  kata akhir pesan pertama (bukan potongan mentah — hemat token untuk pesan
+  panjang, tetap deskriptif untuk pesan tak terstruktur).
+- **`web/main.py`** — `GET /chat-sessions` (list + grouping gabungan
+  waktu×role — backend kembalikan key stabil `today`/`7d`/dst., label di
+  frontend i18n, §1.5 no hardcoded locale), `GET /chat-sessions/{id}/turns`
+  (resume), `DELETE /chat-sessions/{id}` (soft-delete `chat_sessions`,
+  hard-delete `session_turns`/`session_workspace`-nya).
+- **Web UI** — sidebar riwayat, tombol sesi baru, klik untuk lanjutkan,
+  hapus dengan konfirmasi. `localStorage` hanya menyimpan `session_id` aktif
+  (bukan konten chat — §6 tetap tidak ada state browser untuk data).
+
+### Added — QA bisa menyimpan test case sebagai Word/Excel/PDF
+- **`roles/qa/soul.toml`** — tambah `doc_write`/`pdf_write` ke `allowed`
+  + instruksi format→tool (sudah ada pola sama di PM/Dev).
+
+### Fixed — Error "No answer" saat generate contoh PRD (role PM)
+Direproduksi live: `gemma4:e4b` merencanakan tool call yang BENAR di dalam
+`<think>` ("Action Plan: ... Use `file_write`...") tapi stream Ollama
+berhenti *natural* (`done: true`) sebelum pernah keluar ke aksi nyata —
+BUKAN soal `max_tokens` (token keluar jauh di bawah cap lama maupun baru).
+- **`roles/pm/soul.toml`** — PRD/dokumen kini menembus tier `COMPLEX` (cloud)
+  lewat kombinasi `upgrade_keywords` + `multistep_keywords`, bukan berhenti
+  di tier lokal yang reasoning-heavy.
+- **`infra/config.py`** — `llm_max_tokens_default` (4096) /
+  `llm_max_tokens_with_tools` (8192, naik dari default umum) sebagai
+  perbaikan pendukung; terbukti lewat reproduksi TIDAK cukup sendirian.
+
+### Fixed — Indikator "sedang berpikir" selalu di paling atas chat
+`#status-line` sebelumnya nested di dalam `#chat-box` (flex-column tanpa
+scroll sendiri) sehingga `position: sticky` tak punya containing block yang
+benar terhadap scrolling ancestor (`.chat-scroll`).
+- **`web/templates/index.html`** / **`web/static/css/chat.css`** —
+  `#status-line` dipindah jadi sibling langsung `#chat-box` di dalam
+  `.chat-scroll`.
+
+### Tests
+`test_trust_mode.py`, `test_set_workdir.py`, `test_chat_sessions.py` (baru)
++ regresi routing PM (`test_pm_prd_request_routes_to_cloud_not_local_reasoning_model`,
+`test_pm_unrelated_query_still_stays_local`) — total 622 test hijau.
+
 ## [0.10.0] — 2026-07-02
 
 Rilis UX & memori: perbaikan alur chat yang membuat agent terasa "lupa" dan
