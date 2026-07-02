@@ -25,6 +25,8 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `auth_token` | `""` (kosong) | §P0 self-host auth — password shared satu-satunya user. Kosong = auth DIMATIKAN (default, aman localhost). Isi via `OPENCLAWN_AUTH_TOKEN` di `.env` untuk self-host di VPS publik. Lihat `security/auth.py` & README § Scope and Production Posture |
 | `max_context_tokens` | `28_000` | Batas token context window |
 | `max_tool_hops` | `5` | Maksimum iterasi tool loop per turn |
+| `llm_max_tokens_default` | `4096` | Cap output per hop LLM saat hop TANPA tool (`tools_schema` kosong, mis. ringkas percakapan di `_maybe_compact`) |
+| `llm_max_tokens_with_tools` | `8192` | Cap output per hop LLM saat hop BERTOOL (`tools_schema` terisi). Dinaikkan dari default setelah bug "No answer": model reasoning-heavy (Gemma `<think>`) butuh ruang lebih untuk merencanakan tool call. **Catatan investigasi:** menaikkan angka ini SENDIRIAN tidak selalu cukup — bila model berhenti *natural* (`done: true`) di tengah `<think>` sebelum sempat bertindak, itu bukan soal token habis (lihat kasus PM/PRD yang justru diperbaiki lewat routing ke tier lebih kuat, § `docs/roles.md` role `pm`) |
 | `llm_max_retries` | `3` | Retry maksimum untuk LLM transient error |
 | `approval_timeout_sec` | `120` | Detik sebelum HITL approval di-timeout (→ DENY) |
 | `decay_interval_sec` | `3600` | Throttle decay pass: minimal 1 jam antar jalan |
@@ -172,3 +174,69 @@ Murni di atas `DatabaseManager` (tabel `app_settings` key-value).
 | `set_ui_locale(locale) → None` *(async)* | Set locale UI; nilai tak dikenal/`None` → kembali ke `en` |
 
 Override dianggap aktif hanya jika **provider dan model** keduanya terisi — partial (satu saja) = tetap otomatis. Mode compaction valid: `COMPACTION_MODES = ("off","local","cloud")`.
+
+---
+
+## `infra/workspace.py`
+
+Batasi akses filesystem tool ke satu folder kerja (keamanan #1), plus folder kerja adaptif per-sesi (§ working directory adaptif + § user request "pindah direktori dinamis lewat chat").
+
+### Fungsi: `resolve_in_workspace(candidate, workspace_root) → Path`
+
+Resolve `candidate` dan pastikan tetap di dalam `workspace_root`. Me-raise `WorkspaceViolation` bila keluar (lewat `..`, absolute path, atau symlink).
+
+### Fungsi: `effective_workspace_root(config_default) → str`
+
+`CURRENT_WORKSPACE_ROOT` (ContextVar) bila diset, kalau tidak `config_default`.
+
+### Fungsi: `resolve_in_current_workspace(candidate, config_default) → Path`
+
+`resolve_in_workspace` yang root-nya ikut `effective_workspace_root` — dipakai tool file (`tools/file_ops.py` dll.) menggantikan `resolve_in_workspace(path, CONFIG.workspace_root)` langsung, agar folder kerja per-sesi otomatis terpakai tanpa mengubah signature `Tool.execute()`.
+
+### Fungsi: `validate_workdir_candidate(raw) → tuple[str | None, str | None]`
+
+Validasi folder kerja pilihan user SEBELUM dipakai sebagai workspace root — fail-closed: path tak lolos TIDAK PERNAH diteruskan ke ContextVar/DB. Return `(resolved_path, None)` bila valid, `(None, error_message)` bila tidak. Sengaja permisif soal LOKASI (user boleh pilih folder mana pun di mesinnya — kebalikan `resolve_in_workspace` yang membatasi ke SATU root) — hanya mengecek path benar-benar ada & direktori. Dipakai DUA jalur: field UI (`web/main.py` § `GET /workdir/check`, `/chat/stream`) dan tool `set_workdir` (`tools/workspace_tool.py`) — satu sumber kebenaran.
+
+### Kelas: `SessionWorkspaceStore`
+
+Folder kerja aktif per-sesi, tersimpan di DB (tabel `session_workspace`, lihat `docs/database.md`). Terpisah dari `MemoryManager` (role-scoped) agar tool `set_workdir` tak perlu import `memory/layers.py`; murni di atas `DatabaseManager`, pola sama `SettingsStore`.
+
+| Method | Keterangan |
+|---|---|
+| `get(session_id) → str \| None` *(async)* | Folder aktif sesi ini, `None` jika belum pernah diset |
+| `set(session_id, workdir) → None` *(async)* | UPSERT — satu baris per sesi, menimpa nilai lama |
+
+Dibaca `AgentLoop.run()` di awal turn (bila `workspace_override` form kosong & `persist_history=True`); ditulis `SetWorkdirTool` saat tool `set_workdir` sukses.
+
+---
+
+## `infra/chat_sessions.py`
+
+Metadata sesi chat single-agent untuk sidebar riwayat (§ user report: "chat selalu ke-reset", tak ada cara membuka chat baru/lanjutkan/hapus riwayat). Akar masalah lama: `session_id` di-generate ulang (uuid acak server) SETIAP kali halaman `/` di-load — tak pernah disimpan di browser (diperbaiki di `chat.js` via `localStorage`, lihat `docs/web.md`).
+
+### Konstanta
+
+| Nama | Nilai | Keterangan |
+|---|---|---|
+| `MAX_TITLE_CHARS` | `60` | Judul dipotong ke batas ini (dengan `…`) saat disimpan |
+| `TITLE_INPUT_HEAD_WORDS` | `20` | Kata pertama dari pesan yang dikirim ke LLM pembuat judul |
+| `TITLE_INPUT_TAIL_WORDS` | `10` | Kata terakhir dari pesan yang dikirim ke LLM pembuat judul |
+
+### Fungsi: `truncate_for_title_prompt(message: str) → str`
+
+Potong pesan jadi `head ... tail` bila melebihi `TITLE_INPUT_HEAD_WORDS + TITLE_INPUT_TAIL_WORDS` kata; dikirim utuh bila tidak (§ user request: pesan pertama bisa panjang, jangan bayar token generate judul untuk seluruh isinya — LLM kecil tetap dapat konteks AWAL dan AKHIR, karena topik kadang baru jelas di akhir paragraf). Murni fungsi string tanpa I/O.
+
+### Kelas: `ChatSessionStore`
+
+Murni di atas `DatabaseManager` (tabel `chat_sessions`, lihat `docs/database.md`).
+
+| Method | Keterangan |
+|---|---|
+| `ensure_created(session_id, role) → None` *(async)* | Daftarkan sesi baru (`INSERT OR IGNORE` — idempoten, tak menimpa title/waktu sesi yang sudah ada). Dipanggil `/chat/stream` SEBELUM turn jalan, agar sesi muncul di sidebar walau turn pertama gagal/timeout |
+| `touch(session_id) → None` *(async)* | Perbarui `updated_at` — dipanggil tiap turn (`AgentLoop._post_turn`) agar urutan sidebar (terbaru dulu) mencerminkan aktivitas terakhir |
+| `set_title(session_id, title) → None` *(async)* | Simpan judul; strip tanda kutip pembungkus (LLM kadang membungkus jawaban dengan `"..."`) & potong ke `MAX_TITLE_CHARS` |
+| `has_title(session_id) → bool` *(async)* | Cek apakah sesi sudah punya judul — gate agar generate judul hanya sekali (turn pertama) |
+| `list_active(limit=200) → list[dict]` *(async)* | Sesi belum dihapus, terbaru dulu — mentah (tak dikelompokkan; `web/main.py` § `GET /chat-sessions` yang menghitung `bucket` waktu) |
+| `soft_delete(session_id) → None` *(async)* | Hapus dari sidebar (`deleted_at` terisi — metadata tetap ada untuk audit trail), TAPI `session_turns` & `session_workspace` terkait dihapus FISIK (user minta "hapus", isi percakapan harus benar hilang) |
+
+Judul di-generate `AgentLoop._generate_session_title` (dipanggil `_post_turn` di turn pertama, gated `has_title`) via `compaction_local_model` (gemma4:e2b) — model kecil yang sama dipakai `_maybe_compact`, konsisten & gratis (lokal). Fail-safe (§1.3): LLM/parsing gagal → sesi tetap tanpa judul (sidebar fallback ke `"New chat"`), tak menjatuhkan turn.

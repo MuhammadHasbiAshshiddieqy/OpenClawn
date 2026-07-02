@@ -102,8 +102,12 @@ Form data:
 - `message` — pesan user (wajib, tidak boleh kosong)
 - `role` — role agent (default `"pm"`)
 - `session_id` — ID sesi (default UUID baru)
+- `workdir` — folder kerja adaptif per-sesi (opsional, kosong = default server). Divalidasi `_validate_workdir` — lihat `GET /workdir/check` di bawah.
+- `trust_mode` — `"true"`/`"1"`/`"on"` → aktifkan trust mode untuk turn ini (§ user request otonomi). Tool yang butuh approval (kecuali `code_run`, CLAUDE.md §1) tetap dieksekusi tanpa menunggu klik Approve/Reject. Default kosong/false = perilaku lama.
 
 Response: `StreamingResponse` dengan `media_type="text/event-stream"`.
+
+**Sidebar riwayat chat** (§ user report: chat selalu ke-reset): `generate()` mendaftarkan `session_id` ke `chat_sessions` (`ChatSessionStore.ensure_created`, idempoten) SEBELUM turn jalan — sesi muncul di sidebar walau turn pertama gagal/timeout. Judul di-generate belakangan oleh `AgentLoop._post_turn` (lihat `docs/core.md`).
 
 **Protokol SSE bernama** (named events) — frontend membedakan isi jawaban dari sinyal proses agar user tahu agent sedang apa, bukan diam karena macet:
 
@@ -130,7 +134,7 @@ event: done                            ← selalu dikirim terakhir (finally), pe
 data: [DONE]
 ```
 
-Label status: `routing` (model dipilih), `thinking` (LLM mulai), `tool` (`detail`=nama tool), `fallback` (`detail`=model), `question` (`detail`=teks pertanyaan `ask_user`). Payload `status`/`error` berupa JSON; `token` dan `thinking` adalah teks MENTAH (JSON-encoded) yang dirender markdown di frontend. Event `thinking` muncul bila model mengeluarkan reasoning (`<think>` lokal, extended-thinking Anthropic, `parts.thought` Gemini) — UI menampilkannya di blok collapsible yang auto-collapse saat token jawaban pertama tiba. Event `usage` (sekali, sebelum `done`) membawa ringkasan turn + `context_tokens`/`max_context_tokens` untuk meter budget token di footer composer; meter menguning di ≥70% dan memerah di ≥90% batas. Di `/converse/stream`, budget muncul di `conversation_end.usage.peak_context_tokens` (PEAK lintas-giliran, bukan jumlah).
+Label status: `routing` (model dipilih), `thinking` (LLM mulai), `tool` (`detail`=nama tool), `tool_trusted` (§ user request otonomi — tool yang biasanya butuh approval dieksekusi langsung karena trust mode aktif; `detail`=preview tool+parameter, badge UI "trusted" bukan kartu Approve/Reject), `fallback` (`detail`=model), `question` (`detail`=teks pertanyaan `ask_user`). Payload `status`/`error` berupa JSON; `token` dan `thinking` adalah teks MENTAH (JSON-encoded) yang dirender markdown di frontend. Event `thinking` muncul bila model mengeluarkan reasoning (`<think>` lokal, extended-thinking Anthropic, `parts.thought` Gemini) — UI menampilkannya di blok collapsible yang auto-collapse saat token jawaban pertama tiba. Event `usage` (sekali, sebelum `done`) membawa ringkasan turn + `context_tokens`/`max_context_tokens` untuk meter budget token di footer composer; meter menguning di ≥70% dan memerah di ≥90% batas. Di `/converse/stream`, budget muncul di `conversation_end.usage.peak_context_tokens` (PEAK lintas-giliran, bukan jumlah).
 
 `event: done` selalu di-emit di blok `finally`, dan exception apa pun dari `agent.run()` ditangkap → `event: error` + di-log (`chat_stream_failed`). Jadi stream tidak pernah berakhir diam-diam tanpa penanda.
 
@@ -145,13 +149,20 @@ Plus **watchdog** 20 detik: bila tak ada frame masuk dalam jendela itu → statu
 
 `AgentLoop` dibuat baru per request, tapi menerima singleton `approval_gate` agar HITL bisa berfungsi.
 
+**Sidebar riwayat chat** (`web/static/chat.js`, § user report — lihat juga `docs/infra.md` § `infra/chat_sessions.py`):
+- **`localStorage`** (`openclawn_active_session`) menyimpan `session_id` AKTIF. `restoreActiveSession()` (IIFE di awal file) membaca ini saat halaman dimuat & menimpa `form.session_id.value` (yang di-render server sebagai uuid baru tiap load) — inilah perbaikan akar masalah "chat selalu ke-reset": refresh browser TIDAK lagi memulai sesi baru.
+- **"Chat baru"** (`#new-chat-btn` → `startNewChat()`): generate `session_id` client-side baru, simpan ke localStorage, lalu `location.reload()` — reload dipilih sengaja agar state UI lain (mode select, convo config) ikut ter-reset bersih tanpa rekonstruksi DOM manual.
+- **"Lanjutkan chat"** (klik item riwayat → `loadChatSession(id)`): fetch `GET /chat-sessions/{id}/turns`, render ulang tiap giliran sebagai bubble (`userBubble`/`newAssistantBubble` yang sudah ada), lalu jadikan sesi itu aktif (`setSessionId`) — pesan berikutnya melanjutkan sesi ini via `/chat/stream` normal (tak ada endpoint khusus "lanjutkan", cukup ganti `session_id` yang dikirim).
+- **Hapus** (`deleteChatSession`): `confirm()` dulu, lalu `DELETE /chat-sessions/{id}`; bila sesi yang dihapus adalah sesi aktif → otomatis `startNewChat()`.
+- **`renderChatHistory()`**: fetch `GET /chat-sessions`, kelompokkan per `bucket` (heading, urutan tetap `today→yesterday→7d→30d→older`) lalu render tiap item dengan label kecil per `role` (dot warna, tak ada sub-heading terpisah — § user request grouping ganda tanpa berlapis-lapis). Dipanggil ulang tiap event custom `openclawn:turn-complete` (di-dispatch `runSingle` di `finally`, jadi tetap refresh meski turn error) agar sesi baru/judul yang baru selesai di-generate langsung terlihat.
+
 ---
 
 #### `POST /converse/stream`
 
 **Multi-agent conversation** — beberapa role saling mengobrol, di-stream per giliran.
 
-Form data: `message`, `pattern` (`pipeline`|`debate`|`orchestrator`), `participants` (CSV opsional), `rounds` (debate), `session_id`.
+Form data: `message`, `pattern` (`pipeline`|`debate`|`orchestrator`), `participants` (CSV opsional), `rounds` (debate), `session_id`, `workdir` (opsional), `trust_mode` (opsional — sama semantik dengan `/chat/stream`, diteruskan ke tiap `AgentConfig` yang dibuat `agent_factory`).
 
 **Semantik urutan `participants`** (penting — UI mengirim chip sesuai urutan ini):
 - `pipeline`: urutan = urutan handoff (mis. `dev,qa` → dev lalu qa).
@@ -222,6 +233,38 @@ Response:
 ```
 
 Memakai `_validate_workdir` yang SAMA dengan jalur eksekusi (fail-closed) agar hasil UI konsisten dengan yang benar-benar dipakai. Dipanggil `chat.js` (debounced 350ms) saat user mengetik di `#workdir-input` → memberi umpan balik warna (border hijau valid / merah invalid) via kelas `.valid`/`.invalid` pada `.workdir-pick`, sehingga folder salah ketik ketahuan SEGERA, bukan gagal di tengah turn. GET → tidak butuh CSRF.
+
+---
+
+#### `GET /chat-sessions`
+
+**Daftar riwayat chat untuk sidebar (§ user report: chat selalu ke-reset, tak ada cara buka chat baru/lanjutkan/hapus riwayat).**
+
+Response:
+```json
+{"sessions": [
+  {"session_id": "...", "role": "pm", "title": "Diskusi fitur baru", "created_at": "...", "updated_at": "...", "bucket": "today"},
+  ...
+]}
+```
+
+`bucket` adalah KUNCI stabil (`today`/`yesterday`/`7d`/`30d`/`older`, dihitung `_time_bucket` berbasis tanggal kalender, bukan selisih 24 jam) — BUKAN label berbahasa, agar terjemahan (§1.5) tetap di frontend (`chat.js` § `BUCKET_LABELS` memetakan ke `T.bucketToday` dst). `title` kosong (belum ter-generate, lihat `docs/core.md` § `_generate_session_title`) di-fallback `"New chat"` di response ini, bukan `NULL` mentah. Diurutkan `updated_at DESC` (terbaru dulu) — `chat.js` mengelompokkan GANDA (§ user request): heading per `bucket`, lalu label kecil per `role` di dalam tiap item (bukan sub-heading terpisah).
+
+---
+
+#### `GET /chat-sessions/{session_id}/turns`
+
+**Transkrip penuh satu sesi — dipakai UI untuk "lanjutkan" chat dari riwayat.**
+
+Response: `{"session_id": "...", "turns": [{"role": "user"|"assistant", "content": "..."}, ...]}` (urut lama→baru, via `MemoryManager.load_turns`, cap 500 giliran). Sesi tak dikenal / belum ada turn → `turns: []` (bukan 404 — konsisten dengan `load_turns` yang fail-safe kembalikan list kosong).
+
+---
+
+#### `DELETE /chat-sessions/{session_id}`
+
+**Hapus riwayat chat (§ user request).**
+
+Response: `{"ok": true}`. Soft-delete metadata sidebar (`chat_sessions.deleted_at`), TAPI transkrip (`session_turns`) & folder aktif (`session_workspace`) dihapus FISIK (`ChatSessionStore.soft_delete`) — user minta "hapus", isi percakapan harus benar hilang, bukan cuma disembunyikan dari sidebar.
 
 ---
 

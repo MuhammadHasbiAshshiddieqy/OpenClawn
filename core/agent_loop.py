@@ -5,11 +5,12 @@ import uuid
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
+from infra.chat_sessions import ChatSessionStore, truncate_for_title_prompt
 from infra.config import AppConfig, CONFIG
 from infra.database import DatabaseManager
 from infra.logging import log
 from infra.settings import SettingsStore
-from infra.workspace import CURRENT_WORKSPACE_ROOT
+from infra.workspace import CURRENT_WORKSPACE_ROOT, SessionWorkspaceStore
 from core.router import SmartRouter
 from core.audit import RoutingAuditor
 from core.calibration import CalibrationStore
@@ -53,6 +54,14 @@ class AgentConfig:
     # multi-agent: strategy sudah membangun transkrip sendiri di turn_input, memuat DB
     # akan menduplikasi & mencampur giliran antar-role dalam satu session_id.
     persist_history: bool = True
+    # Trust mode per-sesi (§ user request otonomi): manusia SEDANG hadir di chat aktif
+    # (beda dari autopilot — tanpa manusia sama sekali) dan memilih melewati klik
+    # Approve untuk tool yang membutuhkannya. Tool TETAP dieksekusi sungguhan (via
+    # ApprovalGate.auto_approve, bukan queue_proposal), hanya tercatat berbeda di
+    # audit (decision="auto:trust_mode"). `_TRUST_MODE_EXEMPT` (di bawah) tak pernah
+    # bisa dilewati toggle ini — code_run tetap SELALU approval (CLAUDE.md §1, aturan
+    # non-negotiable, tidak disentuh oleh fitur ini). Default False (perilaku lama).
+    trust_mode: bool = False
 
 
 @dataclass
@@ -102,6 +111,12 @@ class Turn:
 _FILE_WRITE_TOOLS = frozenset(
     {"file_write", "file_edit", "file_append", "apply_patch", "doc_write", "pdf_write"}
 )
+
+# Tool yang TIDAK PERNAH boleh dilewati oleh AgentConfig.trust_mode — approval-nya
+# adalah aturan keras CLAUDE.md §1 ("code_run → True selalu"), bukan preferensi tool
+# yang bisa dilonggarkan fitur otonomi. Toggle trust mode di UI tetap memblokir ini
+# ke jalur ApprovalGate.request() normal (menunggu klik manusia), sama seperti mode biasa.
+_TRUST_MODE_EXEMPT = frozenset({"code_run"})
 
 
 def _format_tool_params(tool_name: str, params: dict) -> str:
@@ -212,6 +227,10 @@ class AgentLoop:
         # Guardrails (ala NeMo): config on/off per rail dari app_settings; engine
         # dibangun per-turn agar perubahan UI langsung berlaku tanpa restart.
         self.guardrails_config = GuardrailConfigStore(db)
+        # Metadata sidebar riwayat chat (§ user report: chat selalu ke-reset, tak
+        # ada cara buka chat baru/lanjutkan/hapus riwayat). Hanya relevan single-agent
+        # (persist_history) — lihat _post_turn untuk generate judul.
+        self.chat_sessions = ChatSessionStore(db)
         self.history: list[Turn] = []
 
         # nit #2: cache soul.toml sekali, jangan baca tiap turn
@@ -277,9 +296,19 @@ class AgentLoop:
         # di-reset di finally agar tak "bocor" ke request lain yang berbagi loop
         # event yang sama (contextvars per-Task, tapi reset eksplisit tetap lebih aman
         # daripada mengandalkan garbage collection Task).
+        #
+        # Prioritas: (1) form UI diisi eksplisit request ini → menang (user sadar
+        # mengetik folder baru); (2) kalau kosong, folder yang agent SENDIRI set
+        # lewat tool set_workdir di turn sebelumnya (§ user request "pindah
+        # direktori dinamis lewat chat", persist di session_workspace — AgentLoop
+        # baru tiap request, jadi harus dimuat balik dari DB); (3) default global.
+        effective_override = self.cfg.workspace_override
+        if not effective_override and self.cfg.persist_history:
+            effective_override = await SessionWorkspaceStore(self.db).get(self.cfg.session_id)
+
         ws_token = None
-        if self.cfg.workspace_override:
-            ws_token = CURRENT_WORKSPACE_ROOT.set(self.cfg.workspace_override)
+        if effective_override:
+            ws_token = CURRENT_WORKSPACE_ROOT.set(effective_override)
         try:
             async for ev in self._run(user_message):
                 yield ev
@@ -471,12 +500,22 @@ class AgentLoop:
         last_write_target: tuple[str, str] | None = None
         write_repeat_count = 0
 
+        # Cap output lebih longgar saat tool tersedia (§ user report: "No answer"
+        # — model reasoning-heavy kehabisan giliran SAAT MASIH merencanakan tool
+        # mana yang dipakai, sebelum sempat bertindak/menjawab, dengan cap lama).
+        # Turn tanpa tool tetap pakai default lama (llm_max_tokens_default).
+        hop_max_tokens = (
+            self.config.llm_max_tokens_with_tools
+            if tools_schema
+            else self.config.llm_max_tokens_default
+        )
+
         while hop <= self.config.max_tool_hops:
             pending_tool = None
             # Status: LLM mulai memproses (mengisi gap antara request dan token pertama).
             yield AgentEvent(type="status", text="thinking")
             async for chunk in self.llm.stream_with_fallback(
-                route.provider, route.model, messages, tools_schema
+                route.provider, route.model, messages, tools_schema, hop_max_tokens
             ):
                 if chunk.type == "text":
                     turn.content += chunk.text
@@ -551,13 +590,29 @@ class AgentLoop:
                     write_repeat_count = 0
                 last_write_target = write_target
 
+            # Trust mode (§ user request otonomi): sesi ini melewati approval manual
+            # untuk tool yang mengizinkannya — TAPI tidak untuk _TRUST_MODE_EXEMPT
+            # (code_run, CLAUDE.md §1 non-negotiable). Dihitung di sini (bukan di
+            # _execute_tool saja) agar UI menampilkan chip "tool" biasa, bukan kartu
+            # approval yang menunggu klik yang tak akan pernah terjadi.
+            tool_obj = TOOL_REGISTRY.get(pending_tool.tool_name)
+            bypass_approval = (
+                self.cfg.trust_mode
+                and not self.cfg.autopilot
+                and pending_tool.tool_name not in _TRUST_MODE_EXEMPT
+            )
+
             # ask_user menunggu input manusia → beri tahu UI agar memunculkan kotak
             # jawaban (detail = teks pertanyaan), bukan sekadar chip "tool".
             approval_id = None
-            tool_obj = TOOL_REGISTRY.get(pending_tool.tool_name)
             if pending_tool.tool_name == "ask_user":
                 question = str(pending_tool.tool_input.get("question", "")).strip()
                 yield AgentEvent(type="status", text="question", detail=question)
+            elif tool_obj and tool_obj.requires_approval and bypass_approval:
+                # Trust mode aktif: tool tetap dieksekusi (lewat auto_approve di
+                # _execute_tool), tapi UI cukup lihat chip tool biasa + tanda "trust".
+                param_preview = _format_tool_params(pending_tool.tool_name, pending_tool.tool_input)
+                yield AgentEvent(type="status", text="tool_trusted", detail=param_preview)
             elif tool_obj and tool_obj.requires_approval and not self.cfg.autopilot:
                 # Tool butuh approval manusia → pre-generate ID SEBELUM memanggil
                 # _execute_tool (yang akan blocking menunggu Future) agar UI dapat
@@ -574,7 +629,10 @@ class AgentLoop:
                 param_preview = _format_tool_params(pending_tool.tool_name, pending_tool.tool_input)
                 yield AgentEvent(type="status", text="tool", detail=param_preview)
             result = await self._execute_tool(
-                pending_tool.tool_name, pending_tool.tool_input, approval_id=approval_id
+                pending_tool.tool_name,
+                pending_tool.tool_input,
+                approval_id=approval_id,
+                bypass_approval=bypass_approval,
             )
             turn.tool_calls.append(
                 {"name": pending_tool.tool_name, "input": pending_tool.tool_input}
@@ -621,7 +679,11 @@ class AgentLoop:
             hop += 1
 
     async def _execute_tool(
-        self, name: str, input_data: dict, approval_id: str | None = None
+        self,
+        name: str,
+        input_data: dict,
+        approval_id: str | None = None,
+        bypass_approval: bool = False,
     ) -> dict:
         tool = TOOL_REGISTRY.get(name)
         if not tool:
@@ -647,10 +709,11 @@ class AgentLoop:
         if schema_err:
             return {"error": schema_err}
 
-        # Tool internal per-sesi (todo_write, report_blocker): suntik konteks sesi/role.
-        # Tool tak menerima ini via signature execute; model tak perlu — & tak boleh —
-        # mengarang session_id/role (sumber kebenaran = AgentLoop, bukan output model).
-        if name in ("todo_write", "report_blocker"):
+        # Tool internal per-sesi (todo_write, report_blocker, set_workdir): suntik
+        # konteks sesi/role. Tool tak menerima ini via signature execute; model tak
+        # perlu — & tak boleh — mengarang session_id/role (sumber kebenaran =
+        # AgentLoop, bukan output model).
+        if name in ("todo_write", "report_blocker", "set_workdir"):
             input_data = {
                 **input_data,
                 "_session_id": self.cfg.session_id,
@@ -673,9 +736,16 @@ class AgentLoop:
                         "Lanjutkan tanpa hasil aksi ini."
                     ),
                 }
-            approved = await self.approval.request(
-                self.cfg.session_id, name, input_data, approval_id=approval_id
-            )
+            # Trust mode (§ user request otonomi): caller (_run_tool_loop) sudah
+            # menghitung bypass_approval dan MENGECUALIKAN _TRUST_MODE_EXEMPT
+            # (code_run) — di sini hanya eksekusi keputusan itu, bukan mengevaluasi
+            # ulang. Tool tetap benar-benar dijalankan (beda dari autopilot di atas).
+            if bypass_approval and name not in _TRUST_MODE_EXEMPT:
+                approved = await self.approval.auto_approve(self.cfg.session_id, name, input_data)
+            else:
+                approved = await self.approval.request(
+                    self.cfg.session_id, name, input_data, approval_id=approval_id
+                )
             if not approved:
                 return {"error": f"Tool '{name}' ditolak oleh user"}
 
@@ -744,6 +814,14 @@ class AgentLoop:
         self, user_message: str, turn: Turn, active_skills: list, history_snapshot: list
     ) -> None:
         """Background: tulis memori + decay pass + crystallize jika syarat terpenuhi."""
+        # Sidebar riwayat chat (§ user report): tandai sesi aktif (urutan terbaru
+        # dulu) + generate judul SEKALI di turn pertama. Hanya single-agent
+        # (persist_history) — multi-agent tak punya entri sidebar sendiri.
+        if self.cfg.persist_history:
+            await self.chat_sessions.touch(self.cfg.session_id)
+            if not await self.chat_sessions.has_title(self.cfg.session_id):
+                await self._generate_session_title(user_message)
+
         # Memori L1: checkpoint state terakhir tiap turn agar turn berikut punya konteks
         # ringkas tanpa memuat seluruh history (token-first, §1.4).
         if turn.content:
@@ -777,6 +855,36 @@ class AgentLoop:
                 solution=turn.content,
                 history=history_snapshot,
                 generator_model=turn.model_used,
+            )
+
+    async def _generate_session_title(self, user_message: str) -> None:
+        """Judul sidebar dari pesan pertama sesi, via LLM lokal kecil (§ user request).
+
+        `truncate_for_title_prompt` memotong pesan panjang jadi head+tail kata
+        SEBELUM dikirim ke LLM — pesan pertama user bisa panjang, tak perlu
+        membayar token generate judul untuk seluruh isinya (§ user request).
+        Fail-safe (§1.3): LLM/parsing gagal → sesi tetap tanpa judul (sidebar
+        fallback ke potongan mentah pesan), bukan menjatuhkan turn.
+        """
+        try:
+            prov, mdl = self.config.compaction_local_model
+            prompt = (
+                "Buat judul chat SANGAT singkat (maksimal 6 kata, tanpa tanda kutip, "
+                "tanpa titik di akhir) yang merangkum topik pesan berikut:\n\n"
+                + truncate_for_title_prompt(user_message)
+            )
+            title = ""
+            async for chunk in self.llm.stream_with_fallback(
+                prov, mdl, [{"role": "user", "content": prompt}]
+            ):
+                if chunk.type == "text":
+                    title += chunk.text
+            title = title.strip()
+            if title:
+                await self.chat_sessions.set_title(self.cfg.session_id, title)
+        except Exception as e:  # noqa: BLE001 — judul kosmetik, tak boleh jatuhkan turn
+            log.warning(
+                "session_title_generation_failed", session=self.cfg.session_id, error=str(e)
             )
 
     @staticmethod

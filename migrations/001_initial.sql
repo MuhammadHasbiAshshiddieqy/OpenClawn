@@ -31,6 +31,38 @@ CREATE TABLE IF NOT EXISTS session_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_session_turns ON session_turns(session_id, id);
 
+-- Folder kerja aktif PER-SESI, bisa diubah agent sendiri lewat tool set_workdir
+-- (§ user request: "pindah direktori secara dinamis" via chat, bukan cuma field
+-- UI). Satu baris per sesi (UPSERT) — beda dari session_turns yang append-log,
+-- ini state "saat ini", bukan riwayat. Dibaca di awal AgentLoop.run() SEBELUM
+-- workspace_override dari form UI (override eksplisit form tetap menang bila
+-- diisi user secara manual di UI pada request itu — lihat core/agent_loop.py).
+CREATE TABLE IF NOT EXISTS session_workspace (
+    session_id TEXT PRIMARY KEY,
+    workdir TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Metadata sesi chat single-agent untuk sidebar riwayat (§ user report: "chat
+-- selalu ke-reset", tak ada cara membuka chat baru/lanjutkan/hapus riwayat).
+-- Terpisah dari session_turns (transkrip per-giliran) — ini metadata TAMPILAN
+-- (judul, kapan dibuat/terakhir aktif, role) untuk daftar di sidebar. `title`
+-- NULL sampai turn pertama selesai & judul di-generate LLM lokal (async,
+-- tak menghambat jawaban pertama user). `deleted_at` soft-delete (bukan DELETE
+-- fisik) agar audit trail approval_log/tool_invocations lama tetap konsisten
+-- referensinya — baris session_turns terkait TETAP dihapus fisik saat user
+-- menghapus riwayat (lihat ChatSessionStore.delete), hanya metadata ini yang soft.
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    session_id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    title TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_active
+    ON chat_sessions(deleted_at, updated_at DESC);
+
 -- ===================== SKILLS + DECAY [#2] =====================
 CREATE TABLE IF NOT EXISTS skills (
     id INTEGER PRIMARY KEY, role TEXT NOT NULL,

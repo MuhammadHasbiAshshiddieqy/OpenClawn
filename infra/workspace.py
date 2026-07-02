@@ -22,6 +22,12 @@ tak saling menimpa seperti mutable global biasa) TANPA mengubah satu pun tool.
 import contextvars
 from pathlib import Path
 
+from infra.database import DatabaseManager
+
+# Sengaja lebih longgar dari resolve_in_workspace: user (lewat UI field ATAU tool
+# set_workdir) boleh memilih folder MANA PUN di mesinnya sendiri sebagai root baru
+# — kebalikan dari resolve_in_workspace yang membatasi path ke SATU root tetap.
+
 # None → pakai CONFIG.workspace_root (perilaku lama, tak ada perubahan). Diisi
 # oleh AgentLoop.run() dari AgentConfig.workspace_override (kalau user mengisi
 # field folder kerja di UI) sebelum tool loop berjalan.
@@ -74,3 +80,55 @@ def resolve_in_current_workspace(candidate: str, config_default: str) -> Path:
     kerja per-sesi (§ working directory adaptif) otomatis terpakai tanpa
     mengubah signature `Tool.execute()`."""
     return resolve_in_workspace(candidate, effective_workspace_root(config_default))
+
+
+def validate_workdir_candidate(raw: str) -> tuple[str | None, str | None]:
+    """Validasi folder kerja pilihan user SEBELUM dipakai sebagai workspace root —
+    fail-closed: path tak lolos TIDAK PERNAH diteruskan ke ContextVar/DB. Return
+    `(resolved_path, None)` bila valid, `(None, error_message)` bila tidak.
+
+    Dipakai DUA jalur (§ working directory adaptif + § user request "pindah
+    direktori dinamis lewat chat"): field UI (`web/main.py` § `GET /workdir/check`,
+    `/chat/stream`) dan tool `set_workdir` (`tools/workspace_tool.py`) — satu
+    sumber kebenaran agar keduanya konsisten. Sengaja permisif soal LOKASI (lihat
+    komentar di atas) — hanya mengecek path itu benar-benar ada & direktori, agar
+    tool tak gagal aneh di tengah turn karena folder salah ketik/tak ada.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None, None  # kosong = tak ada override, bukan error
+    try:
+        p = Path(raw).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None, f"Folder '{raw}' tidak ditemukan atau tidak bisa diakses."
+    if not p.is_dir():
+        return None, f"'{raw}' bukan direktori."
+    return str(p), None
+
+
+class SessionWorkspaceStore:
+    """Folder kerja aktif per-sesi, tersimpan di DB (§ user request: "pindah
+    direktori secara dinamis" lewat chat, bukan cuma field UI sekali per-request).
+
+    Terpisah dari `MemoryManager` (yang role-scoped) agar tool `set_workdir`
+    (`tools/workspace_tool.py`) tak perlu import `memory/layers.py` — modul ini
+    murni di atas `DatabaseManager`, sama pola `SettingsStore` (§ infra/settings.py).
+    Satu baris per `session_id` (UPSERT): state "folder AKTIF sekarang", bukan riwayat.
+    """
+
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+
+    async def get(self, session_id: str) -> str | None:
+        row = await self.db.fetchone(
+            "SELECT workdir FROM session_workspace WHERE session_id=?", (session_id,)
+        )
+        return row["workdir"] if row else None
+
+    async def set(self, session_id: str, workdir: str) -> None:
+        await self.db.execute(
+            """INSERT INTO session_workspace (session_id, workdir) VALUES (?, ?)
+               ON CONFLICT(session_id) DO UPDATE SET workdir=excluded.workdir,
+               updated_at=CURRENT_TIMESTAMP""",
+            (session_id, workdir),
+        )

@@ -20,8 +20,11 @@ TOOLS YOU MUST USE — you are NOT a passive chatbot. You can and should:
 - glob: find files by pattern to understand project scope
 - grep: search the codebase for features/strings before recommending changes
 - list_dir: explore project structure before making recommendations
+- set_workdir: switch the active working folder for the rest of this chat, when the user explicitly asks to work in a different folder
 - file_read: read any file the user mentions before commenting on it
-- file_write: save user stories, roadmaps, or acceptance criteria to files
+- file_write: save user stories, roadmaps, or acceptance criteria as plain text/markdown
+- doc_write: save as a real Word/PowerPoint/Excel file (format: docx/pptx/xlsx)
+- pdf_write: save as a real PDF file
 - web_search: research market context, competitors, tech trends
 - web_fetch: read a specific URL found via web_search
 - ask_user: clarify requirements when ambiguous
@@ -31,19 +34,44 @@ the relevant tool first (glob/grep/list_dir to locate, file_read to inspect).
 Do not say "I don't have access" — you DO have access.
 
 When the user asks you to save/write/generate a document (user stories, a
-roadmap, acceptance criteria, notes — any file), you MUST call file_write with
-the real path and full content. Printing it in your chat answer is not the
-same as a file on disk — the user cannot download or reuse it that way.
+roadmap, acceptance criteria, notes — any file), you MUST call a write tool
+with the real path and full content. Printing it in your chat answer is not
+the same as a file on disk — the user cannot download or reuse it that way.
+Pick the tool by what the user actually asked for — do not default to
+file_write for everything:
+- "PDF" / "so I can print it" / "send as PDF" → pdf_write
+- "Word" / "docx" / "document" (in the office sense) → doc_write with format="docx"
+- "PowerPoint" / "slides" / "presentation" → doc_write with format="pptx"
+- "Excel" / "spreadsheet" → doc_write with format="xlsx"
+- plain notes, markdown, CSV, YAML, or no format mentioned → file_write
+  (write the CSV/YAML text directly as the content — no extra tool needed)
+If the user names a format you have a tool for, using file_write instead is a
+mistake — the user asked for a PDF/Word file, not a .txt file describing one.
 
 When handing off to another role, use the appropriate contract format.
 """
 
 [tools]
-allowed = ["glob", "grep", "list_dir", "file_read", "read_many", "file_write", "pdf_read", "doc_write", "pdf_write", "web_search", "web_fetch", "memory_search", "json_query", "ask_user", "todo_write", "report_blocker"]
+allowed = ["glob", "grep", "list_dir", "set_workdir", "file_read", "read_many", "file_write", "pdf_read", "doc_write", "pdf_write", "web_search", "web_fetch", "memory_search", "json_query", "ask_user", "todo_write", "report_blocker"]
 
 [routing]
 prefer_local = true
-upgrade_keywords = ["arsitektur", "strategi", "roadmap", "OKR", "architecture", "strategy"]
+# PRD/dokumen ditambahkan setelah reproduksi bug "No answer": gemma4:e4b (tier
+# lokal termurah) sanggup MERENCANAKAN tool call yang tepat di dalam <think>
+# untuk permintaan dokumen terstruktur (PRD dsb.), tapi kehabisan giliran
+# reasoning SEBELUM pernah keluar ke aksi nyata (stream berhenti natural,
+# bukan max_tokens). Menaikkan max_tokens tidak menolong (§ investigasi:
+# tokens_out jauh di bawah cap). Fix: alihkan permintaan dokumen ke tier
+# lebih kuat lewat upgrade_keywords, bukan menyederhanakan instruksi soul.
+upgrade_keywords = [
+    "arsitektur", "strategi", "roadmap", "OKR", "architecture", "strategy",
+    "PRD", "dokumen", "document",
+]
+# +3 (soul_hit) saja hanya cukup naik ke MODERATE (qwen3.5:9b, masih lokal &
+# masih reasoning-heavy). Tambahkan sinyal multistep khusus PM (+2 lagi) agar
+# permintaan dokumen terstruktur menembus ke COMPLEX (tier cloud) — dokumen
+# seperti PRD memang inherently multi-langkah (konteks->masalah->solusi->metrik).
+multistep_keywords = ["PRD", "dokumen", "document", "user story", "acceptance criteria"]
 
 [contract]
 output_type = "PMOutput"

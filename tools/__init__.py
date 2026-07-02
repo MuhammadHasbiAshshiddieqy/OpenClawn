@@ -17,6 +17,7 @@ from tools.data import DbQueryTool, JsonQueryTool, MemorySearchTool
 from tools.git import GitDiffTool, GitLogTool, GitStatusTool
 from tools.todo import TodoWriteTool
 from tools.blocker import ReportBlockerTool
+from tools.workspace_tool import SetWorkdirTool
 
 TOOL_REGISTRY: dict[str, Tool] = {
     # filesystem (workspace-bounded)
@@ -27,6 +28,7 @@ TOOL_REGISTRY: dict[str, Tool] = {
     "file_append": FileAppendTool(),
     "apply_patch": ApplyPatchTool(),
     "list_dir": ListDirTool(),
+    "set_workdir": SetWorkdirTool(),
     "glob": GlobTool(),
     "grep": GrepTool(),
     "pdf_read": PdfReadTool(),

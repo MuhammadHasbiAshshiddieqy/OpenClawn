@@ -43,10 +43,10 @@ STRINGS: dict[str, dict[str, str]] = {
     # ── Chat (index.html) ────────────────────────────────────────────────────
     "index.hello": {"en": "Hi, I'm", "id": "Halo, saya"},
     "index.intro": {
-        "en": "A nimble yet sharp AI agent — with 26 tools to explore code, "
+        "en": "A nimble yet sharp AI agent — with 27 tools to explore code, "
         "inspect git, search the web, write documents (docx/pdf), and execute "
         "tasks safely.",
-        "id": "Agent AI yang lincah sekaligus tajam — punya 26 tool untuk "
+        "id": "Agent AI yang lincah sekaligus tajam — punya 27 tool untuk "
         "menjelajah kode, inspeksi git, mencari di web, menulis dokumen "
         "(docx/pdf), dan mengeksekusi tugas dengan aman.",
     },
@@ -72,7 +72,28 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Working directory for this session (empty = server default)",
         "id": "Folder kerja untuk sesi ini (kosong = default server)",
     },
-    "index.workdir_placeholder": {"en": "Working directory (optional)", "id": "Folder kerja (opsional)"},
+    "index.workdir_placeholder": {
+        "en": "Working directory (optional)",
+        "id": "Folder kerja (opsional)",
+    },
+    "index.trust_title": {
+        "en": "Trust mode: skip manual approval for this session (code_run always still requires it)",
+        "id": "Trust mode: lewati approval manual untuk sesi ini (code_run tetap selalu perlu)",
+    },
+    "index.trust_label": {"en": "Trust", "id": "Percaya"},
+    "index.new_chat": {"en": "New chat", "id": "Chat baru"},
+    "index.history": {"en": "History", "id": "Riwayat"},
+    "index.history_empty": {"en": "No chats yet", "id": "Belum ada chat"},
+    "index.history_delete": {"en": "Delete", "id": "Hapus"},
+    "index.history_delete_confirm": {
+        "en": "Delete this chat? This cannot be undone.",
+        "id": "Hapus chat ini? Tindakan ini tidak bisa dibatalkan.",
+    },
+    "index.bucket_today": {"en": "Today", "id": "Hari ini"},
+    "index.bucket_yesterday": {"en": "Yesterday", "id": "Kemarin"},
+    "index.bucket_7d": {"en": "Previous 7 days", "id": "7 hari terakhir"},
+    "index.bucket_30d": {"en": "Previous 30 days", "id": "30 hari terakhir"},
+    "index.bucket_older": {"en": "Older", "id": "Lebih lama"},
     "index.participants": {"en": "Participants", "id": "Peserta"},
     "index.order": {"en": "Order", "id": "Urutan"},
     "index.lead_workers": {"en": "Lead + Workers", "id": "Lead + Workers"},
@@ -120,6 +141,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "index.status_think": {"en": "Think", "id": "Think"},
     "index.status_thinking": {"en": "Thinking…", "id": "Berpikir…"},
     "index.status_tool": {"en": "Tool", "id": "Tool"},
+    "index.status_trusted": {"en": "Trusted", "id": "Dipercaya"},
     "index.status_ask": {"en": "Ask", "id": "Ask"},
     "index.status_approval": {"en": "Approval needed", "id": "Butuh persetujuan"},
     "index.approve": {"en": "Approve", "id": "Setujui"},

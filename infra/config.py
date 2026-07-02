@@ -21,6 +21,15 @@ class AppConfig:
     auth_token: str = ""
     max_context_tokens: int = 28_000
     max_tool_hops: int = 5
+    # Output cap default per hop LLM (§ stream_with_fallback). Turn dengan tools
+    # tersedia (hop bertool) butuh ruang lebih (llm_max_tokens_with_tools) —
+    # § user report: model reasoning-heavy (Gemma <think>) kehabisan giliran
+    # SAAT MASIH merencanakan tool mana yang dipakai (instruksi format→tool
+    # pm/dev/qa relatif detail), sebelum sempat bertindak/menjawab, dengan cap
+    # lama (4096). Cap dinaikkan HANYA saat tools_schema dikirim — turn tanpa
+    # tool (mis. ringkas percakapan di _maybe_compact) tetap pakai default lama.
+    llm_max_tokens_default: int = 4096
+    llm_max_tokens_with_tools: int = 8192
     llm_max_retries: int = 3
     approval_timeout_sec: int = 120
     decay_interval_sec: int = 3600

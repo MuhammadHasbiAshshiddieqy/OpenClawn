@@ -18,8 +18,8 @@ def dataclasses_replace(obj, **changes):
 # ── TOOL_REGISTRY ─────────────────────────────────────────────────────────────
 
 
-def test_registry_has_all_26_tools():
-    """Semua 26 tool harus terdaftar di TOOL_REGISTRY."""
+def test_registry_has_all_27_tools():
+    """Semua 27 tool harus terdaftar di TOOL_REGISTRY."""
     expected = {
         "file_read",
         "read_many",
@@ -28,6 +28,7 @@ def test_registry_has_all_26_tools():
         "file_append",
         "apply_patch",
         "list_dir",
+        "set_workdir",
         "glob",
         "grep",
         "pdf_read",
@@ -818,3 +819,35 @@ async def test_doc_write_rejects_path_outside_workspace(tmp_path, monkeypatch):
         {"path": "../escape.md", "format": "md", "content": "x"}, vault=None
     )
     assert "error" in result
+
+
+# ── Akses doc_write/pdf_write per role (§ user request: QA harus bisa menulis
+# test-case matrix Excel / laporan PDF, bukan hanya file teks via file_write) ──
+
+
+@pytest.mark.parametrize("role", ["pm", "dev", "qa"])
+def test_pm_dev_qa_have_doc_and_pdf_write_access(role):
+    """pm/dev/qa punya doc_write+pdf_write di [tools].allowed soul.toml.
+
+    Sebelumnya qa hanya punya file_write — permintaan format office/PDF (test-case
+    matrix sebagai Excel, laporan bug sebagai PDF) tak punya tool yang tepat.
+    """
+    import tomllib
+
+    with open(f"roles/{role}/soul.toml", "rb") as f:
+        soul = tomllib.load(f)
+    allowed = soul["tools"]["allowed"]
+    assert "doc_write" in allowed, f"{role} soul.toml belum punya doc_write"
+    assert "pdf_write" in allowed, f"{role} soul.toml belum punya pdf_write"
+
+
+def test_security_soul_unchanged_read_only():
+    """Kontrol negatif: role security TETAP tidak punya akses tulis (read-only §17)."""
+    import tomllib
+
+    with open("roles/security/soul.toml", "rb") as f:
+        soul = tomllib.load(f)
+    allowed = soul["tools"]["allowed"]
+    assert "doc_write" not in allowed
+    assert "pdf_write" not in allowed
+    assert "file_write" not in allowed

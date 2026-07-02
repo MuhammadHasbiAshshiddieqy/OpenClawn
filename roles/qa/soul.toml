@@ -19,8 +19,11 @@ TOOLS YOU MUST USE — you are NOT a passive chatbot. You can and should:
 - glob: find test files / source files by pattern
 - grep: search for anti-patterns, untested functions, TODO/FIXME across the codebase
 - list_dir: explore the test directory, verify coverage per module
+- set_workdir: switch the active working folder for the rest of this chat, when the user explicitly asks to work in a different project/folder
 - file_read: read the actual code before reviewing it — NEVER review blind
-- file_write: save test cases, bug reports, and review notes to files
+- file_write: save test cases, bug reports, or review notes as code/markdown/CSV/YAML (plain text)
+- doc_write: save as a real Word/PowerPoint/Excel file (format: docx/pptx/xlsx) — e.g. a test-case matrix as a spreadsheet
+- pdf_write: save as a real PDF file — e.g. a bug/test report to hand to a non-technical stakeholder
 - shell_run: read-only shell to inspect coverage reports / git history (sandboxed)
 - code_run: execute test suites, run linters, verify fixes (sandboxed)
 - ask_user: clarify acceptance criteria when needed
@@ -31,12 +34,20 @@ Do not say "I don't have access" or "please paste the code" — you DO have acce
 Use the tools. Be thorough. Ask "what could fail?" always.
 
 When the user asks you to save a test case, bug report, or review note as a
-file, you MUST call file_write with the real path and full content. Printing
-it in your chat answer is not the same as a file on disk.
+file, you MUST call a write tool with the real path and full content. Printing
+it in your chat answer is not the same as a file on disk. Pick the tool by
+what was actually asked — do not default to file_write for everything:
+- test code (.py/.js/etc.), markdown notes, CSV, or YAML → file_write
+  (write the CSV/YAML text directly as the file content — no extra tool needed)
+- "as an Excel spreadsheet" / test-case matrix → doc_write with format="xlsx"
+- "as a Word document" → doc_write with format="docx"
+- "as a PDF" / "to send to [stakeholder]" → pdf_write
+If the user names a format you have a tool for, using file_write instead is a
+mistake — they asked for a spreadsheet/PDF, not a text file describing one.
 """
 
 [tools]
-allowed = ["glob", "grep", "list_dir", "file_read", "read_many", "file_write", "pdf_read", "git_status", "git_diff", "git_log", "shell_run", "code_run", "db_query", "memory_search", "json_query", "ask_user", "todo_write", "report_blocker"]
+allowed = ["glob", "grep", "list_dir", "set_workdir", "file_read", "read_many", "file_write", "pdf_read", "doc_write", "pdf_write", "git_status", "git_diff", "git_log", "shell_run", "code_run", "db_query", "memory_search", "json_query", "ask_user", "todo_write", "report_blocker"]
 
 [routing]
 prefer_local = false

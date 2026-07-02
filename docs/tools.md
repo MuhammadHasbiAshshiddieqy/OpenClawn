@@ -399,9 +399,9 @@ Jika asyncio timeout → `{"error": "Eksekusi melebihi timeout", "exit_code": -1
 
 ### `ShellRunTool`
 
-Jalankan perintah shell read-only (grep, find, ls, cat, git log) **di dalam Docker sandbox**, bukan di host. **SELALU butuh approval**.
+Jalankan perintah shell read-only (grep, find, ls, cat, git log) **di dalam Docker sandbox**, bukan di host.
 
-- `requires_approval = True` (selalu)
+- `requires_approval = False` (§ user request otonomi: sandbox — bukan approval — adalah pertahanan; command apa pun secara fisik tak bisa menulis ke host / menjangkau network, lihat batasan di bawah. Beda dari `code_run` yang TETAP selalu approval, CLAUDE.md §1.)
 - Input: `{"command": "..."}`
 - Output sukses: `{"stdout": "...", "stderr": "...", "exit_code": 0}`
 - Output error: `{"error": "..."}` jika timeout, command kosong/terlalu panjang, atau **Docker tidak tersedia**
@@ -423,6 +423,25 @@ List isi direktori dalam workspace. Read-only — **tidak butuh approval**.
 
 ---
 
+## `tools/workspace_tool.py`
+
+### `SetWorkdirTool`
+
+Pindahkan folder kerja aktif untuk SISA sesi ini (§ user request: "pindah direktori secara dinamis" lewat chat — sebelumnya folder kerja HANYA bisa diubah lewat field UI sekali per-request, tak ada cara mengubahnya di tengah percakapan). **Tidak butuh approval** — efek sampingnya navigasi (ganti root yang tool lain baca/tulis), bukan modifikasi file/eksekusi kode; validasi path (`validate_workdir_candidate`) adalah pertahanannya, sama alasan `shell_run`.
+
+- `requires_approval = False`
+- Input: `{"path": "..."}` — path direktori tujuan (absolut atau `~/...`); `_session_id` disuntik `AgentLoop._execute_tool` (model tak boleh mengarang ini)
+- Output sukses: `{"ok": True, "workdir": "/abs/path"}`
+- Output error: `{"error": "..."}` jika `path` kosong, folder tidak ada/bukan direktori, atau `_session_id` absen (dipanggil di luar konteks AgentLoop)
+
+**Efek ganda saat sukses:**
+1. `CURRENT_WORKSPACE_ROOT` (ContextVar, `infra/workspace.py`) di-set LANGSUNG — tool file/shell/git berikutnya di **turn yang sama** langsung ikut pindah, tanpa menunggu turn baru.
+2. Ditulis ke tabel `session_workspace` via `SessionWorkspaceStore` — **turn berikutnya** (`AgentLoop` baru, dibuat per request web) memuatnya balik sebagai folder aktif di awal `run()` (lihat `docs/core.md` § `AgentLoop.run()`), jadi perpindahan bertahan sepanjang sesi chat, bukan cuma satu turn.
+
+Prioritas resolusi folder di `AgentLoop.run()`: (1) `workspace_override` dari form UI **bila diisi eksplisit** di request ini → menang; (2) kalau kosong, folder tersimpan di `session_workspace` dari panggilan `set_workdir` sebelumnya; (3) default global `CONFIG.workspace_root`. Hanya berlaku bila `AgentConfig.persist_history=True` (single-agent; multi-agent tak memuat/menyimpan agar tak diam-diam memindah folder shared session untuk role lain).
+
+---
+
 ## Tool Permission Matrix
 
 | Tool | PM | QA | Dev | Data | Sec | Butuh Approval |
@@ -434,15 +453,16 @@ List isi direktori dalam workspace. Read-only — **tidak butuh approval**.
 | `file_append` | ❌ | ❌ | ✅ | ❌ | ❌ | **Ya** |
 | `apply_patch` | ❌ | ❌ | ✅ | ❌ | ❌ | **Ya** |
 | `list_dir` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
+| `set_workdir` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 | `glob` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 | `grep` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 | `pdf_read` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
-| `doc_write` | ✅ | ❌ | ✅ | ✅ | ❌ | **Ya** |
-| `pdf_write` | ✅ | ❌ | ✅ | ✅ | ❌ | **Ya** |
+| `doc_write` | ✅ | ✅ | ✅ | ✅ | ❌ | **Ya** |
+| `pdf_write` | ✅ | ✅ | ✅ | ✅ | ❌ | **Ya** |
 | `git_status` | ❌ | ✅ | ✅ | ❌ | ✅ | Tidak |
 | `git_diff` | ❌ | ✅ | ✅ | ❌ | ✅ | Tidak |
 | `git_log` | ❌ | ✅ | ✅ | ❌ | ✅ | Tidak |
-| `shell_run` | ❌ | ✅ | ✅ | ❌ | ❌ | **Ya (selalu)** |
+| `shell_run` | ❌ | ✅ | ✅ | ❌ | ❌ | Tidak (sandboxed) |
 | `code_run` | ❌ | ✅ | ✅ | ✅ | ❌ | **Ya (selalu)** |
 | `web_fetch` | ✅ | ❌ | ✅ | ✅ | ❌ | Tidak |
 | `web_search` | ✅ | ❌ | ✅ | ✅ | ❌ | Tidak |

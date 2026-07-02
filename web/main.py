@@ -3,6 +3,7 @@ import json
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import AsyncGenerator, AsyncIterator
 from urllib.parse import quote
@@ -28,6 +29,7 @@ from core.autopilot import AutopilotScheduler, AutopilotStore
 from core.skill_pack import SkillPack
 from core.mcp_registry import MCPRegistry
 from memory.curator import SkillCuratorManager
+from memory.layers import MemoryManager
 from core.calibration import CalibrationStore, RoutingCalibrator
 from core.router import Complexity, SmartRouter
 from core.router_config import RouterConfigStore
@@ -42,7 +44,8 @@ from infra.database import DatabaseManager
 from infra.i18n import LOCALES, translator
 from infra.logging import log, setup_logging
 from infra.settings import KNOWN_MODELS, SettingsStore
-from infra.workspace import WorkspaceViolation, resolve_in_workspace
+from infra.chat_sessions import ChatSessionStore
+from infra.workspace import WorkspaceViolation, resolve_in_workspace, validate_workdir_candidate
 from security.approval import ApprovalGate
 from security.auth import (
     SESSION_COOKIE,
@@ -142,27 +145,6 @@ def available_roles() -> list[str]:
     known = [r for r in _ROLE_ORDER if r in found]
     extra = sorted(found - set(known))
     return known + extra
-
-
-def _validate_workdir(raw: str) -> tuple[str | None, str | None]:
-    """Validasi folder kerja pilihan user (§ working directory adaptif) SEBELUM
-    dipakai sebagai workspace_override — fail-closed: path tak lolos TIDAK PERNAH
-    diteruskan ke AgentConfig/ContextVar. Return (resolved_path, None) bila valid,
-    (None, error_message) bila tidak. Sengaja permisif soal LOKASI (user boleh pilih
-    folder mana pun di mesinnya sendiri, ini kebalikan dari resolve_in_workspace yang
-    membatasi ke SATU root) — hanya mengecek path itu benar-benar ada & direktori,
-    agar tool tak gagal aneh di tengah turn karena folder salah ketik/tak ada.
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        return None, None  # kosong = tak ada override, bukan error
-    try:
-        p = Path(raw).expanduser().resolve(strict=True)
-    except (OSError, RuntimeError):
-        return None, f"Folder '{raw}' tidak ditemukan atau tidak bisa diakses."
-    if not p.is_dir():
-        return None, f"'{raw}' bukan direktori."
-    return str(p), None
 
 
 # Heartbeat SSE: selama agent diam lama (model lokal lambat, reasoning tanpa token,
@@ -478,10 +460,18 @@ async def chat_stream(request: Request):
 
     # Working directory adaptif (§ user request): folder pilihan user untuk sesi
     # ini, divalidasi SEBELUM masuk AgentConfig (fail-closed — lihat _validate_workdir).
-    workdir, workdir_err = _validate_workdir(form.get("workdir", ""))
+    workdir, workdir_err = validate_workdir_candidate(form.get("workdir", ""))
+    # Trust mode (§ user request otonomi): toggle sesi eksplisit dari UI — bukan
+    # default, harus dipilih sadar tiap pengiriman. "true"/"1" dari checkbox HTML.
+    trust_mode = (form.get("trust_mode") or "").strip().lower() in ("true", "1", "on")
 
     agent = AgentLoop(
-        AgentConfig(role=role, session_id=session_id, workspace_override=workdir),
+        AgentConfig(
+            role=role,
+            session_id=session_id,
+            workspace_override=workdir,
+            trust_mode=trust_mode,
+        ),
         db=db,
         approval=approval_gate,
         question_gate=question_gate,
@@ -492,6 +482,10 @@ async def chat_stream(request: Request):
             yield f"event: error\ndata: {json.dumps({'text': workdir_err})}\n\n"
             yield "event: done\ndata: [DONE]\n\n"
             return
+        # Sidebar riwayat chat (§ user report): daftarkan sesi SEBELUM turn jalan,
+        # agar muncul di sidebar walau turn pertama gagal/timeout (idempoten —
+        # INSERT OR IGNORE, tak menimpa title/waktu sesi yang sudah ada).
+        await ChatSessionStore(db).ensure_created(session_id, role)
         # Protokol SSE bernama: frontend membedakan `token` (isi jawaban) dari
         # `status` (proses berjalan: routing/thinking/tool/fallback) agar user
         # tahu agent sedang apa. `error`/`done` menandai akhir stream.
@@ -538,6 +532,71 @@ async def chat_stream(request: Request):
     )
 
 
+def _time_bucket(updated_at: str, now: datetime) -> str:
+    """Kelompokkan timestamp ke KUNCI bucket waktu ala ChatGPT/Claude (§ user
+    request). Kunci stabil ("today"/"yesterday"/...), BUKAN label bahasa —
+    frontend menerjemahkan via `T.bucket*` (i18n) agar konsisten dengan §1.5
+    (bahasa TAMPILAN UI, terpisah dari bahasa respons agent).
+
+    `updated_at` string SQLite ("YYYY-MM-DD HH:MM:SS", UTC naive — konsisten
+    dengan CURRENT_TIMESTAMP di seluruh skema). Perbandingan berbasis tanggal
+    kalender (bukan selisih 24 jam) agar "hari ini"/"kemarin" cocok intuisi user.
+    """
+    try:
+        ts = datetime.strptime(updated_at[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return "older"
+    days = (now.date() - ts.date()).days
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    if days <= 7:
+        return "7d"
+    if days <= 30:
+        return "30d"
+    return "older"
+
+
+@app.get("/chat-sessions")
+async def list_chat_sessions():
+    """Daftar riwayat chat untuk sidebar (§ user report: chat selalu ke-reset,
+    tak ada cara membuka chat baru/lanjutkan/hapus riwayat).
+
+    Dikelompokkan GANDA per permintaan user — waktu (bucket label, urutan tetap
+    terbaru dulu dari `list_active`) DAN role (dikembalikan mentah per item;
+    frontend yang merender sub-grouping, lebih fleksibel untuk UI daripada
+    nested grouping di sini).
+    """
+    sessions = await ChatSessionStore(db).list_active()
+    now = datetime.now(UTC)
+    for s in sessions:
+        s["bucket"] = _time_bucket(s["updated_at"], now)
+        # Fallback tampilan: title belum ter-generate (turn pertama belum
+        # selesai / LLM judul gagal) → sidebar tetap punya sesuatu untuk ditampilkan.
+        if not s.get("title"):
+            s["title"] = "New chat"
+    return {"sessions": sessions}
+
+
+@app.get("/chat-sessions/{session_id}/turns")
+async def get_chat_session_turns(session_id: str):
+    """Transkrip penuh satu sesi — dipakai UI untuk "lanjutkan" chat dari riwayat
+    (render ulang bubble user/assistant sebelum menerima pesan baru)."""
+    turns = await MemoryManager(role="", session_id=session_id, db=db).load_turns(limit=500)
+    return {"session_id": session_id, "turns": turns}
+
+
+@app.delete("/chat-sessions/{session_id}")
+async def delete_chat_session(session_id: str):
+    """Hapus riwayat chat (§ user request). Soft-delete metadata sidebar, tapi
+    transkrip (`session_turns`) & folder aktif (`session_workspace`) dihapus
+    FISIK — user minta "hapus", isi percakapan harus benar hilang, bukan cuma
+    disembunyikan (lihat `ChatSessionStore.soft_delete`)."""
+    await ChatSessionStore(db).soft_delete(session_id)
+    return {"ok": True}
+
+
 @app.post("/converse/stream")
 async def converse_stream(request: Request):
     """Multi-agent conversation: beberapa role saling mengobrol, di-stream per giliran."""
@@ -552,11 +611,13 @@ async def converse_stream(request: Request):
         return HTMLResponse("")
 
     # Working directory adaptif (§ user request) — sama seperti /chat/stream.
-    workdir, workdir_err = _validate_workdir(form.get("workdir", ""))
+    workdir, workdir_err = validate_workdir_candidate(form.get("workdir", ""))
     if workdir_err:
         return HTMLResponse(
             f"event: error\ndata: {json.dumps({'text': workdir_err})}\n\nevent: done\ndata: [DONE]\n\n"
         )
+    # Trust mode (§ user request otonomi) — sama seperti /chat/stream.
+    trust_mode = (form.get("trust_mode") or "").strip().lower() in ("true", "1", "on")
 
     try:
         strategy = make_strategy(pattern, participants, rounds, CONFIG)
@@ -577,6 +638,7 @@ async def converse_stream(request: Request):
                 session_id=session_id,
                 workspace_override=workdir,
                 persist_history=False,
+                trust_mode=trust_mode,
             ),
             db=db,
             approval=approval_gate,
@@ -675,7 +737,7 @@ async def workdir_check(path: str = ""):
     _validate_workdir yang SAMA dengan jalur eksekusi (fail-closed), jadi hasil di
     UI konsisten dengan yang benar-benar dipakai. Kosong = pakai default server.
     """
-    resolved, err = _validate_workdir(path)
+    resolved, err = validate_workdir_candidate(path)
     if err:
         return {"ok": False, "error": err}
     if resolved is None:

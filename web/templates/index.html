@@ -55,10 +55,15 @@
                         </button>
                     </div>
                 </div>
-                <!-- Indikator proses efemeral: di DALAM aliran chat (sticky bawah)
-                     agar menyatu dengan percakapan, bukan melayang di atas composer. -->
-                <div id="status-line" class="status-line" aria-live="polite" hidden></div>
             </div>
+            <!-- Indikator proses efemeral: SIBLING langsung dari #chat-box di dalam
+                 .chat-scroll (bukan child #chat-box) — position:sticky butuh containing
+                 block yang jelas terhadap scrolling ancestor (.chat-scroll). Sebelumnya
+                 bersarang di dalam #chat-box (flex-column, tinggi otomatis mengikuti
+                 konten) → sticky-nya terjebak di posisi awal render alih-alih menempel
+                 ke bawah viewport yang terlihat (§ user report: status selalu di atas,
+                 harus scroll ke atas untuk lihat). -->
+            <div id="status-line" class="status-line" aria-live="polite" hidden></div>
         </div>
 
         <div class="composer-wrap">
@@ -80,6 +85,16 @@
                 <label class="workdir-pick" title="{{ t('index.workdir_title') }}">
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1.5 4.5C1.5 3.67 2.17 3 3 3h3l1.5 1.5H13c.83 0 1.5.67 1.5 1.5v6c0 .83-.67 1.5-1.5 1.5H3c-.83 0-1.5-.67-1.5-1.5v-7z"/></svg>
                     <input type="text" id="workdir-input" placeholder="{{ t('index.workdir_placeholder') }}" autocomplete="off">
+                </label>
+                <!-- Trust mode (§ user request otonomi): toggle per-sesi, harus dipilih
+                     sadar tiap kali (tak persist antar reload). Saat aktif, tool yang
+                     butuh approval (kecuali code_run — CLAUDE.md §1) tetap dieksekusi
+                     tanpa menunggu klik Approve/Reject. Divalidasi/dieksekusi server-side
+                     di web/main.py + core/agent_loop.py; ini murni switch pengiriman form. -->
+                <label class="trust-pick" title="{{ t('index.trust_title') }}">
+                    <input type="checkbox" id="trust-toggle">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 1.5l6 3v4c0 3.5-2.5 5.5-6 6.5-3.5-1-6-3-6-6.5v-4l6-3z"/></svg>
+                    <span>{{ t('index.trust_label') }}</span>
                 </label>
             </div>
 
@@ -154,6 +169,7 @@
             statusThink: {{ t('index.status_think')|tojson }},
             statusThinking: {{ t('index.status_thinking')|tojson }},
             statusTool: {{ t('index.status_tool')|tojson }},
+            statusTrusted: {{ t('index.status_trusted')|tojson }},
             statusAsk: {{ t('index.status_ask')|tojson }},
             statusApproval: {{ t('index.status_approval')|tojson }},
             approve: {{ t('index.approve')|tojson }},
@@ -161,6 +177,16 @@
             approved: {{ t('index.approved')|tojson }},
             rejected: {{ t('index.rejected')|tojson }},
             approvalFailed: {{ t('index.approval_failed')|tojson }},
+            newChat: {{ t('index.new_chat')|tojson }},
+            history: {{ t('index.history')|tojson }},
+            historyEmpty: {{ t('index.history_empty')|tojson }},
+            historyDelete: {{ t('index.history_delete')|tojson }},
+            historyDeleteConfirm: {{ t('index.history_delete_confirm')|tojson }},
+            bucketToday: {{ t('index.bucket_today')|tojson }},
+            bucketYesterday: {{ t('index.bucket_yesterday')|tojson }},
+            bucket7d: {{ t('index.bucket_7d')|tojson }},
+            bucket30d: {{ t('index.bucket_30d')|tojson }},
+            bucketOlder: {{ t('index.bucket_older')|tojson }},
             statusFall: {{ t('index.status_fall')|tojson }},
             statusFallbackTo: {{ t('index.status_fallback_to', detail='__D__')|tojson }},
             statusStop: {{ t('index.status_stop')|tojson }},

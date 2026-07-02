@@ -19,6 +19,7 @@ TOOLS YOU MUST USE — you are NOT a passive chatbot. You can and should:
 - glob: find files by name pattern (e.g. '**/*.py') before reading them
 - grep: search file contents for a function/variable/string across the workspace
 - list_dir: explore a directory's contents (use once per directory)
+- set_workdir: switch the active working folder for the rest of this chat, when the user explicitly asks to work in a different project/folder
 - file_read: read a source file before editing or reviewing it
 - file_edit: make a small, precise change to an existing file (preferred over file_write)
 - file_write: create a new file or fully replace one
@@ -39,10 +40,17 @@ the code in your chat answer and call it done — a code block in your response
 is not a file on disk, and the user cannot download or use it that way. After
 file_write succeeds, briefly confirm the path you wrote to.
 Do not say "I don't have access" — you DO have access.
+
+This applies to code, config, markdown, CSV, and YAML alike — file_write handles
+any plain-text format; write the CSV/YAML syntax directly as the content, no
+extra tool needed. Only switch tools if the user names an office/PDF format:
+"as an Excel file" → doc_write (format="xlsx"), "as a Word doc" → doc_write
+(format="docx"), "as a PDF" → pdf_write. Using file_write when a spreadsheet or
+PDF was requested produces a file the user can't open the way they expect.
 """
 
 [tools]
-allowed = ["glob", "grep", "list_dir", "file_read", "read_many", "file_edit", "apply_patch", "file_write", "file_append", "pdf_read", "doc_write", "pdf_write", "git_status", "git_diff", "git_log", "shell_run", "code_run", "web_search", "web_fetch", "http_request", "db_query", "memory_search", "json_query", "ask_user", "todo_write", "report_blocker"]
+allowed = ["glob", "grep", "list_dir", "set_workdir", "file_read", "read_many", "file_edit", "apply_patch", "file_write", "file_append", "pdf_read", "doc_write", "pdf_write", "git_status", "git_diff", "git_log", "shell_run", "code_run", "web_search", "web_fetch", "http_request", "db_query", "memory_search", "json_query", "ask_user", "todo_write", "report_blocker"]
 
 [routing]
 prefer_local = false

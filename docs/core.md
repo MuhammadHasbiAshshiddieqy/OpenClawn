@@ -64,6 +64,11 @@ Konfigurasi per-sesi agent.
 | `autopilot` | `True` → tool butuh-approval TIDAK dieksekusi, diantri sebagai proposal (§1, §17). Default `False`. |
 | `workspace_override` | Folder kerja adaptif per-sesi; menggantikan `CONFIG.workspace_root` via ContextVar hanya selama turn. `None` = default server. Divalidasi di `web/main.py`. |
 | `persist_history` | `True` (default) → muat/simpan riwayat sesi ke `session_turns` (single-agent, agar turn berikutnya ingat konteks). `False` untuk multi-agent (strategy kelola transkrip sendiri). |
+| `trust_mode` | `True` → tool yang butuh approval (kecuali `_TRUST_MODE_EXEMPT`) TETAP DIEKSEKUSI tanpa menunggu klik manusia (§ user request otonomi). Beda dari `autopilot`: manusia sedang hadir di sesi aktif, hanya melewati klik. Default `False`. Toggle UI per-pengiriman, tak persist. |
+
+### Konstanta: `_TRUST_MODE_EXEMPT`
+
+`frozenset({"code_run"})` — tool yang TIDAK PERNAH bisa dilewati `AgentConfig.trust_mode`, berapa pun nilainya. Approval `code_run` adalah aturan keras CLAUDE.md §1 ("code_run → True selalu"), bukan preferensi tool yang bisa dilonggarkan fitur otonomi. Dicek di DUA tempat (defense in depth): `_run_tool_loop` (menentukan status event mana yang di-emit ke UI) dan `_execute_tool` (menentukan `auto_approve` vs `request` yang benar-benar dipanggil) — sehingga bug di satu titik tak membuka celah code_run lolos tanpa approval.
 
 ### Dataclass: `Turn`
 
@@ -123,6 +128,7 @@ Inisialisasi semua komponen: LLM client, memory manager, skill decay, router, au
 **`run(user_message: str) → AsyncGenerator[AgentEvent, None]`** *(async generator)*  
 Pipeline utama per turn. Menghasilkan `AgentEvent` (`token` + `status`) ke Web UI via SSE. Status di-emit di titik kunci: `routing` (setelah model dipilih), `thinking` (sebelum tiap stream LLM), `tool` (sebelum eksekusi tool), `fallback` (saat fallback chain aktif). Urutan:
 
+0. **Resolve & set workspace root** — prioritas: (a) `AgentConfig.workspace_override` dari form UI bila diisi eksplisit di request ini; (b) kalau kosong & `persist_history=True`, folder tersimpan di `session_workspace` (`SessionWorkspaceStore.get`) dari panggilan tool `set_workdir` di turn SEBELUMNYA (§ user request "pindah direktori dinamis lewat chat" — `AgentLoop` dibuat baru tiap request, jadi perpindahan folder harus dimuat balik dari DB, bukan cuma ContextVar in-memory yang sudah reset); (c) default `CONFIG.workspace_root`. Hasilnya di-set ke `CURRENT_WORKSPACE_ROOT` (ContextVar), di-reset di `finally` agar tak bocor ke request lain.
 1. **Shield scan** — tolak input mencurigakan sebelum masuk pipeline
 2. **Correction check** — deteksi apakah turn sebelumnya dikoreksi user (audit feedback)
 2b. **Load session history** — bila `persist_history` & `self.history` kosong, muat giliran sesi ini dari `session_turns` (`MemoryManager.load_turns`, cap `session_history_turns`) → agent ingat percakapan lintas-request (§ user report). Multi-agent skip (kelola transkrip sendiri).
@@ -139,9 +145,13 @@ Loop iteratif (bukan rekursif) untuk menangani tool call. Meng-emit `AgentEvent`
 - **Writeback giliran tool:** setelah tool dieksekusi, DUA pesan ditulis kembali ke `messages` — giliran `assistant` yang MEMANGGIL tool (`tool_calls`, format Ollama/OpenAI-compatible) lalu hasilnya (`role="tool"`). Sebelumnya hanya hasil yang di-append; model lokal (Gemma/DeepSeek) tak melihat bahwa ia sudah memanggil tool, jadi memanggil ULANG tool yang sama (§ user report: menulis file berulang).
 - **Hasil tool diformat** lewat `_format_tool_result` (teks sukses/gagal eksplisit, bukan repr dict) agar model kecil mengenali "selesai".
 - **Deteksi loop 2 lapis:** (a) tool+input identik berturut-turut ≥2× → hard stop; (b) khusus `_FILE_WRITE_TOOLS`, path yang sama berturut-turut ≥1× (kali kedua) → hard stop (menulis ulang file identik bukan alur normal). Keduanya meng-emit `AgentEvent(type="status", text="loop_stopped")`.
+- **Trust mode (§ user request otonomi):** `bypass_approval` dihitung SEBELUM eksekusi (`trust_mode` aktif, bukan autopilot, tool bukan `_TRUST_MODE_EXEMPT`) — menentukan status yang di-emit ke UI: `AgentEvent(type="status", text="tool_trusted", ...)` (chip biasa + badge "trusted") alih-alih `text="approval"` (kartu Approve/Reject) untuk tool yang requires_approval. Diteruskan ke `_execute_tool` sebagai parameter, bukan dihitung ulang di sana.
+- **`hop_max_tokens`:** dihitung tiap hop dari `tools_schema` — `CONFIG.llm_max_tokens_with_tools` (8192) bila `tools_schema` terisi, `CONFIG.llm_max_tokens_default` (4096) bila kosong. Dilempar ke `stream_with_fallback(...)` sebagai argumen ke-5. § bug "No answer" (model lokal reasoning-heavy kehabisan giliran di `<think>` sebelum sempat bertindak): menaikkan cap ini SAJA tidak menjamin perbaikan bila model berhenti *natural* (`done: true`, bukan truncated) — lihat `docs/roles.md` role `pm` untuk kasus nyata yang perbaikannya lewat routing ke tier lebih kuat, bukan token budget.
 
-**`_execute_tool(name, input_data) → dict`** *(async, private)*  
+**`_execute_tool(name, input_data, approval_id=None, bypass_approval=False) → dict`** *(async, private)*  
 Eksekusi satu tool dengan jaring pengaman §1.3: cek keberadaan → cek izin role → **validasi input vs schema** (`_validate_tool_input`) → approval jika perlu → jalankan dalam `asyncio.wait_for(timeout=tool_timeout_sec)` dengan try/except yang mengubah exception/timeout apa pun menjadi `{"error": ...}` anggun → potong output seragam (`_truncate_tool_output`) → catat telemetri (`ToolAudit.record`). Satu tool yang gagal/menggantung tidak menjatuhkan turn.
+
+Cabang approval, urut prioritas: (1) `autopilot` → `ApprovalGate.queue_proposal` (tool TIDAK dieksekusi, proposal untuk ditinjau); (2) `bypass_approval and name not in _TRUST_MODE_EXEMPT` → `ApprovalGate.auto_approve` (tool TETAP dieksekusi, tercatat `decision="auto:trust_mode"`); (3) selain itu → `ApprovalGate.request` biasa (blocking, menunggu klik manusia atau timeout→DENY). `code_run` SELALU jatuh ke (3) berapa pun `bypass_approval`-nya — pengecualian dicek langsung di sini, bukan hanya dipercaya dari caller.
 
 **`_truncate_tool_output(result) → dict`** *(private)*  
 Potong field teks hasil tool yang melebihi `tool_max_output` (token-first §1.4) — jaring akhir agar tidak ada tool yang membanjiri context.
@@ -160,10 +170,14 @@ Kembalikan schema hanya untuk tool yang diizinkan role ini (hemat token).
 
 **`_post_turn(user_message, turn, active_skills, history_snapshot) → None`** *(async, private)*  
 Background task yang berjalan setelah turn selesai. Tidak memblokir SSE stream:
+- **Sidebar riwayat chat** (§ user report): `ChatSessionStore.touch` (urutan terbaru dulu) + generate judul via `_generate_session_title` SEKALI di turn pertama (`has_title` gate) — hanya bila `persist_history` (single-agent)
 - Tulis L1 checkpoint jika turn punya konten (tiap turn)
 - Arsip ke L4 jika history sudah cukup panjang (`archive_after_turns`)
 - Jalankan decay pass (throttled)
 - Crystallize jika syarat terpenuhi (≥ 3 tool calls)
+
+**`_generate_session_title(user_message) → None`** *(async, private)*  
+Judul sidebar dari pesan pertama sesi, via LLM lokal kecil (`compaction_local_model`, gemma4:e2b — sama tier dipakai `_maybe_compact`). `truncate_for_title_prompt` (§ `infra/chat_sessions.py`) memotong pesan panjang jadi head+tail kata SEBELUM dikirim ke LLM (§ user request — pesan pertama bisa panjang, tak perlu membayar token generate judul untuk seluruh isinya). Fail-safe (§1.3): LLM/parsing gagal → sesi tetap tanpa judul (sidebar fallback ke `"New chat"`), di-log `session_title_generation_failed`, tak menjatuhkan turn.
 
 **`_post_turn_done(task) → None`** *(private)*  
 Callback `add_done_callback` untuk menangkap error dari background task `_post_turn`.

@@ -43,7 +43,7 @@ def _fake_stream_calling_tool(tool_name: str, tool_input: dict):
     """LLM mock: giliran pertama panggil tool, giliran kedua jawab teks (stop)."""
     calls = {"n": 0}
 
-    async def stream(provider, model, messages, tools_schema):
+    async def stream(provider, model, messages, tools_schema, max_tokens=None):
         calls["n"] += 1
         if calls["n"] == 1:
             yield LLMChunk(type="tool_call", tool_name=tool_name, tool_input=tool_input)

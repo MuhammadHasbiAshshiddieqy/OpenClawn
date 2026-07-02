@@ -172,6 +172,9 @@ caller yang tidak memberi ID, mis. test lama).
 **`resolve(approval_id, approved) → bool`**  
 Dipanggil dari endpoint `/approve` saat user klik tombol. Set result pada Future yang menunggu di `request()`. Return `True` jika approval_id valid dan berhasil di-resolve, `False` jika tidak ditemukan atau sudah selesai.
 
+**`auto_approve(session_id, tool_name, tool_input) → bool`** *(async)*  
+Trust mode per-sesi (§ user request otonomi): tool YANG BUTUH APPROVAL tetap DIEKSEKUSI sungguhan, tapi tanpa Future/blocking — langsung catat ke `approval_log` dengan `decision="auto:trust_mode"` (berbeda dari `"approved"` manual, agar audit trail membedakan keputusan manusia vs toggle) lalu return `True`. Beda dari `queue_proposal`: manusia SEDANG hadir di sesi chat aktif (bukan autopilot tanpa manusia), hanya melewati klik. Caller (`AgentLoop._execute_tool`) yang memutuskan tool mana boleh lewat sini — `code_run` TIDAK PERNAH, berapa pun trust mode-nya (CLAUDE.md §1, lihat `core/agent_loop.py` § `_TRUST_MODE_EXEMPT`).
+
 **`pending_list(session_id=None) → list[dict]`**  
 Kembalikan daftar approval yang masih menunggu. Bisa difilter per sesi. Endpoint
 introspeksi read-only (`GET /approvals`) — Web UI chat TIDAK memakai polling ke sini;

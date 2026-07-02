@@ -14,7 +14,7 @@ asalnya bagi user yang meng-approve.
 from core.mcp_client import MCPClient, MCPToolSpec
 from tools.base import Tool
 
-# Prefix nama agar tool MCP selalu dapat dibedakan dari 26 tool bawaan.
+# Prefix nama agar tool MCP selalu dapat dibedakan dari 27 tool bawaan.
 MCP_PREFIX = "mcp__"
 
 

@@ -42,6 +42,8 @@ Test untuk `core/router.py` (Inovasi 1 — routing).
 | `test_detect_script_cjk` / `_latin_ascii` / `_arabic` | `_detect_script` mengenali sistem tulisan via Unicode |
 | `test_language_bump_off_by_default` | Language bump OFF default (opt-in, tak menambah biaya) |
 | `test_language_bump_raises_tier_when_enabled` | Aktif: script di luar tier lokal → naik tier; latin tak di-bump |
+| `test_pm_prd_request_routes_to_cloud_not_local_reasoning_model` | Regresi bug "No answer": PRD/dokumen di soul PM asli menembus `COMPLEX` (cloud), bukan berhenti di tier lokal reasoning-heavy |
+| `test_pm_unrelated_query_still_stays_local` | Fix PRD tidak menaikkan biaya untuk query PM lain (tetap di Ollama) |
 
 ---
 
@@ -437,7 +439,7 @@ Test untuk `tools/`.
 
 | Test | Yang Diverifikasi |
 |---|---|
-| `test_registry_has_all_26_tools` | Semua 26 tool terdaftar di registry |
+| `test_registry_has_all_27_tools` | Semua 27 tool terdaftar di registry |
 | `test_file_read_returns_content` | `FileReadTool` baca file yang ada |
 | `test_file_read_not_found` | File tidak ada → error dict (tidak crash) |
 | `test_file_write_creates_file` | `FileWriteTool` tulis konten |
@@ -469,6 +471,8 @@ Test untuk `tools/`.
 | `test_doc_write_xlsx_rows` | xlsx dari `{headers,rows}` → spreadsheet baris benar |
 | `test_doc_write_pptx_slides` | pptx dari `{title,slides}` → presentasi multi-slide |
 | `test_doc_write_rejects_path_outside_workspace` | Path di luar workspace ditolak (keamanan #1) |
+| `test_pm_dev_qa_have_doc_and_pdf_write_access` (parametrized pm/dev/qa) | § user request: QA harus bisa menulis test-case matrix Excel/laporan PDF — ketiga role punya `doc_write`+`pdf_write` di `[tools].allowed` soul.toml |
+| `test_security_soul_unchanged_read_only` | Kontrol negatif: role `security` TETAP tanpa `file_write`/`doc_write`/`pdf_write` (read-only §17) |
 | `test_ssrf_guard_blocks_loopback` | `_ssrf_guard` tolak `localhost`/`127.0.0.1`/`::1` |
 | `test_ssrf_guard_blocks_cloud_metadata` | Tolak endpoint metadata cloud `169.254.169.254` (link-local) |
 | `test_ssrf_guard_blocks_private_rfc1918` | Tolak alamat privat RFC1918 (10.x/192.168.x) |
@@ -823,6 +827,71 @@ Test SSE heartbeat (§ user report: "Server not responding" & diam sebelum seles
 | `test_no_heartbeat_when_source_is_fast` | Sumber tanpa jeda → tak ada ping (stream normal tak terkotori) |
 | `test_source_exception_propagates` | Error sumber diteruskan ke caller, tak ditelan |
 | `test_empty_source_completes_cleanly` | Sumber kosong → selesai tanpa ping menggantung |
+
+---
+
+### `tests/test_trust_mode.py`
+
+Test trust mode per-sesi (§ user request otonomi: kurangi approval yang tak perlu). Tool yang butuh approval tetap DIEKSEKUSI, hanya melewati klik manusia — `code_run` selalu dikecualikan (CLAUDE.md §1).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_shell_run_no_longer_requires_approval` | `ShellRunTool.requires_approval` sekarang `False` (sandbox = pertahanan, bukan approval) |
+| `test_code_run_still_requires_approval` | Kontrol negatif: `CodeRunTool.requires_approval` tetap `True` |
+| `test_code_run_is_trust_mode_exempt` | `"code_run"` ada di `_TRUST_MODE_EXEMPT` |
+| `test_trust_mode_bypasses_approval_and_executes_for_real` | Trust mode aktif → `file_write` benar-benar menulis file (bukan cuma diloloskan), lewat `auto_approve`; tercatat `decision="auto:trust_mode"` |
+| `test_trust_mode_never_bypasses_code_run` | `code_run` + `trust_mode=True` + `bypass_approval=True` tetap lewat `approval.request()` normal, `auto_approve` tak pernah dipanggil |
+| `test_bypass_approval_false_uses_normal_request` | `bypass_approval=False` → jalur `request()` biasa, `auto_approve` tak dipanggil |
+| `test_autopilot_wins_over_trust_mode` | Autopilot tetap PROPOSAL walau `trust_mode=True` — `auto_approve` tak dipanggil |
+| `test_auto_approve_records_trust_decision_and_returns_true` | `ApprovalGate.auto_approve` mencatat `decision="auto:trust_mode"` & return `True` |
+
+---
+
+### `tests/test_set_workdir.py`
+
+Test pindah direktori kerja dinamis lewat chat (§ user request: "pindah direktori secara dinamis" — sebelumnya folder kerja HANYA bisa diubah lewat field UI, tak ada cara mengubahnya dari dalam percakapan).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_session_workspace_get_set_roundtrip` | `SessionWorkspaceStore.set`/`get` roundtrip |
+| `test_session_workspace_upsert_overwrites` | `set()` kedua menimpa nilai lama (UPSERT, bukan duplikat baris) |
+| `test_session_workspace_isolated_per_session` | Folder sesi A tak bocor ke sesi B |
+| `test_set_workdir_success_sets_contextvar_and_db` | Sukses → `CURRENT_WORKSPACE_ROOT` berubah LANGSUNG (turn ini ikut pindah) + tersimpan ke `session_workspace` (turn berikutnya) |
+| `test_set_workdir_missing_path_errors` | `path` kosong → error, bukan crash |
+| `test_set_workdir_nonexistent_folder_errors` | Folder tak ada → error; DB TIDAK berubah (fail-closed) |
+| `test_set_workdir_missing_session_id_errors` | `_session_id` absen (dipanggil di luar AgentLoop) → error anggun |
+| `test_set_workdir_registered_and_no_approval` | Terdaftar di `TOOL_REGISTRY`, `requires_approval=False` |
+| `test_workdir_change_persists_to_next_agentloop` | AgentLoop TURN 1 panggil `set_workdir` → AgentLoop BARU turn 2 (sesi sama, tanpa form workdir) otomatis pakai folder baru — `file_read` di folder itu sukses |
+| `test_explicit_workspace_override_wins_over_saved_workdir` | Form UI diisi eksplisit di request ini → menang atas `session_workspace` tersimpan |
+
+---
+
+### `tests/test_chat_sessions.py`
+
+Test sidebar riwayat chat (§ user report: chat selalu ke-reset, tak ada cara buka chat baru/lanjutkan/hapus riwayat). `_post_turn` diuji LANGSUNG (`await agent._post_turn(...)`), bukan lewat `agent.run()` penuh — ia dijadwalkan sebagai background task terpisah (`asyncio.create_task`), pola sama `test_memory_wiring.py`.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_truncate_short_message_unchanged` | Pesan pendek (≤ head+tail kata) dikirim utuh ke LLM judul |
+| `test_truncate_long_message_keeps_head_and_tail` | Pesan panjang dipotong jadi `head ... tail`, jauh lebih pendek dari asli |
+| `test_truncate_exact_boundary_unchanged` | Persis di batas head+tail kata → tidak dipotong |
+| `test_ensure_created_idempotent` | Panggilan kedua tak duplikat baris |
+| `test_ensure_created_does_not_overwrite_existing_title` | `INSERT OR IGNORE` tak menimpa title yang sudah ada |
+| `test_set_title_strips_quotes_and_truncates` | Tanda kutip pembungkus dibuang; judul dipotong ke `MAX_TITLE_CHARS` |
+| `test_has_title_false_until_set` | Gate generate-judul akurat sebelum/sesudah `set_title` |
+| `test_touch_updates_timestamp` | `touch()` memperbarui `updated_at` (urutan sidebar terbaru dulu) |
+| `test_list_active_excludes_deleted` | Sesi yang di-soft-delete tak muncul di `list_active` |
+| `test_soft_delete_hard_deletes_turns_and_workspace` | `soft_delete` menghapus FISIK `session_turns`+`session_workspace`, metadata `chat_sessions` tetap ada (`deleted_at` terisi) |
+| `test_list_active_respects_limit` | Parameter `limit` dihormati |
+| `test_title_generated_on_first_turn` | Turn pertama → judul di-generate dari LLM lokal & tersimpan |
+| `test_title_not_regenerated_on_second_turn` | Turn kedua (sudah punya judul) → LLM judul TAK dipanggil lagi (hemat token) |
+| `test_title_generation_failure_does_not_crash_turn` | LLM judul gagal (exception) → `_post_turn` tetap selesai normal (fail-safe §1.3) |
+| `test_multi_agent_does_not_generate_title` | `persist_history=False` → `chat_sessions` tak tersentuh sama sekali |
+| `test_list_chat_sessions_empty_initially` | `GET /chat-sessions` kosong sebelum ada sesi |
+| `test_list_chat_sessions_fallback_title_new_chat` | Sesi tanpa judul → response fallback `"New chat"` (bukan `null` mentah) |
+| `test_get_chat_session_turns_empty_for_unknown_session` | Sesi tak dikenal → `turns: []`, bukan 404 |
+| `test_get_chat_session_turns_returns_transcript` | Transkrip lengkap urut lama→baru |
+| `test_delete_chat_session_removes_from_list_and_turns` | `DELETE` menghilangkan sesi dari daftar DAN transkripnya |
 
 ---
 

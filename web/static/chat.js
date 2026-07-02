@@ -56,6 +56,12 @@ if (workdirInput && workdirHidden) {
 }
 function currentWorkdir() { return (workdirInput && workdirInput.value.trim()) || ''; }
 
+// Trust mode (§ user request otonomi): toggle checkbox murni, tak persist antar
+// reload — harus dipilih sadar tiap sesi. Server yang menegakkan pengecualian
+// (code_run tetap selalu approval, CLAUDE.md §1); ini cuma switch di form.
+const trustToggle = document.getElementById('trust-toggle');
+function currentTrustMode() { return !!(trustToggle && trustToggle.checked); }
+
 // Token budget meter (§1.4): perbarui dari event usage. Warna naik ke amber/merah
 // saat context mendekati batas, agar token blowout terlihat sebelum jadi masalah.
 function updateBudget(u) {
@@ -99,6 +105,7 @@ function statusLabel(text, detail) {
         case 'routing':      return '<span class="status-tag route">' + T.statusRoute + '</span> ' + fillT(T.statusRouting, detail);
         case 'thinking':     return '<span class="status-tag think">' + T.statusThink + '</span> ' + T.statusThinking;
         case 'tool':         return '<span class="status-tag tool">' + T.statusTool + '</span> ' + detail;
+        case 'tool_trusted': return '<span class="status-tag trusted">' + T.statusTrusted + '</span> ' + detail;
         case 'approval':     return '<span class="status-tag approval">' + T.statusApproval + '</span> ' + detail;
         case 'question':     return '<span class="status-tag ask">' + T.statusAsk + '</span> ' + escapeHtml(detail);
         case 'fallback':     return '<span class="status-tag fall">' + T.statusFall + '</span> ' + fillT(T.statusFallbackTo, detail);
@@ -370,6 +377,12 @@ function handleStatus(s, beforeEl) {
         const input = s.input || {};
         appendToolCard(s.detail, input, s.approval || '', beforeEl);
         showStatus(statusLabel(s.text, s.detail));
+    } else if (s.text === 'tool_trusted') {
+        // Trust mode (§ user request otonomi): tool YANG BIASANYA butuh approval
+        // dieksekusi langsung. Kartu sama seperti 'tool' tapi badge 'trusted' agar
+        // user tetap tahu ini aksi yang dilewati approval-nya (transparan, bukan diam-diam).
+        appendToolCard(s.detail, {}, 'trusted', beforeEl);
+        showStatus(statusLabel(s.text, s.detail));
     } else if (s.text === 'approval') {
         // Tool butuh persetujuan manusia SEDANG menunggu (§ chat approval UI —
         // dulu: tak ada tombol, semua tool butuh-approval selalu timeout).
@@ -398,7 +411,7 @@ function endAnswerMode() {
 async function runSingle(message) {
     userBubble(message);
     showStatus('<span class="status-tag think">' + T.statusWait + '</span> ' + T.statusSending);
-    const params = new URLSearchParams({ message, role: form.role.value, session_id: form.session_id.value, workdir: currentWorkdir() });
+    const params = new URLSearchParams({ message, role: form.role.value, session_id: form.session_id.value, workdir: currentWorkdir(), trust_mode: currentTrustMode() });
 
     // newAssistantBubble mengembalikan body-div; wrapEl = parentElement (bubble utuh)
     const bodyEl = newAssistantBubble('');
@@ -451,6 +464,11 @@ async function runSingle(message) {
         appendAction('<span class="status-tag stop">' + T.statusErr + '</span> ' + T.errorDisconnected, 'error', wrapEl);
         if (!bodyEl.innerHTML.trim()) wrapEl.remove();
         hideStatus();
+    } finally {
+        // Sidebar riwayat (§ user report): sesi baru / judul yang baru selesai
+        // di-generate perlu muncul/terupdate — refresh terlepas sukses/gagal
+        // (server sudah mendaftarkan sesi di awal generate(), bahkan saat error).
+        document.dispatchEvent(new CustomEvent('openclawn:turn-complete'));
     }
 }
 
@@ -478,6 +496,7 @@ async function runConversation(message, pattern) {
         participants: activeRoles().join(','),
         rounds: String(rounds),
         workdir: currentWorkdir(),
+        trust_mode: String(currentTrustMode()),
     });
 
     const controller = new AbortController();
@@ -886,3 +905,158 @@ function finalizeBody(bodyEl) {
         bodyEl.appendChild(cheer);
     }
 }
+
+// ── Riwayat chat (§ user report: chat selalu ke-reset, tak ada cara buka chat
+// baru/lanjutkan/hapus riwayat) ─────────────────────────────────────────────
+//
+// Akar masalah lama: session_id di-generate ULANG (uuid server) tiap halaman
+// di-load — tak pernah disimpan di browser, jadi refresh selalu terasa seperti
+// chat baru walau transkrip (session_turns) sudah tersimpan di DB. Perbaikan:
+// simpan session_id AKTIF di localStorage, kirim balik lewat hidden field yang
+// sudah ada (form.session_id) — tak perlu ubah endpoint /chat/stream sama sekali.
+const LS_SESSION_KEY = 'openclawn_active_session';
+const historyListEl = document.getElementById('chat-history-list');
+const newChatBtn = document.getElementById('new-chat-btn');
+
+function currentSessionId() { return form.session_id.value; }
+function setSessionId(id) {
+    form.session_id.value = id;
+    try { localStorage.setItem(LS_SESSION_KEY, id); } catch (_) { /* privasi/incognito: no-op */ }
+}
+
+// Saat halaman dimuat: pakai session_id tersimpan (bila ada) alih-alih yang
+// di-generate server di setiap render — inilah yang membuat refresh TIDAK lagi
+// memulai sesi baru. localStorage bisa gagal (privasi/incognito) → fail-safe
+// ke uuid server (perilaku lama, sesi baru tiap load, bukan crash).
+(function restoreActiveSession() {
+    try {
+        const saved = localStorage.getItem(LS_SESSION_KEY);
+        if (saved) form.session_id.value = saved;
+        else localStorage.setItem(LS_SESSION_KEY, form.session_id.value);
+    } catch (_) { /* no-op, pakai uuid server apa adanya */ }
+})();
+
+// "Chat baru": session_id baru (client-side, cukup unik untuk tujuan ini —
+// server hanya butuh string unik per sesi, tak perlu UUID kripto) DISIMPAN ke
+// localStorage lalu halaman di-reload. Reload (bukan bersih-bersih DOM manual)
+// dipilih sengaja: state UI lain (mode select, convo config, empty-state
+// bawaan template) ikut ter-reset bersih & konsisten, bukan direkonstruksi
+// manual di JS yang rawan meleset dari markup server. restoreActiveSession()
+// di awal file otomatis memakai session_id baru ini setelah reload.
+function generateClientSessionId() {
+    return 'sess-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+function startNewChat() {
+    setSessionId(generateClientSessionId());
+    location.reload();
+}
+if (newChatBtn) newChatBtn.addEventListener('click', startNewChat);
+
+// Muat transkrip sesi lama dari riwayat → render ulang bubble user/assistant,
+// lalu jadikan sesi itu aktif (pesan baru berikutnya melanjutkan sesi ini).
+async function loadChatSession(sessionId) {
+    let data;
+    try {
+        const resp = await fetch('/chat-sessions/' + encodeURIComponent(sessionId) + '/turns');
+        data = await resp.json();
+    } catch (_) {
+        toast(T.errorDisconnected, 'error');
+        return;
+    }
+    if (emptyState) emptyState.remove();
+    chatBox.querySelectorAll('.msg, .action, .tool-card').forEach(function(el) { el.remove(); });
+    (data.turns || []).forEach(function(turn) {
+        if (turn.role === 'user') {
+            userBubble(turn.content);
+        } else {
+            const body = newAssistantBubble('');
+            body.innerHTML = renderMarkdown(turn.content || '');
+            finalizeBody(body);
+        }
+    });
+    setSessionId(sessionId);
+    highlightActiveHistoryItem();
+    smartScroll();
+}
+
+async function deleteChatSession(sessionId, itemEl) {
+    if (!confirm(T.historyDeleteConfirm)) return;
+    try {
+        const resp = await fetch('/chat-sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' });
+        const data = await resp.json();
+        if (!data.ok) throw new Error('delete failed');
+    } catch (_) {
+        toast(T.errorDisconnected, 'error');
+        return;
+    }
+    if (itemEl) itemEl.remove();
+    // Sesi aktif dihapus → mulai chat baru (tak ada transkrip lagi untuk ditampilkan).
+    if (sessionId === currentSessionId()) startNewChat();
+}
+
+function highlightActiveHistoryItem() {
+    if (!historyListEl) return;
+    const active = currentSessionId();
+    historyListEl.querySelectorAll('.history-item').forEach(function(el) {
+        el.classList.toggle('active', el.dataset.sessionId === active);
+    });
+}
+
+const BUCKET_LABELS = { today: 'bucketToday', yesterday: 'bucketYesterday', '7d': 'bucket7d', '30d': 'bucket30d', older: 'bucketOlder' };
+const BUCKET_ORDER = ['today', 'yesterday', '7d', '30d', 'older'];
+
+// Render daftar riwayat: dikelompokkan GANDA (§ user request) — heading per
+// bucket WAKTU (urutan tetap), lalu di dalam tiap bucket dikelompokkan lagi
+// per ROLE (label kecil, bukan heading terpisah — biar tak terlalu berlapis).
+function renderChatHistory(sessions) {
+    if (!historyListEl) return;
+    const render = function(list) {
+        historyListEl.innerHTML = '';
+        if (!list.length) {
+            const empty = document.createElement('div');
+            empty.className = 'history-empty';
+            empty.textContent = T.historyEmpty;
+            historyListEl.appendChild(empty);
+            return;
+        }
+        const byBucket = {};
+        list.forEach(function(s) { (byBucket[s.bucket] = byBucket[s.bucket] || []).push(s); });
+        BUCKET_ORDER.forEach(function(bucket) {
+            const items = byBucket[bucket];
+            if (!items || !items.length) return;
+            const heading = document.createElement('div');
+            heading.className = 'history-bucket-label';
+            heading.textContent = T[BUCKET_LABELS[bucket]];
+            historyListEl.appendChild(heading);
+            items.forEach(function(s) {
+                const item = document.createElement('div');
+                item.className = 'history-item' + (s.session_id === currentSessionId() ? ' active' : '');
+                item.dataset.sessionId = s.session_id;
+                item.innerHTML =
+                    '<span class="history-role-dot" title="' + escapeHtml(s.role.toUpperCase()) + '"></span>' +
+                    '<span class="history-title">' + escapeHtml(s.title) + '</span>' +
+                    '<button type="button" class="history-delete" title="' + escapeHtml(T.historyDelete) + '">' +
+                    '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 4.5h10M6.5 4.5V3a1 1 0 011-1h1a1 1 0 011 1v1.5M4.5 4.5l.6 8.4a1 1 0 001 .9h3.8a1 1 0 001-.9l.6-8.4"/></svg>' +
+                    '</button>';
+                item.classList.add('role-' + s.role);
+                item.addEventListener('click', function(e) {
+                    if (e.target.closest('.history-delete')) return;
+                    loadChatSession(s.session_id);
+                });
+                item.querySelector('.history-delete').addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    deleteChatSession(s.session_id, item);
+                });
+                historyListEl.appendChild(item);
+            });
+        });
+    };
+    if (sessions) { render(sessions); return; }
+    fetch('/chat-sessions').then(function(r) { return r.json(); }).then(function(data) {
+        render(data.sessions || []);
+    }).catch(function() { /* sidebar riwayat opsional — kegagalan diam-diam, chat tetap jalan */ });
+}
+renderChatHistory();
+// Refresh daftar tiap kali turn selesai (judul baru/sesi baru muncul) — event
+// custom di-dispatch dari sendMessage/runSingle/runConversation setelah selesai.
+document.addEventListener('openclawn:turn-complete', function() { renderChatHistory(); });

@@ -21,6 +21,7 @@ THINK BEFORE YOU ACT. For any non-trivial task:
 
 TOOLS YOU MUST USE — you are NOT a passive chatbot. You can and should:
 - glob / grep / list_dir: locate data files (csv, json, parquet, etc.)
+- set_workdir: switch the active working folder for the rest of this chat, when the user explicitly asks to work in a different folder
 - file_read: read a dataset or a sample of it before analyzing
 - pdf_read: extract tables/figures from PDF reports
 - db_query: run read-only SELECT queries against the internal database
@@ -43,7 +44,7 @@ RULES:
 """
 
 [tools]
-allowed = ["glob", "grep", "list_dir", "file_read", "read_many", "pdf_read", "doc_write", "pdf_write", "db_query", "code_run", "json_query", "memory_search", "web_search", "web_fetch", "ask_user", "todo_write", "report_blocker"]
+allowed = ["glob", "grep", "list_dir", "set_workdir", "file_read", "read_many", "pdf_read", "doc_write", "pdf_write", "db_query", "code_run", "json_query", "memory_search", "web_search", "web_fetch", "ask_user", "todo_write", "report_blocker"]
 
 [routing]
 prefer_local = false

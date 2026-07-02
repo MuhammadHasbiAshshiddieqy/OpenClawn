@@ -14,12 +14,20 @@ class ShellRunTool(Tool):
     """Jalankan perintah shell read-only DI DALAM Docker sandbox.
 
     Keamanan #1: TIDAK ada eksekusi di host. Workspace di-mount read-only,
-    --network none, non-root. Bila Docker tidak tersedia → gagal aman, bukan
-    fallback ke host. Tetap butuh approval (perintah arbitrer).
+    --network none, non-root, no-new-privileges (lihat DockerSandbox._base_docker_args).
+    Bila Docker tidak tersedia → gagal aman, bukan fallback ke host.
+
+    requires_approval=False (§ user request otonomi): sandbox — bukan approval —
+    adalah pertahanan di sini (CLAUDE.md §17, "Shield lapisan kosmetik, pertahanan
+    utama = container isolation"). Command APA PUN yang dikirim ke sini secara fisik
+    tak bisa menulis ke host maupun menjangkau network, jadi meminta approval manusia
+    tidak menambah keamanan nyata — hanya gesekan untuk command read-only sehari-hari
+    (grep/find/ls/git log). Beda dari code_run (TETAP selalu approval, CLAUDE.md §1 —
+    aturan itu tidak disentuh oleh perubahan ini).
     """
 
     name = "shell_run"
-    requires_approval = True
+    requires_approval = False
 
     def __init__(self):
         self.sandbox = DockerSandbox()
@@ -45,8 +53,7 @@ class ShellRunTool(Tool):
                 "Jalankan perintah shell read-only (grep, find, ls, cat, git log, wc) "
                 "di dalam sandbox terisolasi atas workspace. Filesystem read-only & tanpa "
                 "network — tidak bisa memodifikasi file atau mengakses internet. "
-                "Untuk membaca 1 file pakai file_read; untuk list folder pakai list_dir. "
-                "SELALU butuh persetujuan user."
+                "Untuk membaca 1 file pakai file_read; untuk list folder pakai list_dir."
             ),
             "input_schema": {
                 "type": "object",

@@ -86,6 +86,76 @@
     padding: 1px 6px; border-radius: 999px; margin-left: 6px;
 }
 
+/* Riwayat chat (§ user report: chat selalu ke-reset, tak ada cara buka chat
+   baru/lanjutkan/hapus riwayat). Ambil sisa ruang sidebar & scroll sendiri
+   (bukan seluruh sidebar) agar brand/nav-link tetap terlihat saat riwayat panjang.
+   `.spacer` (setelah nav-links) diredam saat halaman ini punya .history-group —
+   keduanya flex:1 akan berebut ruang sisa; .history-group yang harus menang. */
+.history-group {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+}
+.sidebar:has(.history-group) .spacer { flex: 0; }
+.new-chat-btn {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; margin-bottom: 10px;
+    padding: 9px 11px;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+    font-family: inherit; font-size: .82rem; font-weight: 600; cursor: pointer;
+    transition: background .15s, border-color .15s;
+}
+.new-chat-btn svg { width: 14px; height: 14px; flex: none; }
+.new-chat-btn:hover { background: var(--panel-2); border-color: var(--purple-bright); }
+
+.chat-history-list {
+    flex: 1; min-height: 0; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 2px;
+    margin: 0 -6px; padding: 0 6px;
+}
+.history-bucket-label {
+    font-size: .62rem; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--text-faint); padding: 10px 8px 4px;
+}
+.history-bucket-label:first-child { padding-top: 2px; }
+.history-empty {
+    padding: 10px 8px; font-size: .78rem; color: var(--text-faint);
+}
+.history-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 8px; border-radius: var(--radius-sm);
+    cursor: pointer; color: var(--text-dim);
+    border: 1px solid transparent;
+    transition: background .12s, color .12s;
+}
+.history-item:hover { background: var(--panel); color: var(--text); }
+.history-item.active {
+    background: var(--panel-2); color: var(--text);
+    border-color: var(--purple-bright);
+}
+.history-role-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex: none;
+    background: var(--green);
+}
+.history-item.role-dev .history-role-dot { background: var(--purple-bright); }
+.history-item.role-qa .history-role-dot { background: var(--cyan-soft); }
+.history-item.role-data .history-role-dot { background: #f0c45a; }
+.history-item.role-security .history-role-dot { background: var(--red-soft); }
+.history-title {
+    flex: 1; min-width: 0;
+    font-size: .8rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.history-delete {
+    flex: none; opacity: 0; padding: 3px; border: none; background: transparent;
+    color: var(--text-faint); cursor: pointer; border-radius: 4px;
+    transition: opacity .12s, color .12s, background .12s;
+}
+.history-delete svg { width: 13px; height: 13px; display: block; }
+.history-item:hover .history-delete { opacity: 1; }
+.history-delete:hover { color: var(--red-soft); background: rgba(236,30,75,.12); }
+
 /* Mode multi-agent: pemilih role single jadi tidak relevan → redupkan & matikan
    interaksinya (peserta dipilih lewat chip di composer). Tetap terlihat sebagai
    konteks, tapi jelas non-aktif. */

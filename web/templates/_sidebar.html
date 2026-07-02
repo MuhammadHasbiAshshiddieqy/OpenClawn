@@ -29,6 +29,20 @@
             {% endfor %}
         </div>
     </div>
+
+    <!-- Riwayat chat (§ user report: chat selalu ke-reset, tak ada cara buka chat
+         baru/lanjutkan/hapus riwayat). session_id aktif disimpan di localStorage
+         (chat.js) — refresh halaman TIDAK lagi membuat sesi baru. Daftar diisi
+         chat.js via GET /chat-sessions, dikelompokkan per-waktu DAN per-role
+         (§ user request keduanya) — lihat renderChatHistory di chat.js. -->
+    <div class="history-group" id="history-group">
+        <button type="button" id="new-chat-btn" class="new-chat-btn">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 3v10M3 8h10"/></svg>
+            {{ t('index.new_chat') }}
+        </button>
+        <div class="side-label">{{ t('index.history') }}</div>
+        <div id="chat-history-list" class="chat-history-list"></div>
+    </div>
     {% endif %}
 
     <div>

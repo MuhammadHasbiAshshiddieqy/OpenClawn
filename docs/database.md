@@ -55,6 +55,35 @@ Riwayat giliran (user/assistant) untuk single-agent chat, ber-`session_id`. `Age
 
 ---
 
+### `session_workspace` — Folder Kerja Aktif Per-Sesi
+
+Folder kerja aktif untuk satu sesi chat, bisa diubah agent sendiri lewat tool `set_workdir` (§ user request: "pindah direktori secara dinamis" lewat chat — sebelumnya folder kerja HANYA bisa diubah lewat field UI sekali per-request). Satu baris per sesi (UPSERT) — beda dari `session_turns` yang append-log, ini state "saat ini", bukan riwayat. Dibaca `AgentLoop.run()` di awal turn (fallback bila form `workdir` kosong), ditulis `SetWorkdirTool` saat sukses.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `session_id` | TEXT PK | Sesi pemilik folder aktif |
+| `workdir` | TEXT | Path absolut folder kerja aktif |
+| `updated_at` | TIMESTAMP | |
+
+---
+
+### `chat_sessions` — Metadata Sidebar Riwayat Chat
+
+Metadata TAMPILAN (judul, waktu, role) untuk sidebar riwayat chat single-agent (§ user report: "chat selalu ke-reset", tak ada cara buka chat baru/lanjutkan/hapus riwayat). Terpisah dari `session_turns` (transkrip per-giliran) — tabel ini murni untuk daftar di sidebar, bukan isi percakapan.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `session_id` | TEXT PK | Sesi yang direpresentasikan |
+| `role` | TEXT | Role aktif saat sesi dibuat (label kecil di item sidebar) |
+| `title` | TEXT | `NULL` sampai turn pertama selesai; di-generate LLM lokal dari potongan pesan pertama (lihat `infra/chat_sessions.py`) |
+| `created_at` | TIMESTAMP | |
+| `updated_at` | TIMESTAMP | Diperbarui tiap turn (`ChatSessionStore.touch`) — dipakai urutan sidebar (terbaru dulu) & grouping bucket waktu |
+| `deleted_at` | TIMESTAMP | `NULL` = aktif. Diisi saat user hapus riwayat (soft-delete — metadata tetap ada untuk audit trail lama), TAPI `session_turns`/`session_workspace` terkait dihapus FISIK saat itu juga |
+
+**Index:** `idx_chat_sessions_active` pada `(deleted_at, updated_at DESC)` — load daftar sidebar cepat (filter aktif + urut terbaru).
+
+---
+
 ### `skills` — Skill Store (L3 + Decay)
 
 Skill yang dipelajari agent beserta metadata decay.

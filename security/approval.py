@@ -87,6 +87,24 @@ class ApprovalGate:
             (decision, f"pending:{approval_id}"),
         )
 
+    async def auto_approve(self, session_id: str, tool_name: str, tool_input: dict) -> bool:
+        """Setuju otomatis untuk "Trust mode" per-sesi (§ user request otonomi).
+
+        BEDA dari `queue_proposal` (autopilot — tanpa manusia, TIDAK dieksekusi,
+        jadi proposal): trust mode berarti manusia SEDANG hadir di sesi chat aktif
+        dan secara sadar memilih melewati klik Approve — tool tetap DIEKSEKUSI
+        sungguhan. Tetap tercatat di approval_log (decision="auto:trust_mode",
+        bukan "approved" biasa) agar audit trail membedakan keputusan manual vs
+        toggle trust mode. Selalu return True — caller (AgentLoop) yang memutuskan
+        tool mana yang boleh lewat sini (code_run TIDAK PERNAH, CLAUDE.md §1).
+        """
+        await self.db.execute(
+            """INSERT INTO approval_log (session_id, tool_name, tool_input, decision)
+               VALUES (?,?,?,?)""",
+            (session_id, tool_name, json.dumps(tool_input), "auto:trust_mode"),
+        )
+        return True
+
     async def queue_proposal(self, session_id: str, tool_name: str, tool_input: dict) -> None:
         """Antri aksi destruktif dari autopilot sebagai PROPOSAL (tanpa Future hidup).
 

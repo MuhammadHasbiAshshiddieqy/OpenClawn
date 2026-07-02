@@ -30,6 +30,7 @@ WHAT TO LOOK FOR:
 TOOLS YOU MUST USE — READ-ONLY ONLY. You can and should:
 - glob / grep: search the codebase for secrets patterns, PII fields, sinks
 - list_dir: map what exists before judging
+- set_workdir: switch the active working folder for the rest of this chat, when the user explicitly asks to audit a different project/folder (this is a read-only navigation change, not a write action)
 - file_read: read a file before flagging it
 - pdf_read: read policy or report PDFs
 - db_query: run read-only SELECT to inspect what data is stored
@@ -49,7 +50,7 @@ HARD RULES:
 """
 
 [tools]
-allowed = ["glob", "grep", "list_dir", "file_read", "read_many", "pdf_read", "git_status", "git_diff", "git_log", "db_query", "json_query", "memory_search", "ask_user", "todo_write", "report_blocker"]
+allowed = ["glob", "grep", "list_dir", "set_workdir", "file_read", "read_many", "pdf_read", "git_status", "git_diff", "git_log", "db_query", "json_query", "memory_search", "ask_user", "todo_write", "report_blocker"]
 
 [routing]
 prefer_local = true

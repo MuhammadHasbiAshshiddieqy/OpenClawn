@@ -272,3 +272,27 @@ def test_language_bump_raises_tier_when_enabled(tmp_path):
     # Bump CJK menghasilkan tier ≥ latin (skor sama, threshold lebih rendah).
     order = list(Complexity)
     assert order.index(cjk.complexity) >= order.index(latin.complexity)
+
+
+def test_pm_prd_request_routes_to_cloud_not_local_reasoning_model():
+    """Regresi bug 'No answer': gemma4:e4b kehabisan giliran di dalam <think>
+    saat merencanakan tool call untuk dokumen terstruktur (PRD), stream
+    berhenti natural sebelum sempat bertindak. roles/pm/soul.toml menggabungkan
+    upgrade_keywords (+3) & multistep_keywords (+2) khusus PRD/dokumen agar
+    skor menembus COMPLEX (cloud), bukan berhenti di MODERATE (masih lokal &
+    masih reasoning-heavy)."""
+    router = SmartRouter(role="pm", soul_path="roles/pm/soul.toml")
+    route = router.decide(messages=[], query="Buatkan contoh dokumen PRD")
+    assert route.soul_upgrade_hit is True
+    assert route.dimensions["needs_multistep"] == 1
+    assert route.complexity in (Complexity.COMPLEX, Complexity.CRITICAL)
+    assert route.provider != "ollama"
+
+
+def test_pm_unrelated_query_still_stays_local():
+    """Query PM biasa (tanpa PRD/dokumen) tetap di tier lokal seperti semula —
+    fix PRD tidak boleh menaikkan biaya untuk permintaan lain."""
+    router = SmartRouter(role="pm", soul_path="roles/pm/soul.toml")
+    route = router.decide(messages=[], query="halo, apa kabar?")
+    assert route.soul_upgrade_hit is False
+    assert route.provider == "ollama"
