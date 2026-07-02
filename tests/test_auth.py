@@ -97,3 +97,23 @@ def test_protected_paths_not_public():
     assert is_public_path("/") is False
     assert is_public_path("/skills") is False
     assert is_public_path("/chat/stream") is False
+
+
+def test_max_age_sec_default_matches_session_max_age():
+    """Tanpa argumen eksplisit, perilaku lama tak berubah (absolute expiry 7 hari)."""
+    token = create_session_token("secret123")
+    assert verify_session_token(token, "secret123") is True
+
+
+def test_custom_max_age_sec_rejects_token_older_than_it():
+    """Idle timeout: max_age_sec lebih ketat dari absolute expiry harus ditolak."""
+    old_ts = str(int(time.time()) - 100)
+    token = f"{old_ts}.{_sign(old_ts, 'secret123')}"
+    assert verify_session_token(token, "secret123", max_age_sec=SESSION_MAX_AGE_SEC) is True
+    assert verify_session_token(token, "secret123", max_age_sec=50) is False
+
+
+def test_custom_max_age_sec_accepts_token_within_window():
+    ts = str(int(time.time()) - 10)
+    token = f"{ts}.{_sign(ts, 'secret123')}"
+    assert verify_session_token(token, "secret123", max_age_sec=60) is True

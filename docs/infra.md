@@ -23,6 +23,7 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `anthropic_base` | `https://api.anthropic.com` | URL base Anthropic API |
 | `gemini_base` | `https://generativelanguage.googleapis.com` | URL base Google AI Studio (Gemini) |
 | `auth_token` | `""` (kosong) | §P0 self-host auth — password shared satu-satunya user. Kosong = auth DIMATIKAN (default, aman localhost). Isi via `OPENCLAWN_AUTH_TOKEN` di `.env` untuk self-host di VPS publik. Lihat `security/auth.py` & README § Scope and Production Posture |
+| `idle_timeout_sec` | `None` (OFF) | Opt-in, TODO.md § Prioritas 1.5 — logout otomatis setelah N detik TAK aktif (beda dari `SESSION_MAX_AGE_SEC` = absolute expiry 7 hari sejak login, tetap berlaku sebagai batas atas). Isi via `OPENCLAWN_IDLE_TIMEOUT_SEC` di `.env`. Hanya berpengaruh bila `auth_token` juga diisi. Lihat `security/auth.py` & middleware `auth_and_csrf_middleware` di `web/main.py` |
 | `max_context_tokens` | `28_000` | Batas token context window |
 | `max_tool_hops` | `5` | Maksimum iterasi tool loop per turn |
 | `llm_max_tokens_default` | `4096` | Cap output per hop LLM saat hop TANPA tool (`tools_schema` kosong, mis. ringkas percakapan di `_maybe_compact`) |
@@ -116,6 +117,24 @@ Baca file SQL dari `sql_path` dan jalankan sebagai script (untuk migration). Dip
 
 **`close() → None`** *(async)*  
 Tutup koneksi. Dipanggil saat shutdown.
+
+---
+
+## `infra/backup.py`
+
+Backup/restore SQLite (§ production-readiness — gap dicatat di `PRODUCTION-READINESS.md` §0 & `TODO.md` § Prioritas 1.5). Dipakai lewat `scripts/backup_db.py` (cron/systemd timer) atau dipanggil langsung. Bukan `DatabaseManager` — file ini murni operasi filesystem/sqlite3 stdlib, tidak butuh koneksi shared aplikasi.
+
+### Fungsi: `backup_database(source_path: str, backup_dir: str) → Path`
+
+Salin `source_path` ke `backup_dir/openclawn_{timestamp}.db` (format `YYYYMMDDTHHMMSS`), return path tujuan. Pakai `sqlite3.Connection.backup()` (SQLite Online Backup API) — **bukan** `shutil.copy`/`cp` — karena aman dipanggil selagi server (koneksi WAL lain) masih hidup; hasilnya snapshot konsisten, bukan salinan byte yang berpotensi setengah-tertulis. `FileNotFoundError` bila `source_path` tidak ada.
+
+### Fungsi: `list_backups(backup_dir: str) → list[Path]`
+
+List file `openclawn_*.db` di `backup_dir`, terbaru dulu (sort by nama — timestamp di nama file membuat ini otomatis kronologis). Direktori tidak ada → list kosong (bukan error).
+
+### Fungsi: `prune_old_backups(backup_dir: str, keep: int) → list[Path]`
+
+Hapus semua backup KECUALI `keep` yang terbaru. Return list path yang dihapus. Retensi berbasis JUMLAH file (bukan umur) — lebih mudah diprediksi operator self-host dibanding "hapus yang lebih tua dari N hari" saat frekuensi backup bisa berubah.
 
 ---
 

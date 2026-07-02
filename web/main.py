@@ -273,16 +273,35 @@ async def auth_and_csrf_middleware(request: Request, call_next):
     Rate limit SELALU aktif (independen dari auth) — endpoint LLM tetap perlu
     dibatasi biayanya walau auth dimatikan (mis. localhost dev yang lupa
     menyalakan auth tapi tetap ingin batas wajar).
+
+    Idle timeout (opt-in, `CONFIG.idle_timeout_sec`): token stateless hanya punya
+    `ts` = waktu LOGIN, bukan waktu aktivitas terakhir. Untuk logout otomatis
+    setelah N detik TAK aktif (bukan N detik sejak login), cookie diterbitkan
+    ULANG dengan `ts` baru di setiap request valid — lihat `security/auth.py`
+    docstring modul. Absolute expiry (`SESSION_MAX_AGE_SEC`) tetap berlaku sebagai
+    batas atas terpisah, tidak pernah diperpanjang oleh refresh idle timeout.
     """
     path = request.url.path
+    refresh_session_cookie = False
 
     if CONFIG.auth_token and not is_public_path(path):
-        session_valid = verify_session_token(request.cookies.get(SESSION_COOKIE), CONFIG.auth_token)
+        effective_max_age = (
+            min(CONFIG.idle_timeout_sec, SESSION_MAX_AGE_SEC)
+            if CONFIG.idle_timeout_sec
+            else SESSION_MAX_AGE_SEC
+        )
+        session_valid = verify_session_token(
+            request.cookies.get(SESSION_COOKIE), CONFIG.auth_token, max_age_sec=effective_max_age
+        )
         if not session_valid:
             if request.method == "GET":
                 nxt = quote(str(request.url.path))
                 return RedirectResponse(url=f"/login?next={nxt}", status_code=303)
             return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+        # Sesi valid + idle timeout aktif → tandai untuk refresh `ts` di response
+        # akhir (perpanjang jendela idle, TIDAK melewati absolute expiry 7 hari).
+        refresh_session_cookie = CONFIG.idle_timeout_sec is not None
 
         # CSRF: hanya untuk POST form HTML biasa. Endpoint SSE/fetch JS di-exempt
         # (lihat _CSRF_EXEMPT_PATHS) karena sudah dilindungi cookie auth + SameSite.
@@ -311,7 +330,18 @@ async def auth_and_csrf_middleware(request: Request, call_next):
                 headers={"Retry-After": "60"},
             )
 
-    return await call_next(request)
+    response = await call_next(request)
+
+    if refresh_session_cookie:
+        response.set_cookie(
+            SESSION_COOKIE,
+            create_session_token(CONFIG.auth_token),
+            max_age=SESSION_MAX_AGE_SEC,
+            httponly=True,
+            samesite="lax",
+        )
+
+    return response
 
 
 @app.exception_handler(StarletteHTTPException)

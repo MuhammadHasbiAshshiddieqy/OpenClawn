@@ -259,10 +259,12 @@ diisi di `.env` (self-host di VPS publik, lihat README § Scope & Production Pos
 **`create_session_token(secret) → str`**  
 Token sesi `{timestamp}.{hmac_hex}` ditandatangani HMAC-SHA256. Dipanggil saat login sukses.
 
-**`verify_session_token(token, secret) → bool`**  
+**`verify_session_token(token, secret, max_age_sec=SESSION_MAX_AGE_SEC) → bool`**  
 Verifikasi signature (constant-time via `hmac.compare_digest`, cegah timing attack) +
-expiry (`SESSION_MAX_AGE_SEC`, default 7 hari). Token tanpa titik, signature tak
-cocok, atau kedaluwarsa/masa depan → ditolak.
+expiry (`max_age_sec`, default `SESSION_MAX_AGE_SEC` = 7 hari). Token tanpa titik,
+signature tak cocok, atau kedaluwarsa/masa depan → ditolak. Parameter `max_age_sec`
+memungkinkan pemanggil (middleware) memakai batas lebih ketat dari absolute expiry —
+dasar mekanisme idle timeout di bawah.
 
 **`verify_login_token(candidate, secret) → bool`**  
 Bandingkan password yang diketik user vs `OPENCLAWN_AUTH_TOKEN`, constant-time.
@@ -279,6 +281,20 @@ Diintegrasikan di `web/main.py` (`auth_and_csrf_middleware`): cek sesi → redir
 `/login` (GET) atau 401 JSON (non-GET) bila tak valid; lalu cek CSRF untuk POST
 form biasa (endpoint SSE/fetch JS di `_CSRF_EXEMPT_PATHS` — sudah dilindungi
 cookie auth + `SameSite=lax`, tak realistis membawa token form).
+
+**Idle timeout (opt-in, `CONFIG.idle_timeout_sec`, TODO.md § Prioritas 1.5):**
+token stateless hanya punya `ts` = waktu LOGIN, bukan waktu aktivitas terakhir —
+tidak ada tabel sesi di server untuk melacak "last seen". Saat `idle_timeout_sec`
+diisi, middleware melakukan dua hal tambahan:
+1. Memvalidasi sesi dengan `max_age_sec=min(idle_timeout_sec, SESSION_MAX_AGE_SEC)`
+   alih-alih absolute expiry biasa — token yang lebih tua dari jendela idle ditolak
+   walau belum mencapai 7 hari.
+2. Menerbitkan ULANG cookie sesi (`ts` baru) di response tiap request valid —
+   efektif menjadikan `ts` "waktu aktivitas terakhir" sambil tetap stateless
+   (tidak ada state baru di DB, hanya cookie yang di-refresh oleh browser).
+
+Default `None` (OFF) → kedua langkah di atas di-skip sepenuhnya, perilaku lama
+(hanya absolute expiry 7 hari) tak berubah.
 
 ---
 

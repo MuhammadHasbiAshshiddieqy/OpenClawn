@@ -17,6 +17,16 @@ Desain:
   ulang signature + expiry (default 7 hari) di tiap request via middleware.
 - TIDAK ada state sesi di server (stateless signed cookie) — restart server tak
   memaksa re-login selama cookie belum kedaluwarsa.
+
+Idle timeout (§ production-readiness, opt-in, TODO.md § Prioritas 1.5): `ts` di
+token adalah waktu token DITERBITKAN, bukan waktu aktivitas terakhir — desain
+stateless tidak punya "last seen" di server. `verify_session_token(max_age_sec=...)`
+membiarkan pemanggil (middleware) memakai batas lebih ketat dari absolute expiry
+default. Untuk idle timeout sungguhan (logout setelah N detik TAK aktif, bukan N
+detik sejak login), middleware menerbitkan ULANG cookie (dengan `ts` baru) di
+setiap request valid ketika `CONFIG.idle_timeout_sec` diisi — efektif menjadikan
+`ts` sebagai "waktu aktivitas terakhir" sambil tetap stateless (tidak ada tabel
+sesi baru di DB). Default `None` (OFF) → perilaku lama sama sekali tak berubah.
 """
 
 import hashlib
@@ -48,10 +58,14 @@ def create_session_token(secret: str) -> str:
     return f"{ts}.{_sign(ts, secret)}"
 
 
-def verify_session_token(token: str | None, secret: str) -> bool:
+def verify_session_token(
+    token: str | None, secret: str, max_age_sec: int = SESSION_MAX_AGE_SEC
+) -> bool:
     """Verifikasi signature HMAC + expiry. Gagal parse/signature/expired → False.
 
     `hmac.compare_digest` mencegah timing attack saat membandingkan signature.
+    `max_age_sec` default ke absolute expiry (7 hari); middleware boleh mengoper
+    nilai lebih kecil untuk enforce idle timeout (lihat docstring modul).
     """
     if not token or "." not in token:
         return False
@@ -61,7 +75,7 @@ def verify_session_token(token: str | None, secret: str) -> bool:
     if not hmac.compare_digest(sig, _sign(ts_str, secret)):
         return False
     age = time.time() - int(ts_str)
-    return 0 <= age <= SESSION_MAX_AGE_SEC
+    return 0 <= age <= max_age_sec
 
 
 def verify_login_token(candidate: str, secret: str) -> bool:

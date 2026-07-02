@@ -5,6 +5,7 @@ login sukses set cookie, CSRF menolak POST tanpa token, endpoint publik tetap
 bisa diakses tanpa sesi.
 """
 
+import time
 import warnings
 
 import pytest
@@ -12,7 +13,9 @@ import pytest
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
-def _make_client(tmp_path, monkeypatch, auth_token: str | None = None):
+def _make_client(
+    tmp_path, monkeypatch, auth_token: str | None = None, idle_timeout_sec: int | None = None
+):
     db_file = tmp_path / "test.db"
     monkeypatch.setenv("OPENCLAWN_DB", str(db_file))
     monkeypatch.setenv("OPENCLAWN_WORKSPACE", str(tmp_path))
@@ -20,6 +23,10 @@ def _make_client(tmp_path, monkeypatch, auth_token: str | None = None):
         monkeypatch.setenv("OPENCLAWN_AUTH_TOKEN", auth_token)
     else:
         monkeypatch.delenv("OPENCLAWN_AUTH_TOKEN", raising=False)
+    if idle_timeout_sec is not None:
+        monkeypatch.setenv("OPENCLAWN_IDLE_TIMEOUT_SEC", str(idle_timeout_sec))
+    else:
+        monkeypatch.delenv("OPENCLAWN_IDLE_TIMEOUT_SEC", raising=False)
 
     import importlib
 
@@ -46,6 +53,15 @@ def client_no_auth(tmp_path, monkeypatch):
 def client_auth(tmp_path, monkeypatch):
     """Auth aktif dengan token 'test-secret-token'."""
     with _make_client(tmp_path, monkeypatch, auth_token="test-secret-token") as c:
+        yield c
+
+
+@pytest.fixture
+def client_auth_idle(tmp_path, monkeypatch):
+    """Auth aktif + idle timeout 60 detik — untuk test refresh cookie sliding."""
+    with _make_client(
+        tmp_path, monkeypatch, auth_token="test-secret-token", idle_timeout_sec=60
+    ) as c:
         yield c
 
 
@@ -175,6 +191,48 @@ def test_logout_without_csrf_rejected(client_auth):
     )
     resp = client_auth.post("/logout")
     assert resp.status_code == 403
+
+
+# ── Idle timeout (opt-in, TODO.md § Prioritas 1.5) ───────────────────────────
+
+
+def test_idle_timeout_off_does_not_refresh_cookie(client_auth):
+    """Default (idle_timeout_sec=None) — cookie TIDAK di-refresh tiap request."""
+    login_resp = client_auth.post(
+        "/login", data={"token": "test-secret-token", "next": "/"}, follow_redirects=False
+    )
+    original_cookie = login_resp.cookies.get("openclawn_session")
+
+    resp = client_auth.get("/")
+    assert resp.status_code == 200
+    assert "openclawn_session" not in resp.cookies  # tak ada Set-Cookie baru
+    assert client_auth.cookies.get("openclawn_session") == original_cookie
+
+
+def test_idle_timeout_on_refreshes_cookie_each_valid_request(client_auth_idle):
+    """idle_timeout_sec diset → tiap request valid menerbitkan ulang cookie sesi."""
+    login_resp = client_auth_idle.post(
+        "/login", data={"token": "test-secret-token", "next": "/"}, follow_redirects=False
+    )
+    assert "openclawn_session" in login_resp.cookies
+
+    resp = client_auth_idle.get("/")
+    assert resp.status_code == 200
+    assert "openclawn_session" in resp.cookies  # Set-Cookie baru di respons
+
+
+def test_idle_timeout_rejects_session_older_than_idle_window():
+    """Token yang usianya melewati idle_timeout_sec (tapi masih dalam absolute
+    expiry 7 hari) harus ditolak — inti idle timeout: idle, bukan absolute."""
+    from security.auth import _sign, verify_session_token
+
+    old_ts = str(int(time.time()) - 120)  # 120 detik lalu
+    token = f"{old_ts}.{_sign(old_ts, 'test-secret-token')}"
+
+    # Idle window 60 detik → token berusia 120 detik ditolak walau absolute expiry (7 hari) belum lewat.
+    assert verify_session_token(token, "test-secret-token", max_age_sec=60) is False
+    # Tanpa idle timeout (absolute expiry biasa) token yang sama masih valid.
+    assert verify_session_token(token, "test-secret-token") is True
 
 
 def test_rate_limit_blocks_after_quota_exhausted(client_no_auth):

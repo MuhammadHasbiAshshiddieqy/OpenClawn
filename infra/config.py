@@ -19,6 +19,12 @@ class AppConfig:
     # Kosong (default) → auth DIMATIKAN, perilaku lama tetap jalan tanpa login
     # (aman untuk localhost dev). Isi di .env untuk self-host di VPS publik.
     auth_token: str = ""
+    # Idle timeout (opt-in, TODO.md § Prioritas 1.5): logout otomatis setelah N
+    # detik TAK aktif — berbeda dari SESSION_MAX_AGE_SEC (absolute expiry 7 hari
+    # sejak login, tetap berlaku sebagai batas atas walau idle timeout aktif).
+    # None (default) → OFF, perilaku lama (hanya absolute expiry) tak berubah.
+    # Nilai jual untuk buyer dengan kebijakan sesi ketat (bank/finance/compliance).
+    idle_timeout_sec: int | None = None
     max_context_tokens: int = 28_000
     max_tool_hops: int = 5
     # Output cap default per hop LLM (§ stream_with_fallback). Turn dengan tools
@@ -170,6 +176,11 @@ class AppConfig:
             gemini_base=os.environ.get("GEMINI_BASE", "https://generativelanguage.googleapis.com"),
             workspace_root=os.environ.get("OPENCLAWN_WORKSPACE", "."),
             auth_token=os.environ.get("OPENCLAWN_AUTH_TOKEN", ""),
+            idle_timeout_sec=(
+                int(os.environ["OPENCLAWN_IDLE_TIMEOUT_SEC"])
+                if os.environ.get("OPENCLAWN_IDLE_TIMEOUT_SEC")
+                else None
+            ),
         )
 
 
