@@ -39,8 +39,14 @@ Load semua layer dan kembalikan sebagai dict:
 
 L4 hanya di-query jika query > 3 kata **atau** mengandung term teknis spesifik. Ini hemat query SQLite untuk percakapan pendek/casual. Query disanitasi lewat `fts5_query()` sebelum MATCH — query bertanda baca (titik, titik dua, kurung) tidak lagi memicu syntax error.
 
+**`load_turns(limit=20) → list[dict]`** *(async)*  
+Muat transkrip giliran (`user`/`assistant`) untuk **sesi ini** dari `session_turns`, urut lama→baru, dibatasi `limit` giliran TERBARU. Dipakai `AgentLoop._run()` di awal turn untuk mengisi `self.history` — karena `AgentLoop` dibuat baru tiap request web, tanpa ini turn N+1 tak pernah melihat turn N (§ user report: agent seolah tak baca chat sebelumnya, bahkan di sesi yang sama). Berbeda dari `load_context` (role-scoped, ringkasan): ini per-`session_id`, transkrip penuh per-giliran.
+
+**`append_turn(role, content) → None`** *(async)*  
+Simpan satu giliran ke `session_turns` (persist multi-turn). Konten kosong dilewati. Dipanggil `AgentLoop._run()` di finalize (setelah guardrail OUTPUT → transkrip = versi teredaksi) untuk `user` lalu `assistant`. Hanya untuk single-agent (`AgentConfig.persist_history=True`); multi-agent mengelola transkrip sendiri di `turn_input`.
+
 **`update_checkpoint(summary: str) → None`** *(async)*  
-Tulis/update L1 key `"last_summary"` dengan konten terbaru (maks 500 karakter). Operasi UPSERT — tidak duplikasi.
+Tulis/update L1 key `"last_summary"` dengan konten terbaru (maks 500 karakter). Operasi UPSERT — tidak duplikasi. Catatan: role-scoped (bukan per-sesi) & hanya ringkasan jawaban terakhir; riwayat percakapan sebenarnya kini di `session_turns` (lihat `load_turns`).
 
 Dipanggil tiap turn dari `agent_loop._post_turn()` jika turn punya konten.
 

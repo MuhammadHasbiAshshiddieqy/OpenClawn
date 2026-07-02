@@ -39,6 +39,22 @@ Fakta semi-permanen yang diketahui agent per role.
 
 ---
 
+### `session_turns` — Transkrip Percakapan Per-Sesi
+
+Riwayat giliran (user/assistant) untuk single-agent chat, ber-`session_id`. `AgentLoop` dibuat baru tiap request web (`self.history` kosong di awal), jadi tanpa tabel ini turn N+1 tak melihat turn N walau di sesi sama (§ user report). Ditulis di finalize (`MemoryManager.append_turn`), dimuat kembali di awal turn (`load_turns`). Dipisah dari `conversations` (multi-agent, per-transkrip) karena granularitasnya per-giliran.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | Urutan giliran (ASC = lama→baru) |
+| `session_id` | TEXT | Sesi pemilik giliran |
+| `role` | TEXT | `"user"` atau `"assistant"` |
+| `content` | TEXT | Isi giliran (versi teredaksi bila guardrail OUTPUT aktif) |
+| `created_at` | TIMESTAMP | |
+
+**Index:** `idx_session_turns` pada `(session_id, id)` — load per-sesi urut.
+
+---
+
 ### `skills` — Skill Store (L3 + Decay)
 
 Skill yang dipelajari agent beserta metadata decay.

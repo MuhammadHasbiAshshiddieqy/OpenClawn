@@ -758,6 +758,74 @@ Test untuk `security/rate_limit.py` (`RateLimiter`) — sliding window in-memory
 
 ---
 
+### `tests/test_file_download.py`
+
+Test untuk fitur download file yang ditulis agent. Dua bagian: `AgentEvent(type="file_created")`
+di `core/agent_loop.py` (unit, LLM di-mock via `_fake_stream_calling_tool`), dan endpoint
+`GET /workspace/download` di `web/main.py` (via `TestClient`). **Penting:** tool file
+(`tools/file_ops.py`) memakai `CONFIG` singleton module-level, bukan config instance yang
+dipassing ke `AgentLoop` — test WAJIB patch `tools.file_ops.CONFIG` (helper `_set_workspace`,
+pola sama `tests/test_tools.py`) agar tidak menulis file sungguhan ke root proyek.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_file_created_event_emitted_on_successful_write` | `file_write` sukses (approval granted) → event `file_created` dengan path resolved di workspace sementara |
+| `test_file_created_event_not_emitted_when_approval_denied` | Approval ditolak → file tak ditulis → tak ada event (anti false-positive) |
+| `test_file_created_event_not_emitted_for_readonly_tools` | Tool baca (`grep`) tak pernah memicu `file_created` |
+| `test_file_created_not_emitted_on_workspace_violation` | Path di luar workspace → `file_write` gagal (`error`, bukan `ok`) → tak ada event |
+| `test_download_existing_file_in_workspace` / `test_download_nested_path_in_workspace` | File (termasuk di subfolder) di dalam workspace ter-download dengan isi benar |
+| `test_download_missing_file_returns_404` | File tak ada → 404 |
+| `test_download_path_traversal_returns_404_not_file_content` | `../` keluar workspace → 404, isi file di luar workspace TIDAK bocor ke response |
+| `test_download_directory_returns_404_not_error` | Path menunjuk direktori → 404 anggun, bukan exception |
+| `test_approval_status_event_emitted_before_blocking_request` | Event `status`/`approval` muncul dengan `approval_id` valid SEBELUM `ApprovalGate.request()` selesai; ID yang sama diteruskan ke `request()` |
+| `test_no_approval_event_for_readonly_tools` | Tool tanpa `requires_approval` (`grep`) tak pernah memicu event `approval` |
+| `test_no_approval_event_in_autopilot_mode` | Mode autopilot (proposal, bukan Future hidup) → tak ada event `approval` |
+
+---
+
+### `tests/test_agent_tool_loop.py`
+
+Test perbaikan tool loop di `core/agent_loop.py` (§ user report: agent menulis file berulang untuk task simpel). LLM di-mock via `stream_with_fallback` (pola sama `test_guardrails.py`); file-write diarahkan ke `tmp_path` lewat `workspace_override` agar aman.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_format_result_file_write_success_is_terminal` | `_format_tool_result` untuk file_write sukses → teks "SUCCESS ... do not write it again" (sinyal terminal untuk model lokal) |
+| `test_format_result_error_is_clear` | Hasil error → `ERROR: <pesan>` |
+| `test_format_result_generic_ok` | Hasil ok lain → `SUCCESS: k=v...` |
+| `test_format_result_non_dict_falls_back` | Hasil bukan dict → `str(result)` |
+| `test_assistant_tool_call_written_back_to_messages` | Setelah tool jalan, `messages` memuat giliran `assistant` dengan `tool_calls` + hasil `role="tool"`; model dipanggil tepat 2× (tool → selesai), tidak looping |
+| `test_same_path_write_twice_triggers_loop_stop` | Menulis path yang SAMA dua kali berturut-turut → `AgentEvent(status, loop_stopped)`, bukan menulis tanpa batas |
+
+---
+
+### `tests/test_session_history.py`
+
+Test persistensi riwayat percakapan per-sesi (§ user report: agent seolah tak baca chat sebelumnya, bahkan di sesi yang sama). `MemoryManager.load_turns`/`append_turn` + reload di `AgentLoop._run()`.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_append_and_load_turns_roundtrip` | Simpan lalu muat → urut lama→baru, isi utuh |
+| `test_load_turns_isolated_per_session` | Giliran satu sesi tak bocor ke sesi lain (filter `session_id`) |
+| `test_load_turns_caps_at_limit_keeping_newest` | `limit` mempertahankan giliran TERBARU, tetap urut lama→baru |
+| `test_append_turn_skips_empty` | Konten kosong tak disimpan |
+| `test_second_agentloop_sees_prior_turn` | AgentLoop BARU (request berikutnya, session sama) melihat user+assistant turn sebelumnya di `messages`; pesan baru tetap giliran user terakhir |
+| `test_persist_history_false_does_not_load_or_store` | Multi-agent (`persist_history=False`) tak memuat & tak menyimpan `session_turns` |
+
+---
+
+### `tests/test_heartbeat.py`
+
+Test SSE heartbeat (§ user report: "Server not responding" & diam sebelum selesai). `_with_heartbeat` menyisipkan komentar `: ping` selama jeda — koneksi TIDAK putus, tak ada yang perlu reconnect.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_heartbeat_fires_during_quiet_gap` | Jeda > interval → ≥1 `: ping`, data frame tetap utuh & urut |
+| `test_no_heartbeat_when_source_is_fast` | Sumber tanpa jeda → tak ada ping (stream normal tak terkotori) |
+| `test_source_exception_propagates` | Error sumber diteruskan ke caller, tak ditelan |
+| `test_empty_source_completes_cleanly` | Sumber kosong → selesai tanpa ping menggantung |
+
+---
+
 ## Pola Test Async
 
 ```python

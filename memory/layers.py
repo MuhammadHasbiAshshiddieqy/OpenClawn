@@ -48,6 +48,31 @@ class MemoryManager:
         q = query.lower()
         return any(t in q for t in SPECIFIC_TERMS)
 
+    async def load_turns(self, limit: int = 20) -> list[dict]:
+        """Muat transkrip giliran (user/assistant) sesi INI, urut lama→baru.
+
+        Memperbaiki hilangnya konteks percakapan (§ user report: agent seolah tak
+        pernah baca chat sebelumnya, bahkan di sesi yang sama). AgentLoop dibuat baru
+        tiap request → self.history kosong; ini yang mengembalikan riwayat sesi dari
+        DB agar build() menyertakannya ke messages. Di-cap `limit` giliran TERBARU
+        (token-first §1.4) — compaction/truncation di build() menangani sisanya.
+        """
+        rows = await self.db.fetchall(
+            """SELECT role, content FROM session_turns WHERE session_id=?
+               ORDER BY id DESC LIMIT ?""",
+            (self.session_id, limit),
+        )
+        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+    async def append_turn(self, role: str, content: str) -> None:
+        """Simpan satu giliran (user/assistant) ke transkrip sesi (persist multi-turn)."""
+        if not content:
+            return
+        await self.db.execute(
+            "INSERT INTO session_turns (session_id, role, content) VALUES (?,?,?)",
+            (self.session_id, role, content),
+        )
+
     async def update_checkpoint(self, summary: str) -> None:
         await self.db.execute(
             """INSERT INTO memory_l1 (role, key, value) VALUES (?, 'last_summary', ?)

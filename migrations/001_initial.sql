@@ -16,6 +16,21 @@ CREATE TABLE IF NOT EXISTS memory_l2 (
 );
 CREATE INDEX IF NOT EXISTS idx_l2_role ON memory_l2(role, importance DESC);
 
+-- Transkrip percakapan PER-SESI untuk single-agent chat. AgentLoop dibuat baru
+-- tiap request web (self.history selalu kosong di awal), sehingga sebelumnya turn
+-- N+1 tak pernah melihat turn N — model menganggap "konteks kurang" walau di sesi
+-- yang sama (§ user report). Tabel ini menyimpan tiap giliran (user/assistant)
+-- ber-session_id lalu dimuat kembali ke self.history di awal run(). Dipisah dari
+-- conversations (multi-agent) karena granularitasnya per-turn, bukan per-transkrip.
+CREATE TABLE IF NOT EXISTS session_turns (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,        -- 'user' | 'assistant'
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_session_turns ON session_turns(session_id, id);
+
 -- ===================== SKILLS + DECAY [#2] =====================
 CREATE TABLE IF NOT EXISTS skills (
     id INTEGER PRIMARY KEY, role TEXT NOT NULL,

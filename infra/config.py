@@ -32,6 +32,10 @@ class AppConfig:
     # Memori jangka panjang: arsipkan sesi ke L4 setelah melewati ambang turn ini
     # (cukup bermakna untuk dicari lagi lintas sesi, tapi tidak tiap turn).
     archive_after_turns: int = 6
+    # Jumlah giliran (user/assistant) TERBARU sesi ini yang dimuat kembali ke history
+    # tiap request (AgentLoop dibuat baru → history kosong). build() lalu memangkas
+    # lagi sesuai budget token; ini batas atas agar sesi panjang tak membanjiri query.
+    session_history_turns: int = 20
     # === Compounding intelligence (Sprint 6-8) ===
     # I1 — Skill Curator: gabung skill mirip agar library tak terfragmentasi.
     # Jauh lebih jarang dari decay (1×/hari); gated oleh judge & similarity.
