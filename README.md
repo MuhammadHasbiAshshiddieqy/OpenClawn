@@ -2,11 +2,11 @@
   <img src="assets/OpenClawn.png" alt="OpenCLAWN Logo" width="420" />
 
   <h1>OpenCLAWN</h1>
-  <p><strong>Playful by Design. Powerful by Nature.</strong></p>
-  <p>Lightweight, safe, self-improving multi-role agent framework</p>
+  <p><strong>The Open-Source Control Plane for Trusted AI Agents.</strong></p>
+  <p>Policy-before-dispatch, human-approval checkpoints, and immutable audit evidence — built in, not bolted on.</p>
 
   <p>
-    <strong>Route Smarter</strong> · <strong>Learn Continuously</strong> · <strong>Stay Safe</strong> · <strong>Hand Off Cleanly</strong>
+    <strong>Policy-Before-Dispatch</strong> · <strong>Human-Approval Checkpoints</strong> · <strong>Immutable Audit Evidence</strong>
   </p>
 
   <p>
@@ -14,8 +14,8 @@
     <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python 3.12+">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
     <img src="https://img.shields.io/badge/LLM-Ollama%20%2B%20Gemini%20%2B%20Claude-purple" alt="Hybrid LLM">
-    <img src="https://img.shields.io/badge/tools-26-orange" alt="26 Tools">
-    <img src="https://img.shields.io/badge/tests-490%20passing-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tools-27-orange" alt="27 Tools">
+    <img src="https://img.shields.io/badge/tests-636%20passing-brightgreen" alt="Tests">
   </p>
 </div>
 
@@ -23,7 +23,24 @@
 
 ## What is OpenCLAWN?
 
-OpenCLAWN is an agent framework built around **4 core innovations** that most agent frameworks skip:
+By 2026, the AI agent market shifted: multi-agent orchestration, tool calling, and RAG became
+table stakes — nearly every framework has them. What enterprises are actually buying now is
+**governance**: the ability to run an AI worker safely, with a paper trail, and stop it before
+it does something wrong. That gap is real — [research on 2026 enterprise adoption](https://agenticaiinstitute.org/agentic-ai-enterprise-adoption-2026-governance-gap/)
+found 72% of organizations already run agentic AI in production, but only 21% have a mature
+governance model for it.
+
+OpenCLAWN is built to close exactly that gap. It's a **control plane** — the layer that decides
+whether an agent's action is allowed, that stops it for a human when the rule says so, and that
+proves after the fact what happened and why — sitting on top of the agent logic itself:
+
+| What it does | How |
+|---|---|
+| **Policy-Before-Dispatch** | Every tool call carries `requires_approval`; nothing destructive runs before the policy check clears |
+| **Human-Approval Checkpoints** | Approval is a blocking gate in the loop, not a log line after the fact — the agent stops and waits |
+| **Immutable Audit Evidence** | Every routing decision, tool call, and skill promotion is logged **before** it happens and finalized **after** — a real paper trail, not best-effort logging |
+
+Underneath that, **4 core innovations** most agent frameworks skip make the control plane self-improving instead of static:
 
 | Innovation | Problem Solved |
 |---|---|
@@ -46,6 +63,38 @@ as it's used, all gated and reversible:
 | **Guardrails** | NeMo-style input/output rails (native, no LangChain): block prompt-injection, block system-prompt leaks, redact PII — config-toggleable, fail-safe on |
 
 **Stack:** Python 3.12 · FastAPI · HTMX · SQLite (aiosqlite) · Ollama + Gemini + Claude · httpx · Pydantic · structlog · tenacity
+
+---
+
+## Why not just use LangChain / CrewAI / AutoGen?
+
+Those frameworks are good at what they do — orchestrating the agent loop, tool calling,
+multi-agent coordination. But a 2026 comparative analysis of the space put it plainly:
+
+> "None of them governs risky actions before they hit production — pair your pick with an
+> agent control plane for policy, approvals, and audit... you still need policy-before-dispatch,
+> explicit human approval states, and audit evidence."
+> — [LangGraph vs CrewAI vs AutoGen, 2026 enterprise comparison](https://pub.towardsai.net/langgraph-vs-crewai-vs-autogen-which-ai-agent-framework-should-your-enterprise-use-in-2026-3a9ebb407b09)
+
+That's precisely the gap OpenCLAWN's 4 core innovations close:
+
+| Gap the analysis names | How OpenCLAWN answers it |
+|---|---|
+| No policy-before-dispatch | Every tool declares `requires_approval`; `code_run` can **never** bypass it (enforced at two independent points, not one) |
+| No explicit human approval states | Approval is a blocking node in the agent loop (`security/approval.py`) — the agent waits, it doesn't just log and proceed |
+| No audit evidence | Routing decisions are logged **before** the LLM call and finalized **after** (`core/audit.py`) — not best-effort, structured for replay |
+
+This isn't a claim that OpenCLAWN is "better" at agent orchestration than those frameworks —
+it's a narrower, more honest one: they don't ship a governance layer, and OpenCLAWN's core
+design *is* one. [`"agent control plane"`](https://www.ibm.com/think/topics/agent-control-plane)
+is itself now an established market category — GitHub, Google, and Microsoft all shipped
+products under that name in 2026 — and this is where OpenCLAWN sits, self-hosted and
+open-source instead of a vendor platform.
+
+**What OpenCLAWN is *not*, to be equally direct:** it does not have an event-driven runtime,
+multi-tenant isolation, or OAuth/SSO yet — these are tracked as future work, not silently
+skipped. It is honest about being single-user-per-deployment today, not a finished
+multi-tenant product (see [Scope & Production Posture](#scope--production-posture) below).
 
 ---
 
@@ -95,12 +144,14 @@ Open **http://localhost:8000** to chat · **http://localhost:8000/metrics** for 
 graph TB
     subgraph UI["Web UI — FastAPI + HTMX + SSE"]
         CHAT["/chat/stream · single agent"]
-        CONVERSE["/converse/stream · multi-agent"]
+        CONVERSE["/converse/stream · multi-agent (+ /interject · /stop)"]
         ACTIVITY["/activity · timeline + blockers"]
         AUTOPAGE["/autopilots · scheduled runs"]
         SKILLS["/skills · decay · curation · packs"]
         METRICS["/metrics · calibration · telemetry"]
         SETTINGS["/router · /settings · model map"]
+        CHATSESS_EP["/chat-sessions · history, resume, delete"]
+        LOGIN_EP["/login · opt-in session auth"]
     end
 
     subgraph CONVO["Multi-Agent Layer"]
@@ -138,8 +189,9 @@ graph TB
         COMPACTOR["ContextCompactor · token budget"]
     end
 
-    subgraph TOOLS["Tools — 26 total, all workspace-bounded"]
+    subgraph TOOLS["Tools — 27 total, all workspace-bounded"]
         FS["Filesystem · read/write/edit/append/patch/glob/grep/list_dir · read_many"]
+        WORKDIR["set_workdir · switch active folder mid-chat, persists per session"]
         EXEC["Execution · code_run · shell_run (both sandboxed)"]
         NET["Network · web_fetch · web_search · http_request (SSRF-guarded)"]
         DATA["Data/docs · db_query · json_query · pdf_read · doc_write · pdf_write"]
@@ -151,11 +203,16 @@ graph TB
         APPROVAL["ApprovalGate · HITL + proposal queue"]
         SHIELD2["Shield · injection scan · SSRF guard"]
         GUARD["Guardrails (NeMo-style) · input + output rails<br/>injection · prompt-leak · PII redaction"]
+        AUTH["Auth · opt-in shared-secret session + CSRF"]
+        RATELIM["RateLimiter · sliding window per-session"]
     end
 
     subgraph INFRA["Infrastructure"]
         DB["SQLite · aiosqlite · WAL · POWER()"]
         SANDBOX["Docker Sandbox · network none · read-only · non-root"]
+        WORKSPACE["SessionWorkspaceStore · per-session working dir"]
+        CHATSESS["ChatSessionStore · history, resume, delete"]
+        BACKUP["infra/backup.py · SQLite Online Backup API"]
     end
 
     UI --> CONVO
@@ -168,7 +225,9 @@ graph TB
     AGENT --> TOOLS
     AGENT --> SECURITY
     AGENT --> INFRA
+    UI --> AUTH
     EXEC --> SANDBOX
+    WORKDIR --> WORKSPACE
     MODULES --> DB
     SECURITY --> DB
 ```
@@ -316,18 +375,20 @@ flowchart LR
         GOUT["OUTPUT: prompt-leak &rarr; block · PII &rarr; redact"]
     end
 
-    subgraph SAFE["No approval — read-only / inspect / internal"]
+    subgraph SAFE["No approval — read-only / inspect / internal / sandboxed"]
         direction TB
         R1["file_read · read_many · list_dir · glob · grep"]
         R2["web_fetch · web_search · pdf_read (SSRF-guarded net)"]
         R3["memory_search · json_query · git_status/diff/log"]
         R4["todo_write · report_blocker (internal tables)"]
+        R5["set_workdir (session-scoped, not filesystem-destructive)"]
+        R6["shell_run — sandboxed, not approval-gated<br/>(container isolation is the real boundary, §17)"]
     end
 
     subgraph GATED["Requires approval — mutate / execute / reach out"]
         direction TB
         G1["file_write · file_edit · file_append · apply_patch"]
-        G2["code_run · shell_run"]
+        G2["code_run — ALWAYS gated, never bypassable (CLAUDE.md §1)"]
         G3["http_request (SSRF-guarded) · db_query (SELECT-only)"]
         G4["doc_write · pdf_write"]
     end
@@ -351,15 +412,20 @@ flowchart LR
     GATED --> AG
     GATED -.autopilot.-> AGP
     G2 --> SANDBOX
+    R6 --> SANDBOX
     SAFE --> GOUT
     AG --> GOUT
 ```
 
 > **Security note:** `code_run` and `shell_run` **never execute on the host** — both run inside
 > the Docker sandbox. If Docker is unavailable, they fail safe (return an error) rather than
-> falling back to host execution. `db_query` is SELECT-only. `web_fetch`/`http_request` pass an
-> anti-SSRF guard (reject loopback, private, link-local incl. cloud metadata). In **autopilot**
-> mode, approval-gated tools are queued as proposals for later review — never run unattended.
+> falling back to host execution. Only `code_run` requires human approval — `shell_run` doesn't,
+> because the sandbox (not the approval click) is the real security boundary for both; `code_run`
+> stays gated regardless because arbitrary code execution is treated as strictly higher-risk than
+> a shell command, and that gate can never be bypassed (not even by trust mode). `db_query` is
+> SELECT-only. `web_fetch`/`http_request` pass an anti-SSRF guard (reject loopback, private,
+> link-local incl. cloud metadata). In **autopilot** mode, approval-gated tools are queued as
+> proposals for later review — never run unattended.
 > **Guardrails** wrap the turn: input rails block injection before the pipeline; output rails
 > run on the full response before storage — blocking system-prompt leaks and redacting PII so it
 > never reaches stored memory (L1/L4). Note: tokens already streamed can't be unsent — output
@@ -606,6 +672,17 @@ If you expose it on a public IP, enable the built-in hardening first:
 5. **`/health`** now also reports Ollama reachability, which cloud API keys are configured,
    and whether auth is enabled — wire it into your process manager or `docker-compose`
    healthcheck (already configured in `docker-compose.yml`).
+6. **Back up the database on a schedule** — `data/openclawn.db` has no automatic backup by
+   default. Use `scripts/backup_db.py` (wraps SQLite's Online Backup API, safe to run while
+   the server is live under WAL mode):
+   ```bash
+   python scripts/backup_db.py --keep 14   # backup now, keep the 14 newest
+   python scripts/backup_db.py --list       # show existing backups
+   ```
+   Schedule it with cron (`0 3 * * * cd /path/to/openclawn && .venv/bin/python
+   scripts/backup_db.py --keep 14`) or a systemd timer — an example unit is documented at the
+   bottom of the script. Restore is a straight file copy: stop the server, replace
+   `data/openclawn.db` with the chosen backup file, restart.
 
 None of this turns OpenCLAWN into a multi-tenant product — it is still one operator, one
 password, one workspace. It closes the gap between "safe on a trusted network" and "safe to
