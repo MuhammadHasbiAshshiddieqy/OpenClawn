@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/OpenClawn.png" alt="OpenCLAWN Logo" width="420" />
+  <img src="assets/OpenClawn.jpeg" alt="OpenCLAWN Logo" width="420" />
 
   <h1>OpenCLAWN</h1>
   <p><strong>The Open-Source Control Plane for Trusted AI Agents.</strong></p>
