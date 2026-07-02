@@ -1,7 +1,7 @@
 import aiofiles
 
 from infra.config import CONFIG
-from infra.workspace import WorkspaceViolation, resolve_in_workspace
+from infra.workspace import WorkspaceViolation, resolve_in_current_workspace
 from tools.base import Tool
 
 MAX_READ = CONFIG.tool_max_output
@@ -21,7 +21,7 @@ class FileReadTool(Tool):
             return {"error": "path wajib diisi"}
         try:
             # Keamanan #1: tolak path di luar workspace (anti ../ & symlink).
-            safe = resolve_in_workspace(path, CONFIG.workspace_root)
+            safe = resolve_in_current_workspace(path, CONFIG.workspace_root)
         except WorkspaceViolation as e:
             return {"error": str(e)}
         try:
@@ -72,7 +72,7 @@ class ReadManyTool(Tool):
         for path in capped:
             entry: dict = {"path": path}
             try:
-                safe = resolve_in_workspace(str(path), CONFIG.workspace_root)
+                safe = resolve_in_current_workspace(str(path), CONFIG.workspace_root)
             except WorkspaceViolation as e:
                 entry["error"] = str(e)
                 files.append(entry)
@@ -125,7 +125,7 @@ class FileWriteTool(Tool):
         if not path:
             return {"error": "path wajib diisi"}
         try:
-            safe = resolve_in_workspace(path, CONFIG.workspace_root)
+            safe = resolve_in_current_workspace(path, CONFIG.workspace_root)
         except WorkspaceViolation as e:
             return {"error": str(e)}
         try:
@@ -180,7 +180,7 @@ class FileEditTool(Tool):
         if old == new:
             return {"error": "old_string dan new_string identik — tidak ada perubahan"}
         try:
-            safe = resolve_in_workspace(path, CONFIG.workspace_root)
+            safe = resolve_in_current_workspace(path, CONFIG.workspace_root)
         except WorkspaceViolation as e:
             return {"error": str(e)}
 
@@ -250,7 +250,7 @@ class FileAppendTool(Tool):
         if not content:
             return {"error": "content wajib diisi"}
         try:
-            safe = resolve_in_workspace(path, CONFIG.workspace_root)
+            safe = resolve_in_current_workspace(path, CONFIG.workspace_root)
         except WorkspaceViolation as e:
             return {"error": str(e)}
         try:
@@ -299,7 +299,7 @@ class ApplyPatchTool(Tool):
         if not isinstance(edits, list) or not edits:
             return {"error": "edits wajib berupa list non-kosong [{old_string,new_string}]"}
         try:
-            safe = resolve_in_workspace(path, CONFIG.workspace_root)
+            safe = resolve_in_current_workspace(path, CONFIG.workspace_root)
         except WorkspaceViolation as e:
             return {"error": str(e)}
         try:
