@@ -308,7 +308,7 @@ class LLMClient:
             async for c in self._claude(model, messages, tools, max_tokens):
                 yield c
         elif provider == "gemini":
-            async for c in self._gemini(model, messages, max_tokens):
+            async for c in self._gemini(model, messages, tools, max_tokens):
                 yield c
 
     async def _ollama(
@@ -446,14 +446,20 @@ class LLMClient:
                             yield LLMChunk(type="usage", usage=data["usage"])
 
     async def _gemini(
-        self, model: str, messages: list, max_tokens: int
+        self, model: str, messages: list, tools: list | None, max_tokens: int
     ) -> AsyncGenerator[LLMChunk, None]:
         """Google AI Studio (generativelanguage). Raw httpx, SSE streaming.
 
         Catatan: Gemini memakai peran 'user'/'model' (bukan 'assistant'/'system')
         dan struktur 'contents'/'parts' — kita konversi dari format internal.
-        Tool calling Gemini belum didukung di sini (cukup teks); audit/crystallizer
-        yang butuh teks JSON tetap berfungsi.
+
+        Tool calling (§ bug: agent mengklaim menulis PDF tapi tidak pernah
+        memanggil tool — router mengalihkan turn bertool ke Gemini, tapi `tools`
+        sebelumnya TIDAK PERNAH diteruskan ke sini, jadi model tidak tahu tool
+        apa pun ada dan berhalusinasi sudah memanggilnya). Schema internal
+        (`Tool.schema()`) berbentuk Anthropic-style (`input_schema`); Gemini
+        butuh `functionDeclarations` dengan key `parameters` — dikonversi di sini,
+        bukan di tools/*.py, agar tools/ tetap provider-agnostic.
         """
         api_key = await self.vault.get("GOOGLE_API_KEY")
 
@@ -473,6 +479,21 @@ class LLMClient:
         }
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
+        if tools:
+            payload["tools"] = [
+                {
+                    "functionDeclarations": [
+                        {
+                            "name": t["name"],
+                            "description": t.get("description", ""),
+                            "parameters": t.get(
+                                "input_schema", {"type": "object", "properties": {}}
+                            ),
+                        }
+                        for t in tools
+                    ]
+                }
+            ]
 
         url = f"{self.config.gemini_base}/v1beta/models/{model}:streamGenerateContent?alt=sse"
         headers = {"content-type": "application/json", "x-goog-api-key": api_key}
@@ -486,7 +507,14 @@ class LLMClient:
                     data = json.loads(line[5:].strip())
                     for cand in data.get("candidates", []):
                         for part in cand.get("content", {}).get("parts", []):
-                            if part.get("text"):
+                            if part.get("functionCall"):
+                                fc = part["functionCall"]
+                                yield LLMChunk(
+                                    type="tool_call",
+                                    tool_name=fc.get("name", ""),
+                                    tool_input=fc.get("args", {}),
+                                )
+                            elif part.get("text"):
                                 # parts dengan thought=true adalah reasoning Gemini.
                                 kind = "thinking" if part.get("thought") else "text"
                                 yield LLMChunk(type=kind, text=part["text"])

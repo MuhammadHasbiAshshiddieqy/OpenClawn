@@ -614,6 +614,8 @@ Test untuk fitur pilih model: `SettingsStore`, provider Gemini, override routing
 | `test_gemini_provider_dispatch` | `_stream_one` mengarahkan `gemini` ke `_gemini()` |
 | `test_gemini_health_check_assumes_up` | Gemini diasumsikan up (seperti anthropic) |
 | `test_gemini_parses_sse_stream` | `_gemini` mem-parse SSE Google AI Studio → text + usage |
+| `test_gemini_sends_tools_as_function_declarations` | Regresi bug halusinasi pdf_write: `tools` diteruskan ke `_gemini()` & dikonversi ke `functionDeclarations` |
+| `test_gemini_parses_function_call_response` | Response `functionCall` Gemini → `LLMChunk(type="tool_call")` dengan `tool_input` terisi dari `args` |
 | `test_override_changes_route_in_agent_loop` | Override aktif → provider/model ke LLM dipaksa sesuai pilihan |
 | `test_no_override_uses_router` | Tanpa override → router tetap memilih (query pendek → lokal) |
 | `test_usage_event_carries_token_budget` | Event `usage` memuat `context_tokens` & `max_context_tokens` (meter budget §1.4) |

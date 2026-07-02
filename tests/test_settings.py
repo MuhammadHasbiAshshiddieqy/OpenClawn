@@ -81,7 +81,7 @@ async def test_gemini_provider_dispatch(gemini_client):
 
     captured = {}
 
-    async def fake_gemini(model, messages, max_tokens):
+    async def fake_gemini(model, messages, tools, max_tokens):
         captured["model"] = model
         yield LLMChunk(type="text", text="halo dari gemini")
 
@@ -144,7 +144,7 @@ async def test_gemini_parses_sse_stream(gemini_client, monkeypatch):
 
     texts, usage = [], None
     async for chunk in gemini_client._gemini(
-        "gemini-2.0-flash", [{"role": "user", "content": "hi"}], 100
+        "gemini-2.0-flash", [{"role": "user", "content": "hi"}], None, 100
     ):
         if chunk.type == "text":
             texts.append(chunk.text)
@@ -153,6 +153,122 @@ async def test_gemini_parses_sse_stream(gemini_client, monkeypatch):
 
     assert "".join(texts) == "Hai dunia"
     assert usage == {"input_tokens": 5, "output_tokens": 2}
+
+
+@pytest.mark.asyncio
+async def test_gemini_sends_tools_as_function_declarations(gemini_client, monkeypatch):
+    """Regresi bug: agent Gemini mengklaim menulis PDF tapi tidak pernah memanggil
+    tool, karena `tools` sebelumnya TIDAK diteruskan ke _gemini() sama sekali.
+    Verifikasi payload sungguhan mengandung functionDeclarations Gemini-style,
+    dikonversi dari schema internal Anthropic-style (input_schema -> parameters)."""
+    import core.llm_client as llm_mod
+
+    captured_payload = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        async def aiter_lines(self):
+            yield 'data: {"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}'
+
+    class FakeStreamCtx:
+        async def __aenter__(self):
+            return FakeResp()
+
+        async def __aexit__(self, *a):
+            return False
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def stream(self, method, url, headers=None, json=None):
+            captured_payload.update(json)
+            return FakeStreamCtx()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeClient)
+
+    tools = [
+        {
+            "name": "pdf_write",
+            "description": "Tulis file PDF",
+            "input_schema": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                "required": ["path", "content"],
+            },
+        }
+    ]
+
+    async for _ in gemini_client._gemini(
+        "gemini-2.5-flash", [{"role": "user", "content": "buat pdf"}], tools, 100
+    ):
+        pass
+
+    assert "tools" in captured_payload
+    decls = captured_payload["tools"][0]["functionDeclarations"]
+    assert decls[0]["name"] == "pdf_write"
+    assert decls[0]["parameters"]["required"] == ["path", "content"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_parses_function_call_response(gemini_client, monkeypatch):
+    """Response Gemini berisi functionCall -> LLMChunk(type='tool_call', ...)
+    dengan tool_input terisi dari 'args' (bukan tool_input={} kosong)."""
+    import core.llm_client as llm_mod
+
+    sse_lines = [
+        'data: {"candidates":[{"content":{"parts":[{"functionCall":'
+        '{"name":"pdf_write","args":{"path":"prd.pdf","content":"isi"}}}]}}]}',
+    ]
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        async def aiter_lines(self):
+            for ln in sse_lines:
+                yield ln
+
+    class FakeStreamCtx:
+        async def __aenter__(self):
+            return FakeResp()
+
+        async def __aexit__(self, *a):
+            return False
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def stream(self, *a, **k):
+            return FakeStreamCtx()
+
+    monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeClient)
+
+    chunks = []
+    async for chunk in gemini_client._gemini(
+        "gemini-2.5-flash", [{"role": "user", "content": "buat pdf"}], [{"name": "pdf_write"}], 100
+    ):
+        chunks.append(chunk)
+
+    tool_calls = [c for c in chunks if c.type == "tool_call"]
+    assert len(tool_calls) == 1
+    assert tool_calls[0].tool_name == "pdf_write"
+    assert tool_calls[0].tool_input == {"path": "prd.pdf", "content": "isi"}
 
 
 # ---------- Override mengubah routing di agent_loop ----------

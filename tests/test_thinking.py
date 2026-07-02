@@ -184,7 +184,7 @@ async def test_gemini_thought_part(client, monkeypatch):
     ]
     monkeypatch.setattr(m.httpx, "AsyncClient", _fake_httpx(lines))
     think, text = await _drain(
-        client._gemini("gemini-2.5-pro", [{"role": "user", "content": "x"}], 100)
+        client._gemini("gemini-2.5-pro", [{"role": "user", "content": "x"}], None, 100)
     )
     assert think == "nalar"
     assert text == "final"

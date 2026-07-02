@@ -273,8 +273,8 @@ Return: `(cleaned_text, [{"name": "...", "input": {...}}, ...])` — teks bersih
 **`_claude(model, messages, tools, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
 Streaming request ke `POST /v1/messages` Anthropic. Parse SSE response (`data:` lines). `text_delta` → `text`; `thinking_delta` (extended thinking) → `LLMChunk(type="thinking")`. API key diambil dari `Vault` tepat sebelum request — tidak pernah di-cache di memori lebih lama dari perlu.
 
-**`_gemini(model, messages, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
-Streaming request ke Google AI Studio (`POST /v1beta/models/{model}:streamGenerateContent?alt=sse`). API key (`GOOGLE_API_KEY`) diambil dari `Vault`, dikirim via header `x-goog-api-key`. Mengonversi format internal (`system`/`assistant`) ke format Gemini (`systemInstruction` + `contents` dengan peran `user`/`model`). Parse SSE → `candidates[].content.parts[].text` dan `usageMetadata`; `parts[]` dengan `thought=true` → `LLMChunk(type="thinking")`. Tool calling belum didukung di jalur Gemini (cukup teks — audit/crystallizer yang butuh JSON teks tetap jalan).
+**`_gemini(model, messages, tools, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
+Streaming request ke Google AI Studio (`POST /v1beta/models/{model}:streamGenerateContent?alt=sse`). API key (`GOOGLE_API_KEY`) diambil dari `Vault`, dikirim via header `x-goog-api-key`. Mengonversi format internal (`system`/`assistant`) ke format Gemini (`systemInstruction` + `contents` dengan peran `user`/`model`). Bila `tools` terisi, dikonversi ke `tools: [{functionDeclarations: [...]}]` Gemini-style (schema internal Anthropic-style `input_schema` → `parameters`, konversi di sini agar `tools/*.py` tetap provider-agnostic). Parse SSE → `candidates[].content.parts[].text` dan `usageMetadata`; `parts[]` dengan `thought=true` → `LLMChunk(type="thinking")`; `parts[]` dengan `functionCall` → `LLMChunk(type="tool_call", tool_name=..., tool_input=...)` (args Gemini sudah objek native, tidak perlu di-parse JSON manual seperti plaintext tool call model lokal).
 
 **Provider yang didukung:** `ollama`, `anthropic`, `gemini`.
 
@@ -369,17 +369,19 @@ Teks penjelasan untuk audit record.
 
 > Tier lokal dibedakan **per kapasitas model** — makin sulit case, makin mampu model (gemma4:e4b ringan → deepseek-r1 → qwen3.5:9b paling mampu lokal). Fallback chain mengikuti urutan yang sama. `MODELS` adalah **default**; user bisa mengubah peta tier→model lewat `/router` (lihat `RouterConfigStore` di bawah) tanpa menyentuh kode.
 
-> ⚠️ **Peringatan operasional (ditemukan lewat bug report nyata):** tier COMPLEX/CRITICAL
-> secara default naik ke Gemini, tapi `_gemini()` (§ `core/llm_client.py` di bawah) **tidak
-> bisa memanggil tool sama sekali** — tak ada parameter `tools` dikirim, jadi model hanya
-> bisa menjawab teks. Bila task kompleks butuh tool (`file_write`, `code_run`, dll.), Gemini
-> akan menuliskan rencananya sebagai teks chat biasa alih-alih benar-benar memanggil tool —
-> terlihat seperti agent "macet berpikir" (approval yang seharusnya muncul tak pernah muncul,
-> karena tool tak pernah benar-benar dipanggil). Ini juga berlaku bila user memaksa override
-> manual ke Gemini di `/settings` untuk role yang butuh tool (pm/qa/dev). Sampai Gemini
-> function-calling diimplementasikan di `_gemini()`, hindari override manual ke Gemini untuk
-> task yang jelas butuh tool, atau pindahkan tier COMPLEX/CRITICAL ke Ollama/Claude lewat
-> `/router` bila akurasi tool-calling penting.
+> ✅ **Resolusi bug (2026-07-02, ditemukan lewat bug report nyata):** sebelumnya tier
+> COMPLEX/CRITICAL naik ke Gemini, tapi `_gemini()` tidak bisa memanggil tool sama sekali —
+> parameter `tools` tidak pernah diteruskan, jadi model hanya bisa menjawab teks. Efeknya:
+> agent (mis. role PM diminta buat PDF) mengklaim sudah memanggil `pdf_write` dan file
+> "berhasil dibuat", padahal tool TIDAK PERNAH benar-benar dipanggil — halusinasi murni,
+> bukan macet berpikir. Root cause: perbaikan sebelumnya untuk bug "No answer" PRD
+> (§ `roles/pm/soul.toml`, reroute PRD/dokumen ke tier COMPLEX) tanpa sadar mengarahkan
+> traffic yang BUTUH tool ke provider yang tak bisa memanggil tool. **Sudah diperbaiki:**
+> `_gemini()` sekarang menerima `tools` dan mengonversinya ke format `functionDeclarations`
+> Gemini (dari schema internal Anthropic-style `input_schema` → `parameters`); response
+> `functionCall` di-parse jadi `LLMChunk(type="tool_call", ...)` sama seperti provider lain.
+> Diverifikasi lewat reproduksi live: turn PDF sekarang menghasilkan `file_created` event
+> nyata, bukan lagi teks yang mengklaim sudah membuat file.
 
 ---
 
