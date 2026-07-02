@@ -5,6 +5,53 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 [SemVer](https://semver.org/). Versi 0.7.0 menandai keluarnya dari fase
 pre-release (`-alpha`) menjadi rilis stabil pertama.
 
+## [0.10.0] — 2026-07-02
+
+Rilis UX & memori: perbaikan alur chat yang membuat agent terasa "lupa" dan
+"macet". Semua backward-compatible, tanpa dependency baru.
+
+### Added — Working directory adaptif per-sesi (ala Claude Code/OpenClaw)
+Folder kerja bisa dipilih per-sesi dari UI, bukan hanya `OPENCLAWN_WORKSPACE` global.
+- **`infra/workspace.py`** — `CURRENT_WORKSPACE_ROOT` ContextVar + `effective_workspace_root`
+  / `resolve_in_current_workspace` (tanpa mengubah signature `Tool.execute`).
+- **`tools/{file_ops,document,search,shell,git}.py`** — hormati `workspace_override` per-sesi.
+- **`web/main.py`** — `_validate_workdir` (fail-closed) + `GET /workdir/check` (validasi live).
+- **Web UI** — field workdir di mode-bar dengan umpan balik valid/invalid saat mengetik.
+
+### Added — Riwayat percakapan per-sesi (agent ingat konteks)
+Sebelumnya `AgentLoop` dibuat baru tiap request → `self.history` kosong, sehingga
+"Mana file-nya?" tak punya rujukan walau di sesi yang sama.
+- **`session_turns`** (tabel baru) + `MemoryManager.load_turns`/`append_turn`.
+- **`core/agent_loop.py`** — muat transkrip sesi di awal `run()`, persist di finalize;
+  `AgentConfig.persist_history` (single-agent True, multi-agent False).
+- **`infra/config.py`** — `session_history_turns` (default 20).
+
+### Added — Heartbeat SSE (hentikan "Server not responding" palsu)
+- **`web/main.py`** — `_with_heartbeat` kirim komentar `: ping` tiap 10 dtk selama agent
+  diam; koneksi tak pernah putus (tak perlu reconnect). Watchdog frontend dinaikkan ke
+  25 dtk & di-reword jadi "masih bekerja".
+
+### Fixed — Agent menulis file berulang untuk task simpel
+Model lokal (Gemma/DeepSeek) memanggil `file_write` berulang karena giliran assistant
+yang MEMANGGIL tool tak pernah ditulis balik ke `messages`.
+- **`core/agent_loop.py`** — writeback giliran `assistant`+`tool` ke messages,
+  `_format_tool_result` (teks sukses eksplisit), deteksi loop tulis-path-sama.
+
+### Fixed — Form approval chat tak bisa disetujui
+Dulu tak ada tombol; semua tool butuh-approval timeout diam-diam.
+- **`security/approval.py`** — `request(..., approval_id=None)` agar `AgentLoop` bisa
+  pre-generate ID & emit ke UI sebelum blocking → kartu Approve/Reject dengan preview
+  parameter (path/command) & aksen "menunggu".
+
+### Fixed — Model hanya mencetak kode, tak membuat file
+- **`roles/{dev,pm,qa}/soul.toml`** — instruksi eksplisit: permintaan buat/simpan file
+  WAJIB panggil `file_write`; cetak-di-chat tak dianggap selesai. Ditambah alur download
+  file yang berhasil ditulis (`GET /workspace/download`).
+
+### Tests
+`test_agent_tool_loop.py`, `test_session_history.py`, `test_heartbeat.py`,
+`test_file_download.py` — total 578 test hijau.
+
 ## [0.9.0] — 2026-07-01
 
 ### Added — Self-host production hardening (opt-in auth, CSRF, rate limiting)
