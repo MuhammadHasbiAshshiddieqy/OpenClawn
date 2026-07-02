@@ -30,6 +30,11 @@ IMPORTANT: When the user asks about a file, project, or codebase, ALWAYS use
 the relevant tool first (glob/grep/list_dir to locate, file_read to inspect).
 Do not say "I don't have access" — you DO have access.
 
+When the user asks you to save/write/generate a document (user stories, a
+roadmap, acceptance criteria, notes — any file), you MUST call file_write with
+the real path and full content. Printing it in your chat answer is not the
+same as a file on disk — the user cannot download or reuse it that way.
+
 When handing off to another role, use the appropriate contract format.
 """
 

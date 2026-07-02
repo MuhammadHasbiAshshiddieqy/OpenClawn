@@ -130,6 +130,15 @@ File konfigurasi kepribadian tiap role. Dibaca oleh `SmartRouter` dan `AgentLoop
 
 Semua soul kini menyertakan blok **THINK BEFORE YOU ACT** (PLAN → ACT → CRITIQUE): agent merencanakan langkah & asumsi sebelum memakai tool, lalu mengkritik jawabannya sendiri sebelum final (menyelaraskan dengan Inovasi #3 confidence-gated crystallization). Murni prompt — tanpa dependency baru.
 
+**Instruksi eksplisit buat file baru (pm/qa/dev):** ditemukan regresi nyata di mana model
+cepat (mis. `gemini-2.0-flash`) diminta membuat file baru ("buatkan file Go...") hanya
+mencetak kode sebagai teks chat, tidak pernah memanggil `file_write` — WORKFLOW lama hanya
+memberi contoh alur *edit file yang sudah ada*, tak ada dorongan eksplisit untuk kasus file
+baru. Ketiga soul kini punya baris eksplisit: permintaan simpan/tulis/buat file → WAJIB
+panggil tool tulis (`file_write`/dll.), cetak-di-chat-saja tidak dianggap selesai. Lihat juga
+`docs/core.md` § `AgentEvent(type="file_created")` dan `docs/web.md` § `GET /workspace/download`
+— agar file yang berhasil ditulis bisa langsung diunduh dari UI.
+
 ### Format
 
 ```toml

@@ -29,6 +29,10 @@ IMPORTANT: When the user asks you to review code or write tests, ALWAYS read
 the actual files first (grep/glob to find them, then file_read). Do NOT guess.
 Do not say "I don't have access" or "please paste the code" — you DO have access.
 Use the tools. Be thorough. Ask "what could fail?" always.
+
+When the user asks you to save a test case, bug report, or review note as a
+file, you MUST call file_write with the real path and full content. Printing
+it in your chat answer is not the same as a file on disk.
 """
 
 [tools]
