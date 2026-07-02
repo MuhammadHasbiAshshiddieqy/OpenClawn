@@ -31,7 +31,7 @@ class ConversationEvent:
 
     `type`:
       - "turn"             → penanda mulai giliran (frontend buka bubble baru berlabel role)
-      - "token" / "status" → di-rewrap dari AgentEvent giliran aktif
+      - "token" / "status" / "file_created" → di-rewrap dari AgentEvent giliran aktif
       - "conversation_end" → akhir percakapan; `detail` = alasan, `usage` = total agregat
     """
 
@@ -41,6 +41,7 @@ class ConversationEvent:
     detail: str = ""
     turn_index: int = 0
     usage: dict | None = None
+    approval_id: str | None = None
 
 
 @dataclass
@@ -357,7 +358,12 @@ class ConversationOrchestrator:
                 if ev.type == "token":
                     collected += ev.text
                 yield ConversationEvent(
-                    ev.type, role=role, text=ev.text, detail=ev.detail, turn_index=ti
+                    ev.type,
+                    role=role,
+                    text=ev.text,
+                    detail=ev.detail,
+                    turn_index=ti,
+                    approval_id=ev.approval_id,
                 )
 
             if stopped_mid:

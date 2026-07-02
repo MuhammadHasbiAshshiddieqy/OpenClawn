@@ -151,9 +151,9 @@ Human-in-the-loop (HITL) gate untuk tool destruktif.
 **`__init__(db, config)`**  
 Inisialisasi dict `_pending` untuk track approval yang menunggu.
 
-**`request(session_id, tool_name, tool_input) → bool`** *(async)*  
+**`request(session_id, tool_name, tool_input, approval_id=None) → bool`** *(async)*  
 Alur lengkap permintaan approval:
-1. Buat `PendingApproval` dengan UUID baru
+1. Buat `PendingApproval` — pakai `approval_id` bila diberikan, kalau tidak generate UUID baru
 2. Catat ke tabel `approval_log` dengan status `pending:{approval_id}`
 3. Tunggu `asyncio.wait_for(future, timeout=approval_timeout_sec)`
 4. Jika timeout → **fail-safe DENY** (`approved=False`, decision=`"timeout"`)
@@ -162,11 +162,21 @@ Alur lengkap permintaan approval:
 
 Fail-safe DENY dipilih sesuai prinsip CLAUDE.md §1.1: keamanan dulu — tool destruktif tidak pernah jalan tanpa persetujuan eksplisit.
 
+Parameter `approval_id` opsional (§ chat approval UI) — `AgentLoop._run_tool_loop` sekarang
+generate ID ini SEBELUM memanggil `request()` (yang blocking) dan meng-emit
+`AgentEvent(type="status", text="approval", approval_id=...)` ke Web UI lebih dulu, agar
+tombol Approve/Reject bisa dipasang dengan ID yang benar sementara `request()` masih
+menunggu. Default `None` → generate seperti sebelumnya (tak ada perubahan perilaku untuk
+caller yang tidak memberi ID, mis. test lama).
+
 **`resolve(approval_id, approved) → bool`**  
 Dipanggil dari endpoint `/approve` saat user klik tombol. Set result pada Future yang menunggu di `request()`. Return `True` jika approval_id valid dan berhasil di-resolve, `False` jika tidak ditemukan atau sudah selesai.
 
 **`pending_list(session_id=None) → list[dict]`**  
-Kembalikan daftar approval yang masih menunggu. Bisa difilter per sesi. Dipakai endpoint `/approvals` untuk polling dari Web UI.
+Kembalikan daftar approval yang masih menunggu. Bisa difilter per sesi. Endpoint
+introspeksi read-only (`GET /approvals`) — Web UI chat TIDAK memakai polling ke sini;
+lihat `docs/web.md` § `POST /approve` untuk bagaimana chat sesungguhnya menampilkan
+approval (via event SSE `status.approval_id`, bukan polling terpisah).
 
 **`_record_decision(approval_id, decision) → None`** *(async, private)*  
 Update row `approval_log` dari `pending:{approval_id}` ke keputusan final.

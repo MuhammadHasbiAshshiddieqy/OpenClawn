@@ -35,8 +35,18 @@ class ApprovalGate:
         self.config = config
         self._pending: dict[str, PendingApproval] = {}
 
-    async def request(self, session_id: str, tool_name: str, tool_input: dict) -> bool:
-        approval_id = uuid.uuid4().hex
+    async def request(
+        self,
+        session_id: str,
+        tool_name: str,
+        tool_input: dict,
+        approval_id: str | None = None,
+    ) -> bool:
+        """`approval_id` opsional — caller (AgentLoop) bisa pre-generate & emit ke UI
+        SEBELUM memanggil ini, agar user tahu ID-nya sementara request() masih menunggu
+        (§ chat approval UI). Default None → generate seperti sebelumnya (tak ada
+        perubahan perilaku untuk caller lama)."""
+        approval_id = approval_id or uuid.uuid4().hex
         pending = PendingApproval(
             approval_id=approval_id,
             session_id=session_id,
