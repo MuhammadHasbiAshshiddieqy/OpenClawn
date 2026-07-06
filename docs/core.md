@@ -427,6 +427,12 @@ Dipanggil di **awal setiap turn** (oleh `AgentLoop.run`). Jika pesan user mengan
 **`calibration_report() → list[dict]`** *(async)*  
 Agregasi per `complexity_label`: total event, jumlah koreksi, correction rate (%), avg cost. Dipakai oleh `/metrics` dan `RoutingCalibrator`.
 
+**`role_report() → list[dict]`** *(async)*  
+Runtime Evaluation Engine (§ Prioritas 2 TODO.md): agregasi per **role/agent** (bukan per `complexity_label`) — total event, koreksi, correction rate, avg cost, avg latency, `avg_human_feedback`. `avg_human_feedback` dihitung `AVG()` SQL yang otomatis mengabaikan `NULL` — jadi `NULL` di hasil berarti "belum ada yang menilai role ini", BUKAN "dinilai buruk" (beda makna dari `0`). Dipakai `/metrics` (HTML) dan `GET /metrics/roles` (JSON, `docs/web.md`).
+
+**`set_human_feedback(event_id, rating) → bool`** *(async)*  
+Simpan rating eksplisit 1-5 user untuk satu turn ke `routing_events.human_feedback` — sinyal **eksplisit**, beda dari `had_correction` (disimpulkan implisit dari kata di pesan berikutnya via `check_correction`). Return `False` (tanpa menulis) bila `rating` di luar 1-5 atau `event_id` tidak ditemukan (`cursor.rowcount == 0`) — caller (`POST /feedback/{event_id}`, `docs/web.md`) yang menerjemahkan ini jadi HTTP 400/404.
+
 ---
 
 ## `core/crystallizer.py` — Inovasi 3

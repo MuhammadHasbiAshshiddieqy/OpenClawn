@@ -24,6 +24,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # via GET /evidence/{id}. Kompetitor besar (LangChain/CrewAI/AutoGen)
         # eksplisit belum ship ini (§ KESIMPULAN.md §2.2).
         ("evidence_json", "TEXT"),
+        # Runtime Evaluation Engine (TODO.md § Prioritas 2): rating eksplisit
+        # user (1-5) via POST /feedback/{event_id}. NULL = belum diberi feedback.
+        ("human_feedback", "INTEGER"),
     ],
     "approval_log": [
         # Human Approval Pipeline (TODO.md § Prioritas 2): approval_id SEBELUMNYA

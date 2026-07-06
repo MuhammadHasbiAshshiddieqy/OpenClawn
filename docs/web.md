@@ -369,10 +369,37 @@ Menjalankan:
 
 Context yang dikirim:
 - `report` — list data per complexity label (total, corrections, correction_rate, avg_cost)
+- `role_report` — Runtime Evaluation Engine (§ Prioritas 2 TODO.md): list data per **role/agent** (total, corrections, correction_rate, avg_cost, avg_latency_ms, avg_human_feedback) — `RoutingAuditor.role_report()`, `docs/core.md`. Dikirim ke template context tapi belum ada tabel HTML untuk ini (scope backend+API, bukan UI) — konsumsi via `GET /metrics/roles` di bawah
 - `calibration` — dict `{total_events, has_enough_data, net_offset_delta, recommendations, current_offset, history}`
 - `tool_stats` — list per tool `{tool_name, total, errors, timeouts, fail_rate, avg_latency_ms}`
 
 > **Demo tanpa traffic:** dashboard ini kosong sampai ada `routing_events`. Untuk mengisinya dengan data **sintetis** (demo saja, bukan untuk tuning), jalankan `python scripts/seed_routing.py` — lihat [scripts.md](scripts.md).
+
+---
+
+#### `GET /metrics/roles`
+
+**Runtime Evaluation Engine (§ Prioritas 2 TODO.md) — varian JSON murni dari `role_report`.**
+
+Untuk konsumsi programatik (dashboard SIEM eksternal, laporan terjadwal) tanpa parsing HTML `/metrics`. Response:
+```json
+{"roles": [
+  {"role": "pm", "total": 100, "corrections": 1, "correction_rate": 1.0,
+   "avg_cost": 0.0, "avg_latency_ms": 35953.0, "avg_human_feedback": null},
+  ...
+]}
+```
+`avg_human_feedback: null` berarti belum ada turn di role itu yang diberi rating lewat `POST /feedback/{event_id}` di bawah — bukan berarti dinilai buruk.
+
+---
+
+#### `POST /feedback/{event_id}`
+
+**User memberi rating eksplisit 1-5 untuk satu turn (Runtime Evaluation Engine).**
+
+`event_id` = `id` baris `routing_events` (sama dengan `GET /evidence/{event_id}`). Form data: `rating` (int 1-5).
+
+Response sukses: `{"ok": true, "event_id": 141, "rating": 5}`. `400` bila `rating` di luar 1-5 atau bukan angka (`{"ok": false, "error": "rating harus 1-5"}`); `404` bila `event_id` tak ditemukan. Beda dari `had_correction` (`core/audit.py::check_correction`) yang disimpulkan IMPLISIT dari kata di pesan berikutnya — ini sinyal eksplisit yang sengaja diberi user.
 
 ---
 

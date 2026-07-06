@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS routing_events (
     tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL, latency_ms INTEGER,
     had_correction INTEGER DEFAULT 0, correction_detail TEXT,
     evidence_json TEXT,                    -- [Evidence-Based Response] snapshot policy/skill/guardrail, query-able via GET /evidence/{id}
+    human_feedback INTEGER,                -- [Runtime Evaluation Engine] rating eksplisit user 1-5 via POST /feedback/{id}, NULL = belum diberi. Beda dari had_correction (sinyal implisit dari teks pesan berikutnya)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_routing_label ON routing_events(complexity_label, had_correction);

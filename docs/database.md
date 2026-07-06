@@ -172,6 +172,7 @@ Setiap keputusan routing dicatat sebelum LLM call dan diupdate setelah selesai.
 | `had_correction` | INTEGER | 1 jika turn berikutnya mengoreksi ini |
 | `correction_detail` | TEXT | Pesan koreksi user |
 | `evidence_json` | TEXT | Evidence-Based Response (§ Prioritas 2): snapshot JSON `{policy, memory, guardrail}` yang berlaku turn ini, diisi `RoutingAuditor.finalize(evidence=...)`. `NULL` bila turn belum selesai atau dari versi lama tanpa evidence. Query-able via `GET /evidence/{id}` |
+| `human_feedback` | INTEGER | Runtime Evaluation Engine (§ Prioritas 2): rating eksplisit user 1-5, diisi `RoutingAuditor.set_human_feedback()` via `POST /feedback/{id}`. `NULL` = belum diberi rating (beda dari `had_correction` yang implisit dari teks pesan berikutnya) |
 | `created_at` | TIMESTAMP | |
 
 **Index:** `idx_routing_label` pada `(complexity_label, had_correction)` — untuk `calibration_report`.

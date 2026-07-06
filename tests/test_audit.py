@@ -249,6 +249,118 @@ async def test_calibration_report_with_data(auditor):
     assert total_corrections >= 1
 
 
+# ── role_report (Runtime Evaluation Engine, TODO.md § Prioritas 2) ──────────
+
+
+@pytest.mark.asyncio
+async def test_role_report_empty(auditor):
+    """Tanpa data, role_report harus return list kosong (tidak crash)."""
+    report = await auditor.role_report()
+    assert isinstance(report, list)
+    assert len(report) == 0
+
+
+@pytest.mark.asyncio
+async def test_role_report_groups_by_role(auditor):
+    """role_report mengelompokkan per role (bukan per complexity_label seperti
+    calibration_report) — KPI dashboard per-agent yang buyer enterprise cari."""
+    for i in range(3):
+        route = _fake_route()
+        eid = await auditor.log_decision("s_role", "pm", f"q-{i}", route)
+        await auditor.finalize(eid, _FakeTurn(cost_usd=0.001, latency_ms=200))
+    for i in range(2):
+        route = _fake_route()
+        eid = await auditor.log_decision("s_role2", "dev", f"q-{i}", route)
+        await auditor.finalize(eid, _FakeTurn(cost_usd=0.002, latency_ms=300))
+
+    report = await auditor.role_report()
+    by_role = {r["role"]: r for r in report}
+    assert by_role["pm"]["total"] == 3
+    assert by_role["dev"]["total"] == 2
+    assert by_role["pm"]["avg_latency_ms"] == 200
+    assert by_role["dev"]["avg_latency_ms"] == 300
+
+
+@pytest.mark.asyncio
+async def test_role_report_includes_correction_rate_per_role(auditor, db):
+    """Correction rate dihitung per-role, konsisten dengan calibration_report
+    tapi dipecah per agent, bukan per complexity label."""
+    route = _fake_route()
+    e1 = await auditor.log_decision("s_role3", "qa", "q1", route)
+    await auditor.finalize(e1, _FakeTurn())
+    e2 = await auditor.log_decision("s_role3", "qa", "q2", route)
+    await auditor.finalize(e2, _FakeTurn())
+    await auditor.check_correction("salah, coba lagi", "s_role3")
+
+    report = await auditor.role_report()
+    qa_row = [r for r in report if r["role"] == "qa"][0]
+    assert qa_row["total"] == 2
+    assert qa_row["corrections"] == 1
+    assert qa_row["correction_rate"] == 50.0
+
+
+@pytest.mark.asyncio
+async def test_role_report_avg_human_feedback_null_when_none_given(auditor):
+    """Role tanpa feedback sama sekali -> avg_human_feedback NULL, bukan 0
+    (0 akan salah tafsir sebagai rating buruk, padahal 'tidak ada data')."""
+    route = _fake_route()
+    eid = await auditor.log_decision("s_role4", "pm", "q", route)
+    await auditor.finalize(eid, _FakeTurn())
+
+    report = await auditor.role_report()
+    pm_row = [r for r in report if r["role"] == "pm"][0]
+    assert pm_row["avg_human_feedback"] is None
+
+
+@pytest.mark.asyncio
+async def test_role_report_avg_human_feedback_computed_when_given(auditor):
+    """Setelah set_human_feedback, avg_human_feedback terhitung — hanya dari
+    event yang PUNYA feedback (bukan rata-rata semua turn termasuk NULL)."""
+    route = _fake_route()
+    e1 = await auditor.log_decision("s_role5", "pm", "q1", route)
+    await auditor.finalize(e1, _FakeTurn())
+    e2 = await auditor.log_decision("s_role5", "pm", "q2", route)
+    await auditor.finalize(e2, _FakeTurn())
+
+    await auditor.set_human_feedback(e1, 5)
+    await auditor.set_human_feedback(e2, 3)
+
+    report = await auditor.role_report()
+    pm_row = [r for r in report if r["role"] == "pm"][0]
+    assert pm_row["avg_human_feedback"] == 4.0
+
+
+# ── set_human_feedback ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_set_human_feedback_stores_rating(auditor, db):
+    route = _fake_route()
+    eid = await auditor.log_decision("s_fb1", "pm", "q", route)
+    await auditor.finalize(eid, _FakeTurn())
+
+    ok = await auditor.set_human_feedback(eid, 4)
+
+    assert ok is True
+    row = await db.fetchone("SELECT human_feedback FROM routing_events WHERE id=?", (eid,))
+    assert row["human_feedback"] == 4
+
+
+@pytest.mark.asyncio
+async def test_set_human_feedback_rejects_out_of_range(auditor):
+    route = _fake_route()
+    eid = await auditor.log_decision("s_fb2", "pm", "q", route)
+    await auditor.finalize(eid, _FakeTurn())
+
+    assert await auditor.set_human_feedback(eid, 0) is False
+    assert await auditor.set_human_feedback(eid, 6) is False
+
+
+@pytest.mark.asyncio
+async def test_set_human_feedback_unknown_event_returns_false(auditor):
+    assert await auditor.set_human_feedback(999999, 5) is False
+
+
 @pytest.mark.asyncio
 async def test_all_correction_signals(auditor, db):
     """Semua sinyal koreksi yang didefinisikan harus berfungsi."""

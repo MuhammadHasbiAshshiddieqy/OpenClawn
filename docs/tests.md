@@ -390,6 +390,14 @@ Test untuk `core/audit.py`.
 | `test_correction_targets_most_recent_event` | Koreksi menandai event PALING TERAKHIR di sesi, bukan yang pertama |
 | `test_calibration_report_empty` | Tanpa data → list kosong, tidak crash |
 | `test_calibration_report_with_data` | Report mengelompokkan per `complexity_label` |
+| `test_role_report_empty` | Tanpa data → list kosong, tidak crash (§ Runtime Evaluation Engine) |
+| `test_role_report_groups_by_role` | `role_report` mengelompokkan per role (bukan per complexity_label) |
+| `test_role_report_includes_correction_rate_per_role` | Correction rate dihitung per-role |
+| `test_role_report_avg_human_feedback_null_when_none_given` | Role tanpa feedback → `avg_human_feedback` `NULL`, bukan `0` |
+| `test_role_report_avg_human_feedback_computed_when_given` | `avg_human_feedback` dihitung hanya dari event yang PUNYA rating |
+| `test_set_human_feedback_stores_rating` | `set_human_feedback()` menyimpan rating ke kolom `human_feedback` |
+| `test_set_human_feedback_rejects_out_of_range` | Rating di luar 1-5 → `False`, tidak menulis apa pun |
+| `test_set_human_feedback_unknown_event_returns_false` | `event_id` tak ditemukan → `False` |
 | `test_all_correction_signals` | Semua `CORRECTION_SIGNALS` terdeteksi satu per satu |
 
 ---
@@ -933,6 +941,21 @@ Test untuk `GET /approval/{approval_id}` (§ Human Approval Pipeline, TODO.md §
 | `test_approval_404_for_unknown_id` | `approval_id` tak pernah tercatat → `404` |
 | `test_approval_returns_pending_status_before_resolve` | Setelah `resolve()` → `decision` terbaca "approved" via endpoint, `tool_input` ter-decode dari JSON |
 | `test_approval_status_traceable_through_full_lifecycle` | Regresi inti: `approval_id` tetap query-able setelah `decision` berubah pending→rejected (sebelumnya hilang, hanya tersirat di substring `decision` yang ditimpa) |
+
+---
+
+### `tests/test_role_metrics.py`
+
+Test untuk `GET /metrics/roles` dan `POST /feedback/{event_id}` (§ Runtime Evaluation Engine, TODO.md § Prioritas 2).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_metrics_roles_empty_initially` | Tanpa data → `{"roles": []}` |
+| `test_metrics_roles_reflects_logged_events` | Event yang di-log untuk role berbeda muncul terpisah per role |
+| `test_feedback_404_for_unknown_event` | `event_id` tak dikenal → `404` |
+| `test_feedback_400_for_out_of_range_rating` | Rating di luar 1-5 → `400`, `ok: false` |
+| `test_feedback_400_for_non_numeric_rating` | Rating bukan angka → `400` |
+| `test_feedback_accepted_and_reflected_in_role_report` | Feedback sukses → `avg_human_feedback` role itu langsung terhitung di `/metrics/roles` |
 
 ---
 

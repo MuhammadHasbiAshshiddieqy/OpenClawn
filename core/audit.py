@@ -134,3 +134,42 @@ class RoutingAuditor:
             ORDER BY correction_rate DESC
             """
         )
+
+    async def role_report(self) -> list[dict]:
+        """Runtime Evaluation Engine (TODO.md § Prioritas 2): KPI per-role/agent —
+        buyer enterprise cari dashboard "agent mana yang paling akurat/mahal/lambat",
+        bukan cuma agregat per complexity_label (`calibration_report`). Dipakai `/metrics`.
+
+        `avg_human_feedback` dihitung hanya dari event yang PUNYA rating (AVG SQL
+        otomatis mengabaikan NULL) — NULL di sini berarti "belum ada yang menilai",
+        beda dari 0 yang berarti "dinilai buruk".
+        """
+        return await self.db.fetchall(
+            """
+            SELECT role,
+                   COUNT(*) as total,
+                   SUM(had_correction) as corrections,
+                   ROUND(100.0 * SUM(had_correction) / COUNT(*), 1) as correction_rate,
+                   ROUND(AVG(cost_usd), 5) as avg_cost,
+                   ROUND(AVG(latency_ms)) as avg_latency_ms,
+                   ROUND(AVG(human_feedback), 2) as avg_human_feedback
+            FROM routing_events
+            GROUP BY role
+            ORDER BY correction_rate DESC
+            """
+        )
+
+    async def set_human_feedback(self, event_id: int, rating: int) -> bool:
+        """Runtime Evaluation Engine: simpan rating eksplisit user (1-5) untuk satu
+        turn — beda dari `had_correction` (sinyal IMPLISIT dari kata di pesan
+        berikutnya). Return False (tanpa menulis apa pun) bila rating di luar
+        rentang atau event_id tidak ditemukan — caller (endpoint) yang menerjemahkan
+        ini jadi 400/404, bukan exception di sini.
+        """
+        if not 1 <= rating <= 5:
+            return False
+        cursor = await self.db.execute(
+            "UPDATE routing_events SET human_feedback=? WHERE id=?",
+            (rating, event_id),
+        )
+        return cursor.rowcount > 0

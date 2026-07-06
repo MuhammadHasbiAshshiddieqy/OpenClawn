@@ -854,7 +854,12 @@ async def answer(request: Request):
 
 @app.get("/metrics", response_class=HTMLResponse)
 async def metrics(request: Request):
-    report = await RoutingAuditor(db).calibration_report()
+    auditor = RoutingAuditor(db)
+    report = await auditor.calibration_report()
+    # Runtime Evaluation Engine (TODO.md § Prioritas 2): KPI per-role/agent,
+    # terpisah dari report per-complexity_label di atas — "agent mana yang
+    # paling akurat/mahal/lambat", bukan cuma "tier mana yang under-provisioned".
+    role_report = await auditor.role_report()
     # Rekomendasi tuning (saran); apply tetap keputusan manusia via tombol di bawah.
     calibration = RoutingCalibrator().summary(report)
     store = CalibrationStore(db)
@@ -868,11 +873,49 @@ async def metrics(request: Request):
         "metrics.html",
         {
             "report": report,
+            "role_report": role_report,
             "calibration": calibration,
             "tool_stats": tool_stats,
             **await _ui_ctx("metrics", request),
         },
     )
+
+
+@app.get("/metrics/roles")
+async def metrics_roles_json():
+    """Runtime Evaluation Engine (TODO.md § Prioritas 2), varian JSON murni dari
+    tabel per-role di `/metrics` — untuk konsumsi programatik/integrasi eksternal
+    (dashboard SIEM, laporan terjadwal) tanpa perlu parsing HTML.
+
+    Per role: total turn, correction rate, avg cost/latency, avg human_feedback
+    (NULL bila belum ada rating sama sekali untuk role itu).
+    """
+    return {"roles": await RoutingAuditor(db).role_report()}
+
+
+@app.post("/feedback/{event_id}")
+async def submit_human_feedback(event_id: int, request: Request):
+    """Runtime Evaluation Engine: user memberi rating eksplisit 1-5 untuk satu
+    turn (`routing_events.human_feedback`) — sinyal EKSPLISIT, beda dari
+    `had_correction` yang disimpulkan implisit dari kata di pesan berikutnya.
+
+    Form data: `rating` (int 1-5). 400 bila di luar rentang / bukan angka,
+    404 bila event_id tidak ditemukan.
+    """
+    form = await request.form()
+    try:
+        rating = int(form.get("rating") or 0)
+    except (ValueError, TypeError):
+        rating = 0
+    if not 1 <= rating <= 5:
+        return JSONResponse(
+            {"ok": False, "error": "rating harus 1-5"},
+            status_code=400,
+        )
+    ok = await RoutingAuditor(db).set_human_feedback(event_id, rating)
+    if not ok:
+        raise StarletteHTTPException(status_code=404, detail="event not found")
+    return {"ok": True, "event_id": event_id, "rating": rating}
 
 
 @app.post("/calibration/apply")
