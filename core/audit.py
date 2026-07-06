@@ -39,23 +39,35 @@ class RoutingAuditor:
         self.db = db
 
     async def log_decision(
-        self, session_id: str, role: str, query: str, route: RouteDecision
+        self,
+        session_id: str,
+        role: str,
+        query: str,
+        route: RouteDecision,
+        user_id: str = "default",
     ) -> int:
+        """`user_id` (§ Audit log format actor_is_agent, TODO.md Prioritas 2):
+        AgentConfig.user_id — default 'default' selaras single-user design saat
+        ini (CLAUDE.md §7). `actor_is_agent` tidak diparameterkan — SELALU 1 di
+        tabel ini (setiap baris routing_events adalah tindakan agent), memakai
+        DEFAULT kolom (lihat migrations/001_initial.sql) alih-alih dikirim tiap
+        panggilan."""
         d = route.dimensions
         cursor = await self.db.execute(
             """
             INSERT INTO routing_events (
-                session_id, role, query_text,
+                session_id, role, user_id, query_text,
                 dim_query_tokens, dim_has_tech_kw, dim_needs_multistep,
                 dim_history_len, dim_role, dim_has_urgency,
                 dim_needs_stream, dim_is_continuation, dim_soul_upgrade_hit,
                 complexity_score, complexity_label,
                 model_chosen, provider, routing_reason
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 session_id,
                 role,
+                user_id,
                 query,
                 d["query_tokens"],
                 d["has_tech_kw"],

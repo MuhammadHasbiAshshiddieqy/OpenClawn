@@ -91,6 +91,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_l4 USING fts5(
 -- ===================== ROUTING AUDIT [#1] =====================
 CREATE TABLE IF NOT EXISTS routing_events (
     id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL,
+    user_id TEXT DEFAULT 'default',        -- [Audit log format actor_is_agent, § Prioritas 2] AgentConfig.user_id, query-able terpisah dari session_id (integrasi SIEM eksternal)
+    actor_is_agent INTEGER DEFAULT 1,      -- selalu 1 di sini (baris ini SELALU tindakan agent) — eksplisit karena pola GitHub control plane mengharapkan field ini, bukan diasumsikan
     query_text TEXT NOT NULL,
     dim_query_tokens INTEGER, dim_has_tech_kw INTEGER, dim_needs_multistep INTEGER,
     dim_history_len INTEGER, dim_role TEXT, dim_has_urgency INTEGER,
@@ -164,6 +166,8 @@ CREATE TABLE IF NOT EXISTS tool_invocations (
     id INTEGER PRIMARY KEY,
     session_id TEXT NOT NULL,
     role TEXT NOT NULL,
+    user_id TEXT DEFAULT 'default',        -- [Audit log format actor_is_agent, § Prioritas 2] lihat routing_events
+    actor_is_agent INTEGER DEFAULT 1,
     tool_name TEXT NOT NULL,
     outcome TEXT NOT NULL,                  -- ok | error | timeout
     latency_ms INTEGER,

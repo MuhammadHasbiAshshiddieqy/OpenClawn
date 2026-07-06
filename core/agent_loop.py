@@ -398,7 +398,7 @@ class AgentLoop:
             route.model = ov_model
             route.cost_per_1k = 0.0  # biaya nyata model override tak dipetakan; jangan tebak
         event_id = await self.auditor.log_decision(
-            self.cfg.session_id, self.cfg.role, user_message, route
+            self.cfg.session_id, self.cfg.role, user_message, route, user_id=self.cfg.user_id
         )
         # Status: beri tahu UI model/provider yang dipilih sebelum LLM dipanggil.
         yield AgentEvent(type="status", text="routing", detail=f"{route.provider}:{route.model}")
@@ -793,7 +793,12 @@ class AgentLoop:
         finally:
             latency_ms = int((time.monotonic() - started) * 1000)
             await self.tool_audit.record(
-                self.cfg.session_id, self.cfg.role, name, outcome, latency_ms
+                self.cfg.session_id,
+                self.cfg.role,
+                name,
+                outcome,
+                latency_ms,
+                user_id=self.cfg.user_id,
             )
         return result
 

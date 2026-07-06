@@ -657,6 +657,36 @@ async def test_tool_audit_summary_aggregates():
     await db.close()
 
 
+@pytest.mark.asyncio
+async def test_tool_audit_record_defaults_actor_is_agent_true():
+    """Audit log format actor_is_agent (TODO.md § Prioritas 2): semua baris
+    tool_invocations adalah tindakan agent, bukan manusia langsung."""
+    from core.tool_audit import ToolAudit
+
+    agent, db = await _agent_with_db()
+    audit = ToolAudit(db)
+    await audit.record("s", "dev", "grep", "ok", 10)
+
+    row = await db.fetchone("SELECT actor_is_agent FROM tool_invocations WHERE tool_name='grep'")
+    assert row["actor_is_agent"] == 1
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_tool_audit_record_stores_user_id():
+    """user_id opsional (default 'default') query-able terpisah dari session_id
+    untuk integrasi SIEM eksternal."""
+    from core.tool_audit import ToolAudit
+
+    agent, db = await _agent_with_db()
+    audit = ToolAudit(db)
+    await audit.record("s", "dev", "grep", "ok", 10, user_id="bob")
+
+    row = await db.fetchone("SELECT user_id FROM tool_invocations WHERE tool_name='grep'")
+    assert row["user_id"] == "bob"
+    await db.close()
+
+
 # ── read_many (batch file read) ──────────────────────────────────────────────
 
 

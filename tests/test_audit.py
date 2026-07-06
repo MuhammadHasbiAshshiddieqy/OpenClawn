@@ -80,6 +80,42 @@ async def test_log_and_finalize_roundtrip(auditor, db):
 
 
 @pytest.mark.asyncio
+async def test_log_decision_defaults_actor_is_agent_true(auditor, db):
+    """Audit log format actor_is_agent (TODO.md § Prioritas 2, pola GitHub
+    control plane): semua baris routing_events adalah tindakan AGENT, bukan
+    manusia langsung — actor_is_agent harus 1 secara default tanpa perlu
+    diberi eksplisit tiap kali dipanggil."""
+    route = _fake_route()
+    event_id = await auditor.log_decision("s_actor1", "pm", "q", route)
+
+    row = await db.fetchone("SELECT actor_is_agent FROM routing_events WHERE id=?", (event_id,))
+    assert row["actor_is_agent"] == 1
+
+
+@pytest.mark.asyncio
+async def test_log_decision_stores_user_id_when_given(auditor, db):
+    """user_id opsional (default 'default', single-user §7) tersimpan agar
+    query-able terpisah dari session_id — memudahkan integrasi SIEM eksternal
+    yang mengharapkan actor/user eksplisit, bukan cuma session opaque."""
+    route = _fake_route()
+    event_id = await auditor.log_decision("s_actor2", "pm", "q", route, user_id="alice")
+
+    row = await db.fetchone("SELECT user_id FROM routing_events WHERE id=?", (event_id,))
+    assert row["user_id"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_log_decision_user_id_defaults_to_default_string(auditor, db):
+    """Tanpa user_id eksplisit → 'default' (selaras AgentConfig.user_id default,
+    bukan NULL — konsisten dengan single-user design saat ini, CLAUDE.md §7)."""
+    route = _fake_route()
+    event_id = await auditor.log_decision("s_actor3", "pm", "q", route)
+
+    row = await db.fetchone("SELECT user_id FROM routing_events WHERE id=?", (event_id,))
+    assert row["user_id"] == "default"
+
+
+@pytest.mark.asyncio
 async def test_fallback_used_logged(auditor, db):
     """fallback_used=True harus tersimpan di DB."""
     route = _fake_route()

@@ -19,14 +19,26 @@ class ToolAudit:
         self.db = db
 
     async def record(
-        self, session_id: str, role: str, tool_name: str, outcome: str, latency_ms: int
+        self,
+        session_id: str,
+        role: str,
+        tool_name: str,
+        outcome: str,
+        latency_ms: int,
+        user_id: str = "default",
     ) -> None:
-        """Catat satu eksekusi tool. Fail-soft: error tulis hanya di-log, tidak diteruskan."""
+        """Catat satu eksekusi tool. Fail-soft: error tulis hanya di-log, tidak diteruskan.
+
+        `user_id` (§ Audit log format actor_is_agent, TODO.md Prioritas 2):
+        AgentConfig.user_id, default 'default' (single-user §7). `actor_is_agent`
+        memakai DEFAULT kolom (selalu 1 — baris ini selalu tindakan agent).
+        """
         try:
             await self.db.execute(
-                """INSERT INTO tool_invocations (session_id, role, tool_name, outcome, latency_ms)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (session_id, role, tool_name, outcome, latency_ms),
+                """INSERT INTO tool_invocations
+                       (session_id, role, user_id, tool_name, outcome, latency_ms)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (session_id, role, user_id, tool_name, outcome, latency_ms),
             )
         except Exception as exc:  # noqa: BLE001 — telemetri tak boleh ganggu turn
             log.warning("tool_audit_write_failed", tool=tool_name, error=str(exc))

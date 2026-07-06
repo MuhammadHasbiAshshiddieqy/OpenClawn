@@ -415,8 +415,8 @@ Daftar kata/frasa yang menandakan user mengoreksi respons sebelumnya (sinyal fee
 
 ### Kelas: `RoutingAuditor`
 
-**`log_decision(session_id, role, query, route) → int`** *(async)*  
-Catat keputusan routing ke tabel `routing_events` **sebelum** LLM call. Return `lastrowid` (dipakai sebagai `event_id` untuk `finalize`). Semua 8 dimensi dicatat.
+**`log_decision(session_id, role, query, route, user_id="default") → int`** *(async)*  
+Catat keputusan routing ke tabel `routing_events` **sebelum** LLM call. Return `lastrowid` (dipakai sebagai `event_id` untuk `finalize`). Semua 8 dimensi dicatat. `user_id` (§ Audit log format actor_is_agent, TODO.md Prioritas 2) — `AgentConfig.user_id`, default `"default"` selaras single-user design saat ini (CLAUDE.md §7). `actor_is_agent` TIDAK diparameterkan — selalu `1` via `DEFAULT` kolom (setiap baris tabel ini memang tindakan agent), pola audit log standar pasar (GitHub control plane) yang memudahkan integrasi SIEM eksternal.
 
 **`finalize(event_id, turn, evidence=None) → None`** *(async)*  
 Update record dengan hasil aktual **setelah** turn selesai: token in/out, cost, latensi, fallback flag. `evidence` (opsional, § Evidence-Based Response TODO.md Prioritas 2) — dict `{policy, memory, guardrail}` di-serialize JSON ke kolom `evidence_json`, query-able via `GET /evidence/{event_id}` (`docs/web.md`). Dibangun di `AgentLoop.run()` dari `route`/`active_skills`/hasil guardrail OUTPUT — semua data yang SUDAH tersedia sinkron saat turn selesai, tidak menambah query baru.
@@ -610,8 +610,8 @@ Audit penggunaan tool (setara Inovasi 1 untuk routing). DB-bound (hanya `Databas
 
 ### Kelas: `ToolAudit`
 
-**`record(session_id, role, tool_name, outcome, latency_ms)`** *(async)*  
-Catat satu eksekusi ke tabel `tool_invocations`. **Fail-soft**: kegagalan menulis hanya di-log, tidak diteruskan — telemetri tak boleh menjatuhkan turn.
+**`record(session_id, role, tool_name, outcome, latency_ms, user_id="default")`** *(async)*  
+Catat satu eksekusi ke tabel `tool_invocations`. **Fail-soft**: kegagalan menulis hanya di-log, tidak diteruskan — telemetri tak boleh menjatuhkan turn. `user_id` (§ Audit log format actor_is_agent, TODO.md Prioritas 2) — sama seperti `RoutingAuditor.log_decision`, default `"default"`. `actor_is_agent` selalu `1` via `DEFAULT` kolom.
 
 **`summary() → list[dict]`** *(async)*  
 Agregasi per tool untuk `/metrics`: `total`, `errors`, `timeouts`, `fail_rate` (%), `avg_latency_ms`. Diurut paling sering dipakai dulu.

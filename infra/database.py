@@ -27,6 +27,11 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # Runtime Evaluation Engine (TODO.md § Prioritas 2): rating eksplisit
         # user (1-5) via POST /feedback/{event_id}. NULL = belum diberi feedback.
         ("human_feedback", "INTEGER"),
+        # Audit log format actor_is_agent (TODO.md § Prioritas 2, pola GitHub
+        # control plane): user_id query-able terpisah dari session_id +
+        # actor_is_agent eksplisit — memudahkan integrasi SIEM eksternal.
+        ("user_id", "TEXT DEFAULT 'default'"),
+        ("actor_is_agent", "INTEGER DEFAULT 1"),
     ],
     "approval_log": [
         # Human Approval Pipeline (TODO.md § Prioritas 2): approval_id SEBELUMNYA
@@ -34,6 +39,12 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # decision, hilang setelah resolve() menimpanya jadi "approved"/"rejected".
         # Kolom sendiri agar bisa di-query lintas status via GET /approval/{id}.
         ("approval_id", "TEXT"),
+    ],
+    "tool_invocations": [
+        # Audit log format actor_is_agent (TODO.md § Prioritas 2) — sama seperti
+        # routing_events, lihat komentar di atas.
+        ("user_id", "TEXT DEFAULT 'default'"),
+        ("actor_is_agent", "INTEGER DEFAULT 1"),
     ],
 }
 

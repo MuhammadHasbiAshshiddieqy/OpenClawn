@@ -149,6 +149,8 @@ Setiap keputusan routing dicatat sebelum LLM call dan diupdate setelah selesai.
 | `id` | INTEGER PK | Dipakai sebagai `event_id` |
 | `session_id` | TEXT | ID sesi |
 | `role` | TEXT | Role aktif |
+| `user_id` | TEXT | Audit log format actor_is_agent (§ Prioritas 2): `AgentConfig.user_id`, default `"default"` (single-user §7). Query-able terpisah dari `session_id` untuk integrasi SIEM eksternal |
+| `actor_is_agent` | INTEGER | Selalu `1` (default kolom) — setiap baris tabel ini memang tindakan agent, bukan manusia langsung. Pola audit log standar pasar (GitHub control plane) |
 | `query_text` | TEXT | Pesan user (untuk debugging) |
 | `dim_query_tokens` | INTEGER | Dimensi 1: estimasi token query |
 | `dim_has_tech_kw` | INTEGER | Dimensi 2: ada kata teknis? |
@@ -271,6 +273,8 @@ Audit setiap eksekusi tool, dicatat terpusat di `AgentLoop._execute_tool` lewat 
 | `id` | INTEGER PK | — |
 | `session_id` | TEXT | Sesi yang memanggil |
 | `role` | TEXT | Role agent |
+| `user_id` | TEXT | Audit log format actor_is_agent (§ Prioritas 2): sama seperti `routing_events.user_id`, default `"default"` |
+| `actor_is_agent` | INTEGER | Selalu `1` (default kolom) — lihat `routing_events.actor_is_agent` |
 | `tool_name` | TEXT | Nama tool |
 | `outcome` | TEXT | `ok` \| `error` \| `timeout` |
 | `latency_ms` | INTEGER | Durasi eksekusi |

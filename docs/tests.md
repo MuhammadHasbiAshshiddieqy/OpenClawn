@@ -379,6 +379,9 @@ Test untuk `core/audit.py`.
 | Test | Yang Diverifikasi |
 |---|---|
 | `test_log_and_finalize_roundtrip` | `log_decision()` → `finalize()` → event tersimpan lengkap di DB |
+| `test_log_decision_defaults_actor_is_agent_true` | `actor_is_agent` default `1` tanpa perlu diberi eksplisit (§ Audit log format actor_is_agent) |
+| `test_log_decision_stores_user_id_when_given` | `user_id` eksplisit tersimpan, query-able terpisah dari `session_id` |
+| `test_log_decision_user_id_defaults_to_default_string` | Tanpa `user_id` eksplisit → `"default"`, bukan `NULL` (selaras `AgentConfig.user_id`) |
 | `test_fallback_used_logged` | `fallback_used=True` tersimpan sebagai `1` |
 | `test_fallback_not_used_defaults_zero` | Tanpa `fallback_used` → default `0` |
 | `test_finalize_stores_evidence_json` | `finalize(evidence=...)` menyimpan snapshot JSON query-able (§ Evidence-Based Response) |
@@ -483,6 +486,8 @@ Test untuk `tools/`.
 | `test_tool_invocation_recorded_in_telemetry` | Eksekusi tercatat di `tool_invocations` (outcome=ok, latency) |
 | `test_tool_failure_recorded_as_error_outcome` | Tool gagal → telemetri `outcome='error'` |
 | `test_tool_audit_summary_aggregates` | `ToolAudit.summary()` agregasi total/errors/fail_rate per tool |
+| `test_tool_audit_record_defaults_actor_is_agent_true` | `actor_is_agent` default `1` di `tool_invocations` (§ Audit log format actor_is_agent) |
+| `test_tool_audit_record_stores_user_id` | `user_id` opsional tersimpan, query-able terpisah dari `session_id` |
 | `test_read_many_reads_multiple_files` | `read_many` baca beberapa file workspace-safe sekaligus |
 | `test_read_many_per_file_error_does_not_fail_others` | Satu file gagal → error per-file, lain tetap terbaca |
 | `test_read_many_requires_list` | `paths` bukan list → error |
