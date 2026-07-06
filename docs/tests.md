@@ -425,19 +425,26 @@ Regression guard untuk bug yang ditemukan di Sprint 4: `_post_turn` tidak memang
 
 ### `tests/test_security.py`
 
-Test untuk `security/`.
+Test untuk `security/` — Shield, Vault, ApprovalGate (HITL).
 
 | Test | Yang Diverifikasi |
 |---|---|
-| `test_shield_blocks_prompt_injection` | Input dengan "ignore previous instructions" diblokir |
-| `test_shield_allows_normal_input` | Input normal lolos shield |
-| `test_shield_nfkd_normalized` | Homoglyph (unicode lookalike) terdeteksi |
+| `test_shield_passes_clean_input` | Input normal lolos shield |
+| `test_shield_blocks_injection_english` | Prompt injection (EN) diblokir |
+| `test_shield_blocks_injection_indonesian` | Prompt injection (ID) diblokir (locale-neutral §1.5) |
+| `test_shield_normalizes_homoglyph` | Homoglyph (unicode lookalike) terdeteksi via NFKD |
+| `test_shield_case_insensitive` | Deteksi tidak peduli huruf besar/kecil |
 | `test_vault_returns_env_value` | `Vault.get()` baca dari `os.environ` |
-| `test_vault_raises_if_missing` | Credential tidak ada → `ValueError` |
-| `test_approval_gate_resolve_approves` | `resolve(True)` → `request()` return True |
-| `test_approval_gate_resolve_rejects` | `resolve(False)` → `request()` return False |
-| `test_approval_gate_timeout_denies` | Timeout → fail-safe DENY |
-| `test_approval_pending_list` | `pending_list()` menampilkan approval yang menunggu |
+| `test_vault_caches_value` | Nilai di-cache, tidak baca env berulang |
+| `test_vault_missing_credential_raises` | Credential tidak ada → `ValueError` |
+| `test_approval_approved_when_user_resolves_true` | `resolve(True)` → `request()` return `True`, `decision="approved"` |
+| `test_approval_rejected_when_user_resolves_false` | `resolve(False)` → `request()` return `False`, `decision="rejected"` |
+| `test_approval_timeout_fails_safe_deny` | KRITIS: timeout tanpa respons → fail-safe DENY |
+| `test_approval_pending_cleared_after_decision` | Setelah resolve, `_pending` kosong (tak bocor memori) |
+| `test_resolve_unknown_id_returns_false` | `resolve()` ID tak dikenal → `False`, tidak crash |
+| `test_approval_id_stored_in_own_column` | Human Approval Pipeline (§ Prioritas 2): `approval_id` di kolom sendiri, query-able setelah `decision` berubah jadi final — bukan lagi tersirat di substring `pending:{id}` yang hilang |
+| `test_approval_id_preserved_with_explicit_pre_generated_id` | `request(approval_id=...)` eksplisit (pola pre-generate `AgentLoop`) tersimpan utuh |
+| `test_pending_list_scoped_by_session` | `pending_list(session_id)` hanya approval sesi itu |
 
 ---
 
@@ -914,6 +921,18 @@ Test untuk `GET /evidence/{event_id}` (§ Evidence-Based Response, TODO.md § Pr
 | `test_evidence_404_for_unknown_event` | `event_id` tak dikenal → `404` |
 | `test_evidence_returns_null_when_not_yet_finalized` | Event ada (`log_decision` sudah jalan) tapi `finalize` belum → `200` dengan `evidence: null`, bukan 404 |
 | `test_evidence_returns_stored_payload_after_finalize` | Setelah `finalize(evidence=...)` → response mengembalikan payload persis yang tersimpan |
+
+---
+
+### `tests/test_approval_endpoint.py`
+
+Test untuk `GET /approval/{approval_id}` (§ Human Approval Pipeline, TODO.md § Prioritas 2).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_approval_404_for_unknown_id` | `approval_id` tak pernah tercatat → `404` |
+| `test_approval_returns_pending_status_before_resolve` | Setelah `resolve()` → `decision` terbaca "approved" via endpoint, `tool_input` ter-decode dari JSON |
+| `test_approval_status_traceable_through_full_lifecycle` | Regresi inti: `approval_id` tetap query-able setelah `decision` berubah pending→rejected (sebelumnya hilang, hanya tersirat di substring `decision` yang ditimpa) |
 
 ---
 

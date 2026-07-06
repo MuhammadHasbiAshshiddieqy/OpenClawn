@@ -154,10 +154,10 @@ Inisialisasi dict `_pending` untuk track approval yang menunggu.
 **`request(session_id, tool_name, tool_input, approval_id=None) → bool`** *(async)*  
 Alur lengkap permintaan approval:
 1. Buat `PendingApproval` — pakai `approval_id` bila diberikan, kalau tidak generate UUID baru
-2. Catat ke tabel `approval_log` dengan status `pending:{approval_id}`
+2. Catat ke tabel `approval_log` dengan `decision="pending"` dan `approval_id` di KOLOM SENDIRI (§ Human Approval Pipeline, TODO.md Prioritas 2 — sebelumnya `approval_id` hanya tersirat sebagai substring `pending:{id}` di kolom `decision`, hilang begitu langkah 5 menimpanya jadi keputusan final; sekarang tetap query-able lintas status via `GET /approval/{approval_id}`, `docs/web.md`)
 3. Tunggu `asyncio.wait_for(future, timeout=approval_timeout_sec)`
 4. Jika timeout → **fail-safe DENY** (`approved=False`, decision=`"timeout"`)
-5. Update `approval_log` dengan keputusan final
+5. Update `approval_log` dengan keputusan final (dicari via kolom `approval_id`, bukan lagi pola string `decision=pending:{id}`)
 6. Return `True` (approved) atau `False` (rejected/timeout)
 
 Fail-safe DENY dipilih sesuai prinsip CLAUDE.md §1.1: keamanan dulu — tool destruktif tidak pernah jalan tanpa persetujuan eksplisit.
@@ -182,7 +182,7 @@ lihat `docs/web.md` § `POST /approve` untuk bagaimana chat sesungguhnya menampi
 approval (via event SSE `status.approval_id`, bukan polling terpisah).
 
 **`_record_decision(approval_id, decision) → None`** *(async, private)*  
-Update row `approval_log` dari `pending:{approval_id}` ke keputusan final.
+Update row `approval_log` yang `approval_id`-nya cocok DAN `decision='pending'`, jadi keputusan final.
 
 ---
 

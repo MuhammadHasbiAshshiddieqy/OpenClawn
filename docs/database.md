@@ -210,10 +210,13 @@ Semua permintaan approval tool destruktif.
 | `session_id` | TEXT | Sesi yang meminta |
 | `tool_name` | TEXT | Tool yang diminta |
 | `tool_input` | TEXT | Input dalam JSON |
-| `decision` | TEXT | `approved` / `rejected` / `timeout` / `pending:{id}` |
+| `decision` | TEXT | `pending` / `approved` / `rejected` / `timeout` / `auto:trust_mode` / `proposal:pending` |
+| `approval_id` | TEXT | Human Approval Pipeline (§ Prioritas 2): ID approval di kolom SENDIRI — SEBELUMNYA hanya tersirat sebagai substring `pending:{id}` di `decision`, hilang begitu decision ditimpa jadi keputusan final. Query-able lintas status via `GET /approval/{approval_id}`. `NULL` untuk baris dari `auto_approve()`/`queue_proposal()` (tak ada manusia menunggu ID untuk di-resolve) |
 | `created_at` | TIMESTAMP | |
 
-Saat `request()` dipanggil: diinsert dengan `decision="pending:{approval_id}"`. Setelah user memutuskan: diupdate ke `"approved"`, `"rejected"`, atau `"timeout"`.
+**Index:** `idx_approval_id` pada `approval_id` — dibuat oleh `DatabaseManager._ensure_columns()` SETELAH kolom ditambal (bukan statis di migration script), karena DB lama baru mendapat kolom ini via `ALTER TABLE`; index yang dibuat lebih dulu akan gagal `no such column` untuk DB lama.
+
+Saat `request()` dipanggil: diinsert dengan `decision="pending"` dan `approval_id` di kolomnya. Setelah user memutuskan: diupdate ke `"approved"`, `"rejected"`, atau `"timeout"` (dicari via `approval_id`, bukan lagi pola string).
 
 ---
 

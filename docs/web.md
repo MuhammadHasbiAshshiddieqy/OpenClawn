@@ -325,6 +325,22 @@ read-only, bukan jalur utama.
 
 ---
 
+#### `GET /approval/{approval_id}`
+
+**Human Approval Pipeline sebagai node query-able (§ Human Approval Pipeline, TODO.md § Prioritas 2).**
+
+Berbeda dari `GET /approvals` (list SEMUA yang masih pending, sumber `ApprovalGate._pending` in-memory), endpoint ini melacak SATU `approval_id` lintas seluruh siklus hidupnya (pending → approved/rejected/timeout/auto:trust_mode), dibaca dari DB (`approval_log.approval_id`, kolom independen dari mekanisme `asyncio.Future` in-memory). Response:
+```json
+{
+  "approval_id": "cf1196b7...", "session_id": "...", "tool_name": "file_write",
+  "tool_input": {"path": "test.txt", "content": "..."},
+  "decision": "approved", "created_at": "..."
+}
+```
+`404` bila `approval_id` tak pernah tercatat sama sekali. Catatan: baris dari jalur `ApprovalGate.auto_approve()` (trust mode) TIDAK punya `approval_id` (tidak ada manusia menunggu ID untuk di-resolve) — hanya baris dari `request()` (approval interaktif) yang query-able lewat endpoint ini.
+
+---
+
 #### `POST /answer`
 
 **User menjawab pertanyaan klarifikasi (`ask_user`).**

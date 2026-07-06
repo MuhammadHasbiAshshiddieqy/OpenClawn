@@ -116,10 +116,18 @@ CREATE TABLE IF NOT EXISTS role_handoffs (
 );
 
 -- ===================== APPROVAL LOG [audit gap] =====================
+-- approval_id: kolom di skema BARU langsung (untuk DB baru); untuk DB LAMA
+-- (dibuat sebelum kolom ini ada), _ensure_columns() menambalnya via ALTER TABLE
+-- SETELAH executescript ini selesai. Index-nya (idx_approval_id) SENGAJA tidak
+-- dibuat statis di sini — kalau CREATE INDEX dijalankan sebelum ALTER TABLE
+-- menambal kolom di DB lama, "no such column: approval_id" (kolom belum ada
+-- saat index dibuat). Index dibuat oleh DatabaseManager._ensure_columns()
+-- setelah kolom dipastikan ada, aman untuk DB baru maupun lama.
 CREATE TABLE IF NOT EXISTS approval_log (
     id INTEGER PRIMARY KEY, session_id TEXT NOT NULL,
     tool_name TEXT NOT NULL, tool_input TEXT,
-    decision TEXT,                          -- approved | rejected | timeout
+    decision TEXT,                          -- pending | approved | rejected | timeout | auto:trust_mode | proposal:pending
+    approval_id TEXT,                       -- [Human Approval Pipeline] kolom eksplisit — SEBELUMNYA hanya tersirat sebagai substring "pending:{id}" di decision, hilang setelah resolve. Query-able via GET /approval/{approval_id}
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

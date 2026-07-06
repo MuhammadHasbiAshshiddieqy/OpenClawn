@@ -55,11 +55,15 @@ class ApprovalGate:
         )
         self._pending[approval_id] = pending
 
-        # Catat permintaan dengan status pending — auditor & Web UI butuh ini
+        # Catat permintaan dengan status pending — auditor & Web UI butuh ini.
+        # approval_id di kolom SENDIRI (bukan encode di 'decision') agar tetap
+        # query-able setelah keputusan final ditulis (§ Human Approval Pipeline,
+        # TODO.md Prioritas 2) — GET /approval/{approval_id} bisa melacak satu
+        # approval lintas status pending→approved/rejected/timeout.
         await self.db.execute(
-            """INSERT INTO approval_log (session_id, tool_name, tool_input, decision)
-               VALUES (?,?,?,?)""",
-            (session_id, tool_name, json.dumps(tool_input), f"pending:{approval_id}"),
+            """INSERT INTO approval_log (session_id, tool_name, tool_input, decision, approval_id)
+               VALUES (?,?,?,?,?)""",
+            (session_id, tool_name, json.dumps(tool_input), "pending", approval_id),
         )
 
         try:
@@ -81,10 +85,11 @@ class ApprovalGate:
         return approved
 
     async def _record_decision(self, approval_id: str, decision: str) -> None:
-        """Update baris pending menjadi keputusan final."""
+        """Update baris pending menjadi keputusan final, dicari via kolom approval_id
+        (bukan lagi via 'decision=pending:{id}' yang rapuh — lihat request())."""
         await self.db.execute(
-            "UPDATE approval_log SET decision=? WHERE decision=?",
-            (decision, f"pending:{approval_id}"),
+            "UPDATE approval_log SET decision=? WHERE approval_id=? AND decision='pending'",
+            (decision, approval_id),
         )
 
     async def auto_approve(self, session_id: str, tool_name: str, tool_input: dict) -> bool:

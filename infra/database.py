@@ -25,6 +25,13 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # eksplisit belum ship ini (§ KESIMPULAN.md §2.2).
         ("evidence_json", "TEXT"),
     ],
+    "approval_log": [
+        # Human Approval Pipeline (TODO.md § Prioritas 2): approval_id SEBELUMNYA
+        # hanya tersirat sebagai substring sementara "pending:{id}" di kolom
+        # decision, hilang setelah resolve() menimpanya jadi "approved"/"rejected".
+        # Kolom sendiri agar bisa di-query lintas status via GET /approval/{id}.
+        ("approval_id", "TEXT"),
+    ],
 }
 
 
@@ -89,6 +96,14 @@ class DatabaseManager:
             for name, decl in columns:
                 if name not in existing:
                     await db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        await db.commit()
+
+        # Index untuk kolom yang ditambal di atas — DIBUAT SETELAH ALTER TABLE
+        # selesai (bukan statis di migrations/001_initial.sql) karena DB LAMA
+        # baru mendapat kolomnya di baris atas; CREATE INDEX yang jalan lebih
+        # dulu (di executescript sebelum _ensure_columns dipanggil) akan gagal
+        # "no such column" untuk DB lama tanpa kolom ini sejak awal.
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_approval_id ON approval_log(approval_id)")
         await db.commit()
 
     async def close(self) -> None:

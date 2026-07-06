@@ -175,6 +175,48 @@ async def test_resolve_unknown_id_returns_false(db, fast_config):
 
 
 @pytest.mark.asyncio
+async def test_approval_id_stored_in_own_column(db, fast_config):
+    """Human Approval Pipeline (TODO.md § Prioritas 2): approval_id harus jadi
+    kolom query-able tersendiri di approval_log, BUKAN cuma tersirat sebagai
+    substring sementara di 'decision' (pending:{id}) yang hilang setelah
+    resolve — sebelumnya tak ada cara melacak approval_id APA yang terkait
+    satu baris approval_log setelah keputusan final tersimpan."""
+    gate = ApprovalGate(db, fast_config)
+
+    async def _resolve_soon():
+        await asyncio.sleep(0.05)
+        pending = gate.pending_list()
+        gate.resolve(pending[0]["approval_id"], True)
+
+    asyncio.create_task(_resolve_soon())
+    await gate.request("s_col", "code_run", {"code": "print(1)"})
+
+    row = await db.fetchone(
+        "SELECT approval_id, decision FROM approval_log WHERE session_id='s_col'"
+    )
+    assert row["approval_id"]  # bukan NULL/kosong
+    assert row["decision"] == "approved"  # bukan 'pending:{id}' yang bocor
+
+
+@pytest.mark.asyncio
+async def test_approval_id_preserved_with_explicit_pre_generated_id(db, fast_config):
+    """request(approval_id=...) eksplisit (pola pre-generate AgentLoop) juga
+    tersimpan utuh di kolom approval_id, bukan cuma yang auto-generate."""
+    gate = ApprovalGate(db, fast_config)
+    pre_generated = "my-explicit-approval-id-123"
+
+    async def _resolve_soon():
+        await asyncio.sleep(0.05)
+        gate.resolve(pre_generated, True)
+
+    asyncio.create_task(_resolve_soon())
+    await gate.request("s_pre", "code_run", {"code": "x"}, approval_id=pre_generated)
+
+    row = await db.fetchone("SELECT approval_id FROM approval_log WHERE session_id='s_pre'")
+    assert row["approval_id"] == pre_generated
+
+
+@pytest.mark.asyncio
 async def test_pending_list_scoped_by_session(db, fast_config):
     """pending_list(session_id) harus hanya mengembalikan approval session itu."""
     gate = ApprovalGate(db, fast_config)

@@ -651,6 +651,34 @@ async def get_turn_evidence(event_id: int):
     }
 
 
+@app.get("/approval/{approval_id}")
+async def get_approval_status(approval_id: str):
+    """Human Approval Pipeline sebagai node query-able (TODO.md § Prioritas 2).
+
+    Sebelumnya `approval_id` hanya tersirat sebagai substring sementara di
+    kolom `decision` ("pending:{id}"), hilang begitu `_record_decision`
+    menimpanya jadi keputusan final — tak ada cara melacak satu approval
+    lintas status pending→approved/rejected/timeout setelah faktanya. Kolom
+    `approval_log.approval_id` (baru) membuat ini query-able secara mandiri,
+    independen dari mekanisme `asyncio.Future` in-memory `ApprovalGate`.
+    """
+    row = await db.fetchone(
+        """SELECT approval_id, session_id, tool_name, tool_input, decision, created_at
+           FROM approval_log WHERE approval_id=?""",
+        (approval_id,),
+    )
+    if row is None:
+        raise StarletteHTTPException(status_code=404, detail="approval not found")
+    return {
+        "approval_id": row["approval_id"],
+        "session_id": row["session_id"],
+        "tool_name": row["tool_name"],
+        "tool_input": json.loads(row["tool_input"]) if row["tool_input"] else None,
+        "decision": row["decision"],
+        "created_at": row["created_at"],
+    }
+
+
 @app.post("/converse/stream")
 async def converse_stream(request: Request):
     """Multi-agent conversation: beberapa role saling mengobrol, di-stream per giliran."""
