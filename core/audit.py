@@ -1,3 +1,5 @@
+import json
+
 from infra.database import DatabaseManager
 from core.router import RouteDecision
 
@@ -73,12 +75,18 @@ class RoutingAuditor:
         )
         return cursor.lastrowid
 
-    async def finalize(self, event_id: int, turn) -> None:
-        """Update tokens, cost, latency, dan fallback_used setelah turn selesai."""
+    async def finalize(self, event_id: int, turn, evidence: dict | None = None) -> None:
+        """Update tokens, cost, latency, fallback_used, dan evidence setelah turn selesai.
+
+        `evidence` (opsional, § Evidence-Based Response TODO.md Prioritas 2): snapshot
+        policy/skill/guardrail yang berlaku saat turn ini — disimpan sebagai JSON agar
+        query-able via GET /evidence/{event_id}, bukan cuma tersirat lintas kolom lain.
+        """
         await self.db.execute(
             """
             UPDATE routing_events
-            SET tokens_in=?, tokens_out=?, cost_usd=?, latency_ms=?, fallback_used=?
+            SET tokens_in=?, tokens_out=?, cost_usd=?, latency_ms=?, fallback_used=?,
+                evidence_json=?
             WHERE id=?
             """,
             (
@@ -87,6 +95,7 @@ class RoutingAuditor:
                 turn.cost_usd,
                 turn.latency_ms,
                 int(getattr(turn, "fallback_used", False)),
+                json.dumps(evidence) if evidence is not None else None,
                 event_id,
             ),
         )

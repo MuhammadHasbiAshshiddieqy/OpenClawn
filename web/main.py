@@ -627,6 +627,30 @@ async def delete_chat_session(session_id: str):
     return {"ok": True}
 
 
+@app.get("/evidence/{event_id}")
+async def get_turn_evidence(event_id: int):
+    """Evidence-Based Response (TODO.md § Prioritas 2): snapshot policy/skill/
+    guardrail yang berlaku untuk satu turn, disimpan `RoutingAuditor.finalize()`.
+    `event_id` = id baris `routing_events` (sama dengan yang dicatat `log_decision`).
+
+    404 bila event tidak ada; `evidence: null` bila event ada tapi turn belum
+    selesai (finalize belum jalan) atau turn ini dari versi lama tanpa evidence.
+    """
+    row = await db.fetchone(
+        "SELECT id, session_id, role, evidence_json, created_at FROM routing_events WHERE id=?",
+        (event_id,),
+    )
+    if row is None:
+        raise StarletteHTTPException(status_code=404, detail="evidence not found")
+    return {
+        "event_id": row["id"],
+        "session_id": row["session_id"],
+        "role": row["role"],
+        "created_at": row["created_at"],
+        "evidence": json.loads(row["evidence_json"]) if row["evidence_json"] else None,
+    }
+
+
 @app.post("/converse/stream")
 async def converse_stream(request: Request):
     """Multi-agent conversation: beberapa role saling mengobrol, di-stream per giliran."""

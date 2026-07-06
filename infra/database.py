@@ -17,6 +17,14 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("status", "TEXT NOT NULL DEFAULT 'applied'"),
         ("merged_content", "TEXT"),
     ],
+    "routing_events": [
+        # Evidence-Based Response (TODO.md § Prioritas 2): snapshot JSON dari
+        # policy/skill/guardrail yang berlaku SAAT turn ini berjalan — data yang
+        # sebelumnya cuma tersirat lintas kolom, sekarang satu payload query-able
+        # via GET /evidence/{id}. Kompetitor besar (LangChain/CrewAI/AutoGen)
+        # eksplisit belum ship ini (§ KESIMPULAN.md §2.2).
+        ("evidence_json", "TEXT"),
+    ],
 }
 
 

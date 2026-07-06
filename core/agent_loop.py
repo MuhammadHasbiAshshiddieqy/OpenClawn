@@ -415,6 +415,8 @@ class AgentLoop:
         # UI (tak bisa ditarik), jadi rail bekerja pada turn.content LENGKAP — meredaksi
         # PII / memblokir kebocoran SEBELUM disimpan ke history & memori, lalu memberi
         # tahu UI agar bisa menandai/menimpa. Deteksi + redaksi-penyimpanan tetap bernilai.
+        guardrail_status = "clean"
+        guardrail_detail = ""
         if turn.content:
             out_outcome = guardrails.run(RailStage.OUTPUT, turn.content)
             if out_outcome.blocked:
@@ -424,6 +426,7 @@ class AgentLoop:
                     reason=out_outcome.block_reason,
                 )
                 turn.content = out_outcome.text  # pesan tahanan, jangan simpan teks asli
+                guardrail_status, guardrail_detail = "blocked", out_outcome.block_reason
                 yield AgentEvent(type="guardrail", text="blocked", detail=out_outcome.block_reason)
             elif out_outcome.modified:
                 redactions = [f for r in out_outcome.results for f in r.findings]
@@ -433,6 +436,7 @@ class AgentLoop:
                     findings=redactions,
                 )
                 turn.content = out_outcome.text  # versi teredaksi disimpan & ditandai
+                guardrail_status, guardrail_detail = "redacted", ", ".join(redactions)
                 yield AgentEvent(type="guardrail", text="redacted", detail=", ".join(redactions))
 
         # 7. Finalize
@@ -447,7 +451,24 @@ class AgentLoop:
         if self.cfg.persist_history:
             await self.memory.append_turn("user", user_message)
             await self.memory.append_turn("assistant", turn.content)
-        await self.auditor.finalize(event_id, turn)
+
+        # Evidence-Based Response (TODO.md § Prioritas 2): snapshot policy/skill/
+        # guardrail yang BENAR-BENAR berlaku turn ini, bukan cuma tersirat lintas
+        # kolom terpisah. Confidence SENGAJA tidak disertakan di sini — crystallizer
+        # jalan async di post_turn (bukan sinkron per-turn, hanya saat ≥3 tool call
+        # & kondisi tertentu), jadi menyertakan confidence palsu/kosong di sini akan
+        # menyesatkan. Query lewat GET /evidence/{event_id}.
+        evidence = {
+            "policy": {
+                "provider": route.provider,
+                "model": route.model,
+                "complexity": route.complexity.value,
+                "reason": route.reason,
+            },
+            "memory": [s.get("skill_name", "") for s in active_skills if s.get("skill_name")],
+            "guardrail": {"status": guardrail_status, "detail": guardrail_detail},
+        }
+        await self.auditor.finalize(event_id, turn, evidence=evidence)
 
         # Ringkasan biaya turn → UI (conversation mengagregasi lintas-giliran).
         # context_tokens + max → meter budget token-first (§1.4); peringatan saat

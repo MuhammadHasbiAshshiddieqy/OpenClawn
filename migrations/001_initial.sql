@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS routing_events (
     fallback_used INTEGER DEFAULT 0,        -- [v0.3] apakah fallback chain terpakai?
     tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL, latency_ms INTEGER,
     had_correction INTEGER DEFAULT 0, correction_detail TEXT,
+    evidence_json TEXT,                    -- [Evidence-Based Response] snapshot policy/skill/guardrail, query-able via GET /evidence/{id}
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_routing_label ON routing_events(complexity_label, had_correction);

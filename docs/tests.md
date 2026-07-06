@@ -378,11 +378,19 @@ Test untuk `core/audit.py`.
 
 | Test | Yang Diverifikasi |
 |---|---|
-| `test_log_decision_returns_id` | `log_decision()` return `lastrowid` valid |
-| `test_finalize_updates_record` | `finalize()` update token/cost/latency |
-| `test_check_correction_marks_previous` | Kata koreksi → update `had_correction=1` |
-| `test_no_correction_no_update` | Pesan normal → `had_correction` tetap 0 |
-| `test_calibration_report_structure` | Report punya field yang diharapkan |
+| `test_log_and_finalize_roundtrip` | `log_decision()` → `finalize()` → event tersimpan lengkap di DB |
+| `test_fallback_used_logged` | `fallback_used=True` tersimpan sebagai `1` |
+| `test_fallback_not_used_defaults_zero` | Tanpa `fallback_used` → default `0` |
+| `test_finalize_stores_evidence_json` | `finalize(evidence=...)` menyimpan snapshot JSON query-able (§ Evidence-Based Response) |
+| `test_finalize_without_evidence_leaves_null` | `finalize()` tanpa argumen evidence → kolom tetap `NULL`, bukan `"null"`/dict kosong |
+| `test_soul_upgrade_hit_logged` | `soul_upgrade_hit` tercatat di `dim_soul_upgrade_hit` |
+| `test_correction_detected` | Sinyal koreksi (ID) → update `had_correction=1` |
+| `test_correction_detected_english` | Sinyal koreksi (EN) juga terdeteksi (locale-neutral §1.5) |
+| `test_no_correction_on_normal_query` | Query normal → `had_correction` tetap `0` |
+| `test_correction_targets_most_recent_event` | Koreksi menandai event PALING TERAKHIR di sesi, bukan yang pertama |
+| `test_calibration_report_empty` | Tanpa data → list kosong, tidak crash |
+| `test_calibration_report_with_data` | Report mengelompokkan per `complexity_label` |
+| `test_all_correction_signals` | Semua `CORRECTION_SIGNALS` terdeteksi satu per satu |
 
 ---
 
@@ -894,6 +902,18 @@ Test sidebar riwayat chat (§ user report: chat selalu ke-reset, tak ada cara bu
 | `test_get_chat_session_turns_empty_for_unknown_session` | Sesi tak dikenal → `turns: []`, bukan 404 |
 | `test_get_chat_session_turns_returns_transcript` | Transkrip lengkap urut lama→baru |
 | `test_delete_chat_session_removes_from_list_and_turns` | `DELETE` menghilangkan sesi dari daftar DAN transkripnya |
+
+---
+
+### `tests/test_evidence.py`
+
+Test untuk `GET /evidence/{event_id}` (§ Evidence-Based Response, TODO.md § Prioritas 2).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_evidence_404_for_unknown_event` | `event_id` tak dikenal → `404` |
+| `test_evidence_returns_null_when_not_yet_finalized` | Event ada (`log_decision` sudah jalan) tapi `finalize` belum → `200` dengan `evidence: null`, bukan 404 |
+| `test_evidence_returns_stored_payload_after_finalize` | Setelah `finalize(evidence=...)` → response mengembalikan payload persis yang tersimpan |
 
 ---
 

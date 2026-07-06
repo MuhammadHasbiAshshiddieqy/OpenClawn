@@ -268,6 +268,25 @@ Response: `{"ok": true}`. Soft-delete metadata sidebar (`chat_sessions.deleted_a
 
 ---
 
+#### `GET /evidence/{event_id}`
+
+**Evidence-Based Response (§ Evidence-Based Response, TODO.md § Prioritas 2) — snapshot policy/skill/guardrail untuk satu turn.**
+
+`event_id` = `id` baris `routing_events` (nilai yang sama dicatat `RoutingAuditor.log_decision`). Response:
+```json
+{
+  "event_id": 42, "session_id": "...", "role": "pm", "created_at": "...",
+  "evidence": {
+    "policy": {"provider": "gemini", "model": "gemini-2.5-flash", "complexity": "complex", "reason": "..."},
+    "memory": ["prd-template-skill"],
+    "guardrail": {"status": "clean", "detail": ""}
+  }
+}
+```
+`evidence: null` bila turn belum selesai (finalize belum jalan) atau berasal dari sebelum fitur ini ada — dibedakan dari `404` (event benar-benar tak ada). Confidence SENGAJA tidak disertakan — crystallizer jalan async di `_post_turn` (hanya saat ≥3 tool call & kondisi tertentu terpenuhi), bukan sinkron per-turn, jadi menyertakannya di sini akan menyesatkan (§ `core/agent_loop.py::run()` komentar evidence).
+
+---
+
 #### `POST /approve`
 
 **User memutuskan approve atau reject untuk tool destruktif.**

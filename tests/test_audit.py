@@ -102,6 +102,40 @@ async def test_fallback_not_used_defaults_zero(auditor, db):
 
 
 @pytest.mark.asyncio
+async def test_finalize_stores_evidence_json(auditor, db):
+    """Evidence-Based Response (TODO.md § Prioritas 2): finalize(evidence=...)
+    menyimpan snapshot policy/skill/guardrail sebagai JSON query-able."""
+    route = _fake_route()
+    event_id = await auditor.log_decision("s_ev1", "pm", "buat pdf", route)
+    evidence = {
+        "policy": {"provider": "gemini", "model": "gemini-2.5-flash", "complexity": "simple"},
+        "memory": ["prd-template-skill"],
+        "guardrail": {"status": "clean", "detail": ""},
+    }
+    await auditor.finalize(event_id, _FakeTurn(), evidence=evidence)
+
+    row = await db.fetchone("SELECT evidence_json FROM routing_events WHERE id=?", (event_id,))
+    assert row["evidence_json"] is not None
+    import json
+
+    stored = json.loads(row["evidence_json"])
+    assert stored == evidence
+
+
+@pytest.mark.asyncio
+async def test_finalize_without_evidence_leaves_null(auditor, db):
+    """finalize() tanpa argumen evidence (default None) — kolom tetap NULL,
+    bukan string 'null' atau dict kosong (bedakan 'belum ada data' dari 'ada
+    tapi kosong')."""
+    route = _fake_route()
+    event_id = await auditor.log_decision("s_ev2", "pm", "query biasa", route)
+    await auditor.finalize(event_id, _FakeTurn())
+
+    row = await db.fetchone("SELECT evidence_json FROM routing_events WHERE id=?", (event_id,))
+    assert row["evidence_json"] is None
+
+
+@pytest.mark.asyncio
 async def test_soul_upgrade_hit_logged(auditor, db):
     """soul_upgrade_hit harus tercatat di kolom dim_soul_upgrade_hit."""
     route = _fake_route(soul_hit=True)

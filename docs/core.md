@@ -418,8 +418,8 @@ Daftar kata/frasa yang menandakan user mengoreksi respons sebelumnya (sinyal fee
 **`log_decision(session_id, role, query, route) → int`** *(async)*  
 Catat keputusan routing ke tabel `routing_events` **sebelum** LLM call. Return `lastrowid` (dipakai sebagai `event_id` untuk `finalize`). Semua 8 dimensi dicatat.
 
-**`finalize(event_id, turn) → None`** *(async)*  
-Update record dengan hasil aktual **setelah** turn selesai: token in/out, cost, latensi, fallback flag.
+**`finalize(event_id, turn, evidence=None) → None`** *(async)*  
+Update record dengan hasil aktual **setelah** turn selesai: token in/out, cost, latensi, fallback flag. `evidence` (opsional, § Evidence-Based Response TODO.md Prioritas 2) — dict `{policy, memory, guardrail}` di-serialize JSON ke kolom `evidence_json`, query-able via `GET /evidence/{event_id}` (`docs/web.md`). Dibangun di `AgentLoop.run()` dari `route`/`active_skills`/hasil guardrail OUTPUT — semua data yang SUDAH tersedia sinkron saat turn selesai, tidak menambah query baru.
 
 **`check_correction(user_message, session_id) → None`** *(async)*  
 Dipanggil di **awal setiap turn** (oleh `AgentLoop.run`). Jika pesan user mengandung sinyal koreksi, update record turn **sebelumnya** di session yang sama dengan `had_correction=1`. Aman dipanggil selalu — UPDATE hanya kena bila ada event sebelumnya untuk session. (Tidak boleh di-gate `self.history`: AgentLoop dibuat baru tiap request web → history selalu kosong → koreksi tak pernah terdeteksi.)
