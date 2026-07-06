@@ -321,6 +321,47 @@ untuk single-user, tak perlu persisten).
 
 ---
 
+## `security/policy_engine.py` — Policy Engine (TODO.md § Prioritas 3)
+
+Lapisan kondisi **TAMBAHAN** di atas allow-list (`soul.toml [tools] allowed`)
+dan approval statis (`Tool.requires_approval`) — TIDAK menggantikan keduanya.
+Kondisi berbasis nested dict/TOML (BUKAN DSL string/`eval()`) — keputusan
+desain sadar: parser ekspresi kustom menambah permukaan bug/kerentanan lebih
+mahal diverifikasi dibanding operator tetap per tipe field. Konsisten prinsip
+minimalis CLAUDE.md §8.
+
+### Dataclass: `PolicyDecision`
+
+`action: str` (`"allow"` / `"deny"` / `"require_approval"`), `reason: str`.
+
+### Kelas: `PolicyEngine`
+
+**`__init__(policy_cfg: dict)`**  
+`policy_cfg` = `soul["policy"]` (dict kosong `{}` bila role tidak punya section `[policy]` sama sekali — semua tool ALLOW default, perilaku lama tak berubah).
+
+**`evaluate(tool_name, tool_input) → PolicyDecision`**  
+Cek `deny_if` dulu (OR semantics — kondisi PERTAMA yang match langsung `deny`), baru `approval_required_if`. `deny_if` SELALU menang atas `approval_required_if` bila keduanya match untuk tool yang sama (fail-safe: penolakan > permintaan approval, CLAUDE.md §1). Field yang dicek kondisi tapi tidak ada di `tool_input`, atau operator tak dikenal (typo config) → kondisi dianggap TIDAK match, BUKAN crash.
+
+Operator yang didukung: `prefix`, `not_prefix`, `contains`, `eq`, `gt`, `gte`, `lt`, `lte`, dan `always` (match tanpa perlu field di `tool_input` sama sekali — dipakai `infra/manifest.py` untuk `approval_required_if` tanpa kondisi spesifik).
+
+### Skema `soul.toml`
+
+```toml
+[policy.file_write]
+deny_if = [{ field = "path", op = "prefix", value = "/etc" }]
+
+[policy.http_request]
+approval_required_if = [{ field = "url", op = "not_prefix", value = "https://api.internal" }]
+```
+
+### Integrasi `core/agent_loop.py`
+
+Dievaluasi di **DUA titik** (defense-in-depth, pola sama `_TRUST_MODE_EXEMPT`):
+1. `_run_tool_loop` — SEBELUM status UI di-emit & `bypass_approval` dihitung, agar tool yang `requires_approval=False` statis (mis. `shell_run`) tapi dipaksa approval oleh policy tampil sebagai kartu approval, BUKAN chip "tool" biasa.
+2. `_execute_tool` — SEBELUM approval/eksekusi. `deny` → tolak SEBELUM approval sempat dipanggil sama sekali. `require_approval` → paksa masuk jalur `tool.requires_approval or policy_forces_approval`, DAN `bypass_approval` (trust mode) dipaksa `False` bila `policy_forces_approval` — **keputusan desain eksplisit**: policy adalah lapisan keamanan yang lebih kuat daripada preferensi otonomi sesi; kalau trust mode bisa melewatinya, policy jadi tak berarti apa-apa saat trust mode aktif. Dicek independen di kedua titik (bukan caller mempercayakan seluruhnya ke satu perhitungan) agar bug di satu titik tak membuka celah bypass.
+
+---
+
 ## Ringkasan Tanggung Jawab
 
 | Komponen | Melindungi dari | Lapisan |
@@ -331,6 +372,7 @@ untuk single-user, tak perlu persisten).
 | `Shield` | Prompt injection yang jelas (dipakai oleh input rail) | Input user |
 | `skill_scanner` | Skill impor membawa kode berbahaya/eksfiltrasi | Impor skill pack (file/URL) |
 | `ApprovalGate` | Tool destruktif jalan tanpa izin | Tool execution |
+| `PolicyEngine` | Kondisi spesifik tool (path/domain/nilai) yang allow-list statis tak bisa tangkap | Tool execution (sebelum approval) |
 | `QuestionGate` | (bukan keamanan) klarifikasi interaktif `ask_user` | Tool execution |
 | `security/auth.py` | Akses tanpa login saat self-host publik (opt-in) | Semua route (kecuali `/health`, `/login`, `/static/*`) |
 | `security/rate_limit.py` | Biaya LLM tak terkendali / DoS sederhana | `/chat/stream`, `/converse/stream` |

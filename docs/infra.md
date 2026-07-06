@@ -259,3 +259,52 @@ Murni di atas `DatabaseManager` (tabel `chat_sessions`, lihat `docs/database.md`
 | `soft_delete(session_id) → None` *(async)* | Hapus dari sidebar (`deleted_at` terisi — metadata tetap ada untuk audit trail), TAPI `session_turns` & `session_workspace` terkait dihapus FISIK (user minta "hapus", isi percakapan harus benar hilang) |
 
 Judul di-generate `AgentLoop._generate_session_title` (dipanggil `_post_turn` di turn pertama, gated `has_title`) via `compaction_local_model` (gemma4:e2b) — model kecil yang sama dipakai `_maybe_compact`, konsisten & gratis (lokal). Fail-safe (§1.3): LLM/parsing gagal → sesi tetap tanpa judul (sidebar fallback ke `"New chat"`), tak menjatuhkan turn.
+
+---
+
+## `infra/manifest.py` — clawn.yaml (TODO.md § Prioritas 3)
+
+Manifest deklaratif tim/role DI ATAS `soul.toml` — operator menulis policy sekali per tool di `clawn.yaml`, bukan menyunting `[policy.*]` manual di tiap `soul.toml`. Dijalankan via `scripts/apply_manifest.py`, bukan otomatis saat startup (perubahan config harus sadar/eksplisit, bukan tersirat tiap restart).
+
+**Dependency baru: PyYAML** (disetujui owner secara eksplisit, lihat `pyproject.toml`) — HANYA untuk parsing `clawn.yaml`. Penulisan ke `soul.toml` TETAP text-based section replace (bukan serializer TOML generik) — `system_prompt` multi-baris kompleks harus tetap byte-identik, hanya blok `[policy.*]` yang dicari & diganti.
+
+### Exception: `ManifestError`
+
+Kegagalan memuat/menerapkan manifest — pesan jelas ke operator, bukan traceback generik. Dilempar untuk: file tak ada, YAML tak valid, skema tanpa key `team` di root, atau role yang disebut manifest tapi `soul.toml`-nya tak ditemukan (tidak diam-diam membuat file baru).
+
+### Fungsi: `load_manifest(manifest_path) → dict`
+
+Baca & validasi `clawn.yaml`. Raise `ManifestError` untuk kondisi di atas.
+
+### Fungsi: `generate_policy_toml_block(policy) → str`
+
+Render dict `{tool_name: {deny_if: [...], approval_required_if: [...]}}` jadi blok TOML `[policy.<tool_name>]` siap disisipkan. Angka ditulis TANPA quote, string DENGAN quote (`_toml_value`) — penting karena kondisi numerik (`op: "gt"`, `value: 300`) harus banding angka, bukan string. Dict kosong → string kosong.
+
+### Fungsi: `apply_manifest(manifest_path, roles_dir="roles") → list[str]`
+
+Terapkan `clawn.yaml` ke `soul.toml` tiap role yang disebut di `team:`. Return list role yang benar-benar diubah.
+
+- Role tanpa key `policy` di manifest-nya → **di-skip** (no-op untuk role itu, bukan menghapus policy yang mungkin sudah ada dari sumber lain).
+- Role yang disebut manifest tapi `soul.toml`-nya tidak ada di `roles_dir` → `ManifestError` (bukan membuat file baru diam-diam — itu keputusan operator).
+- Role yang **tidak disebut** manifest sama sekali → `soul.toml`-nya tidak disentuh (opt-in per-role, bukan all-or-nothing).
+- Idempoten: menjalankan `apply_manifest` berkali-kali dengan manifest sama tidak menumpuk blok `[policy.*]` duplikat — blok lama dihapus (regex `_POLICY_SECTION_RE`) sebelum blok baru disisipkan.
+
+### Skema `clawn.yaml`
+
+```yaml
+team:
+  pm:
+    policy:
+      pdf_write:
+        approval_required_if:
+          - field: content
+            op: contains
+            value: confidential
+  dev:
+    policy:
+      shell_run:
+        approval_required_if:
+          - op: always
+```
+
+**Catatan scope:** field `model`/`approval` top-level di skema PDF asli (`team.<role>.model`, `team.<role>.approval`) dicatat di manifest tapi BELUM di-generate ke `soul.toml` — hanya `policy` yang diproses saat ini. Perluasan lanjutan dilacak terpisah di `TODO.md`.

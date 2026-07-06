@@ -30,6 +30,7 @@ from security.approval import ApprovalGate
 from security.question import QuestionGate
 from security.shield import Shield
 from security.guardrails import GuardrailEngine, RailStage
+from security.policy_engine import PolicyEngine
 from core.guardrails_config import GuardrailConfigStore
 
 
@@ -235,6 +236,11 @@ class AgentLoop:
 
         # nit #2: cache soul.toml sekali, jangan baca tiap turn
         self._soul = self._load_soul_once()
+        # Policy Engine (TODO.md § Prioritas 3): lapisan kondisi TAMBAHAN di atas
+        # allow-list [tools] dan Tool.requires_approval statis — dibaca dari
+        # soul.toml [policy.<tool_name>]. Section opsional; role tanpa [policy]
+        # sama sekali → semua tool ALLOW default (perilaku lama tak berubah).
+        self.policy_engine = PolicyEngine(self._soul.get("policy", {}))
 
     def _load_soul_once(self) -> dict:
         with open(f"roles/{self.cfg.role}/soul.toml", "rb") as f:
@@ -611,16 +617,34 @@ class AgentLoop:
                     write_repeat_count = 0
                 last_write_target = write_target
 
+            # Policy Engine (TODO.md § Prioritas 3): dievaluasi DI SINI (bukan hanya
+            # di _execute_tool) agar status UI & keputusan trust-mode-bypass di bawah
+            # konsisten dengan apa yang benar-benar terjadi saat eksekusi — tanpa ini,
+            # tool yang defaultnya requires_approval=False (mis. shell_run) tapi
+            # dipaksa approval oleh policy akan salah tampil sebagai chip "tool" biasa.
+            tool_obj = TOOL_REGISTRY.get(pending_tool.tool_name)
+            policy_decision = self.policy_engine.evaluate(
+                pending_tool.tool_name, pending_tool.tool_input
+            )
+            policy_forces_approval = policy_decision.action == "require_approval"
+            requires_approval_effective = bool(tool_obj and tool_obj.requires_approval) or (
+                policy_forces_approval
+            )
+
             # Trust mode (§ user request otonomi): sesi ini melewati approval manual
             # untuk tool yang mengizinkannya — TAPI tidak untuk _TRUST_MODE_EXEMPT
-            # (code_run, CLAUDE.md §1 non-negotiable). Dihitung di sini (bukan di
-            # _execute_tool saja) agar UI menampilkan chip "tool" biasa, bukan kartu
-            # approval yang menunggu klik yang tak akan pernah terjadi.
-            tool_obj = TOOL_REGISTRY.get(pending_tool.tool_name)
+            # (code_run, CLAUDE.md §1 non-negotiable) DAN TIDAK untuk approval yang
+            # DIPAKSA Policy Engine (§ keputusan desain: policy adalah lapisan
+            # keamanan yang lebih kuat daripada preferensi otonomi sesi — kalau
+            # trust mode bisa melewatinya, policy jadi tidak berarti apa-apa saat
+            # trust mode aktif). Dihitung di sini (bukan di _execute_tool saja) agar
+            # UI menampilkan chip "tool" biasa, bukan kartu approval yang menunggu
+            # klik yang tak akan pernah terjadi.
             bypass_approval = (
                 self.cfg.trust_mode
                 and not self.cfg.autopilot
                 and pending_tool.tool_name not in _TRUST_MODE_EXEMPT
+                and not policy_forces_approval
             )
 
             # ask_user menunggu input manusia → beri tahu UI agar memunculkan kotak
@@ -629,16 +653,16 @@ class AgentLoop:
             if pending_tool.tool_name == "ask_user":
                 question = str(pending_tool.tool_input.get("question", "")).strip()
                 yield AgentEvent(type="status", text="question", detail=question)
-            elif tool_obj and tool_obj.requires_approval and bypass_approval:
+            elif requires_approval_effective and bypass_approval:
                 # Trust mode aktif: tool tetap dieksekusi (lewat auto_approve di
                 # _execute_tool), tapi UI cukup lihat chip tool biasa + tanda "trust".
                 param_preview = _format_tool_params(pending_tool.tool_name, pending_tool.tool_input)
                 yield AgentEvent(type="status", text="tool_trusted", detail=param_preview)
-            elif tool_obj and tool_obj.requires_approval and not self.cfg.autopilot:
-                # Tool butuh approval manusia → pre-generate ID SEBELUM memanggil
-                # _execute_tool (yang akan blocking menunggu Future) agar UI dapat
-                # ID-nya lebih dulu dan bisa memasang tombol Approve/Reject sementara
-                # request masih menunggu (dulu: UI tak tahu apa-apa sampai timeout).
+            elif requires_approval_effective and not self.cfg.autopilot:
+                # Tool butuh approval manusia (statis ATAU dipaksa policy) → pre-generate
+                # ID SEBELUM memanggil _execute_tool (yang akan blocking menunggu Future)
+                # agar UI dapat ID-nya lebih dulu dan bisa memasang tombol Approve/Reject
+                # sementara request masih menunggu (dulu: UI tak tahu apa-apa sampai timeout).
                 approval_id = uuid.uuid4().hex
                 param_preview = _format_tool_params(pending_tool.tool_name, pending_tool.tool_input)
                 yield AgentEvent(
@@ -730,6 +754,16 @@ class AgentLoop:
         if schema_err:
             return {"error": schema_err}
 
+        # Policy Engine (TODO.md § Prioritas 3): kondisi TAMBAHAN di atas allow-list
+        # & requires_approval statis — dicek SEBELUM approval/eksekusi (§ prasyarat
+        # "runtime, bukan library" TREND.md). deny → tolak SEBELUM sempat memicu
+        # approval sama sekali (lebih ketat, bukan cuma menunggu approval untuk
+        # sesuatu yang memang harus ditolak mutlak).
+        policy_decision = self.policy_engine.evaluate(name, input_data)
+        if policy_decision.action == "deny":
+            return {"error": f"Tool '{name}' ditolak oleh policy: {policy_decision.reason}"}
+        policy_forces_approval = policy_decision.action == "require_approval"
+
         # Tool internal per-sesi (todo_write, report_blocker, set_workdir): suntik
         # konteks sesi/role. Tool tak menerima ini via signature execute; model tak
         # perlu — & tak boleh — mengarang session_id/role (sumber kebenaran =
@@ -741,7 +775,7 @@ class AgentLoop:
                 "_role": self.cfg.role,
             }
 
-        if tool.requires_approval:
+        if tool.requires_approval or policy_forces_approval:
             # Autopilot (§1, §17): tidak ada manusia untuk approve → JANGAN eksekusi.
             # Antri sebagai proposal pending agar user meninjau nanti. Tanpa ini,
             # ApprovalGate.request() akan menggantung sampai timeout lalu DENY —
@@ -761,7 +795,13 @@ class AgentLoop:
             # menghitung bypass_approval dan MENGECUALIKAN _TRUST_MODE_EXEMPT
             # (code_run) — di sini hanya eksekusi keputusan itu, bukan mengevaluasi
             # ulang. Tool tetap benar-benar dijalankan (beda dari autopilot di atas).
-            if bypass_approval and name not in _TRUST_MODE_EXEMPT:
+            # `not policy_forces_approval` adalah defense-in-depth KEDUA (sama pola
+            # _TRUST_MODE_EXEMPT — dicek independen di titik status-emission
+            # _run_tool_loop DAN di titik eksekusi ini): bila caller keliru meneruskan
+            # bypass_approval=True untuk tool yang di-force approval oleh policy,
+            # jalur ini tetap menolak bypass — policy tak boleh bergantung SEMATA
+            # pada caller menghitung dengan benar.
+            if bypass_approval and name not in _TRUST_MODE_EXEMPT and not policy_forces_approval:
                 approved = await self.approval.auto_approve(self.cfg.session_id, name, input_data)
             else:
                 approved = await self.approval.request(

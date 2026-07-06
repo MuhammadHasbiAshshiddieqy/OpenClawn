@@ -130,6 +130,58 @@ async def test_bypass_approval_false_uses_normal_request(db, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_policy_forced_approval_not_bypassable_even_if_caller_passes_bypass_true(
+    db, tmp_path
+):
+    """Defense-in-depth (§ TODO.md Prioritas 3, Policy Engine): shell_run defaultnya
+    requires_approval=False, tapi policy [policy.shell_run].approval_required_if
+    memaksa approval untuk kondisi tertentu. Trust mode TIDAK BOLEH melewatinya —
+    bahkan bila caller (bug hipotetis di _run_tool_loop) keliru meneruskan
+    bypass_approval=True, _execute_tool sendiri harus menolak bypass (sama pola
+    _TRUST_MODE_EXEMPT: dicek independen di titik eksekusi, tak bergantung semata
+    pada caller menghitung dengan benar)."""
+    agent = AgentLoop(
+        AgentConfig(role="dev", session_id="s-policy-trust", workspace_override=str(tmp_path)),
+        db=db,
+    )
+    agent.cfg.trust_mode = True
+    agent.policy_engine.policy_cfg = {
+        "shell_run": {
+            "approval_required_if": [{"field": "command", "op": "contains", "value": "rm"}]
+        }
+    }
+    agent.approval.request = AsyncMock(return_value=True)
+    agent.approval.auto_approve = AsyncMock(
+        side_effect=AssertionError("auto_approve tak boleh dipanggil — policy memaksa approval")
+    )
+
+    result = await agent._execute_tool(
+        "shell_run", {"command": "rm -rf /tmp/x"}, bypass_approval=True
+    )
+
+    agent.approval.request.assert_awaited_once()
+    assert result.get("error") is None or "ditolak" not in result.get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_policy_deny_blocks_before_approval_entirely(db):
+    """Policy deny_if menolak SEBELUM approval sempat dipanggil sama sekali —
+    lebih ketat daripada meminta approval untuk sesuatu yang harus ditolak mutlak."""
+    agent = AgentLoop(AgentConfig(role="dev", session_id="s-policy-deny"), db=db)
+    agent.policy_engine.policy_cfg = {
+        "shell_run": {"deny_if": [{"field": "command", "op": "contains", "value": "rm -rf /"}]}
+    }
+    agent.approval.request = AsyncMock(
+        side_effect=AssertionError("request() tak boleh dipanggil — policy deny lebih dulu")
+    )
+
+    result = await agent._execute_tool("shell_run", {"command": "rm -rf / --no-preserve-root"})
+
+    assert "policy" in result.get("error", "")
+    agent.approval.request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_autopilot_wins_over_trust_mode(db):
     """Autopilot (tanpa manusia) tetap PROPOSAL — trust_mode tak relevan di sana."""
     agent = AgentLoop(

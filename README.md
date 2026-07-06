@@ -15,7 +15,7 @@
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
     <img src="https://img.shields.io/badge/LLM-Ollama%20%2B%20Gemini%20%2B%20Claude-purple" alt="Hybrid LLM">
     <img src="https://img.shields.io/badge/tools-27-orange" alt="27 Tools">
-    <img src="https://img.shields.io/badge/tests-636%20passing-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-699%20passing-brightgreen" alt="Tests">
   </p>
 </div>
 

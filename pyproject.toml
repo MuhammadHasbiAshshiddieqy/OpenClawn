@@ -24,6 +24,14 @@ dependencies = [
     # owner secara eksplisit (cakupan penuh: resources/prompts/OAuth/versi, ditambal
     # upstream) — MCP bukan SDK vendor-LLM, jadi tak melanggar transparansi inti. §7.
     "mcp>=1.0",
+    # clawn.yaml manifest (TODO.md § Prioritas 3): parser + WRITER YAML untuk
+    # generate/override soul.toml dari manifest deklaratif tim/role. tomllib
+    # bawaan Python 3.12 hanya BACA (tak ada TOML writer aman built-in) —
+    # PyYAML dipilih owner secara eksplisit setelah pertimbangan trade-off
+    # (writer YAML lebih matang untuk round-trip string multi-baris ketimbang
+    # menulis serializer TOML manual sendiri). soul.toml existing TETAP TOML,
+    # tidak dimigrasi — hanya clawn.yaml (file baru) yang memakai format ini.
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

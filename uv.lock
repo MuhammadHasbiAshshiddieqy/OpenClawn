@@ -610,7 +610,7 @@ wheels = [
 
 [[package]]
 name = "openclawn"
-version = "0.3.0"
+version = "0.11.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -625,6 +625,7 @@ dependencies = [
     { name = "python-docx" },
     { name = "python-multipart" },
     { name = "python-pptx" },
+    { name = "pyyaml" },
     { name = "reportlab" },
     { name = "structlog" },
     { name = "tenacity" },
@@ -654,6 +655,7 @@ requires-dist = [
     { name = "python-docx", specifier = ">=1.1" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "python-pptx", specifier = ">=0.6" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "reportlab", specifier = ">=4.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3" },
     { name = "structlog", specifier = ">=24.1" },

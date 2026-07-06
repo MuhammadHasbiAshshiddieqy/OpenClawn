@@ -874,6 +874,53 @@ Test trust mode per-sesi (§ user request otonomi: kurangi approval yang tak per
 | `test_bypass_approval_false_uses_normal_request` | `bypass_approval=False` → jalur `request()` biasa, `auto_approve` tak dipanggil |
 | `test_autopilot_wins_over_trust_mode` | Autopilot tetap PROPOSAL walau `trust_mode=True` — `auto_approve` tak dipanggil |
 | `test_auto_approve_records_trust_decision_and_returns_true` | `ApprovalGate.auto_approve` mencatat `decision="auto:trust_mode"` & return `True` |
+| `test_policy_forced_approval_not_bypassable_even_if_caller_passes_bypass_true` | Defense-in-depth (§ Policy Engine, TODO.md Prioritas 3): trust mode TIDAK bisa melewati approval yang dipaksa policy, bahkan bila caller keliru meneruskan `bypass_approval=True` |
+| `test_policy_deny_blocks_before_approval_entirely` | Policy `deny_if` menolak SEBELUM approval sempat dipanggil sama sekali |
+
+---
+
+### `tests/test_policy_engine.py`
+
+Test untuk `security/policy_engine.py` — Policy Engine sederhana (§ TODO.md § Prioritas 3). Kondisi nested dict/TOML, bukan DSL string/`eval()`.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_no_policy_configured_allows_by_default` | Tool tanpa section `[policy.<tool>]` → `allow` (perilaku lama tak berubah) |
+| `test_deny_if_prefix_match_denies` / `_no_match_allows` | Operator `prefix` pada `deny_if` |
+| `test_deny_if_gt_denies_when_exceeded` / `_allows_when_under` | Operator `gt` (numerik) |
+| `test_approval_required_if_condition_met` / `_not_met` | `approval_required_if` dengan operator `not_prefix` |
+| `test_deny_takes_priority_over_approval_required` | `deny_if` menang atas `approval_required_if` bila keduanya match (fail-safe, CLAUDE.md §1) |
+| `test_contains_operator` | Operator `contains` |
+| `test_gte_lte_operators` | Operator `gte`/`lte` |
+| `test_lt_operator` | Operator `lt` |
+| `test_eq_operator` | Operator `eq` |
+| `test_missing_field_in_tool_input_does_not_match_condition` | Field kondisi tak ada di `tool_input` → tidak match, bukan crash |
+| `test_unknown_operator_is_ignored_fail_safe` | Operator tak dikenal (typo config) → diabaikan, tidak menjatuhkan tool loop |
+| `test_multiple_deny_conditions_any_match_denies` | Beberapa kondisi `deny_if` — OR semantics (satu match sudah cukup) |
+| `test_always_operator_matches_without_field_in_tool_input` | Operator `always` (dipakai `infra/manifest.py`) match tanpa field di `tool_input` |
+| `test_policy_decision_is_dataclass_with_reason` | `PolicyDecision` dataclass dasar |
+
+---
+
+### `tests/test_manifest.py`
+
+Test untuk `infra/manifest.py` — `clawn.yaml` sebagai lapisan deklaratif di atas `soul.toml` (§ TODO.md § Prioritas 3).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_load_manifest_parses_team_roles` | `load_manifest` parse `team.<role>.policy` dengan benar |
+| `test_load_manifest_missing_file_raises_manifest_error` | File manifest tak ada → `ManifestError` |
+| `test_load_manifest_invalid_yaml_raises_manifest_error` | YAML tak valid → `ManifestError`, bukan exception PyYAML mentah |
+| `test_load_manifest_missing_team_key_raises_manifest_error` | Manifest tanpa key root `team` → `ManifestError` |
+| `test_generate_policy_toml_block_renders_deny_if` | Render `deny_if` jadi blok `[policy.<tool>]` TOML |
+| `test_generate_policy_toml_block_renders_approval_required` | Render `approval_required_if` (termasuk operator `always`) |
+| `test_generate_policy_toml_block_handles_numeric_value` | Nilai numerik ditulis TANPA quote (beda dari string) |
+| `test_generate_policy_toml_block_empty_policy_returns_empty_string` | Dict kosong → string kosong |
+| `test_apply_manifest_appends_policy_to_soul_without_existing_policy` | `soul.toml` tanpa `[policy]` sama sekali → blok baru ditambahkan, `system_prompt` multi-baris & section lain tetap byte-identik |
+| `test_apply_manifest_replaces_existing_policy_section` | `soul.toml` SUDAH punya `[policy.*]` → diganti bersih (tidak menumpuk duplikat), section lain utuh |
+| `test_apply_manifest_role_not_in_manifest_leaves_soul_untouched` | Role tak disebut manifest → `soul.toml`-nya tak disentuh sama sekali (opt-in per-role) |
+| `test_apply_manifest_missing_soul_file_raises_manifest_error` | Role disebut manifest tapi `soul.toml`-nya tak ada → `ManifestError`, bukan membuat file baru diam-diam |
+| `test_apply_manifest_role_without_policy_key_is_noop_for_that_role` | Role ada di manifest tapi tanpa key `policy` (mis. hanya `model`) → no-op untuk role itu |
 
 ---
 
