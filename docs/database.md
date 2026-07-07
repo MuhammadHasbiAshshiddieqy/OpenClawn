@@ -13,12 +13,13 @@ State terbaru agent per role. Di-update tiap turn.
 | Kolom | Tipe | Keterangan |
 |---|---|---|
 | `id` | INTEGER PK | Auto-increment |
+| `tenant_id` | TEXT | Multi-Tenant (TODO.md § Prioritas 5), default `'default'`. Kolom pasif — belum di-filter di kode query (lihat § Multi-Tenant di bawah) |
 | `role` | TEXT | Role agent (`pm`, `qa`, `dev`) |
 | `key` | TEXT | Key (saat ini: `"last_summary"`) |
 | `value` | TEXT | Nilai (maks 500 karakter) |
 | `updated_at` | TIMESTAMP | Waktu update terakhir |
 
-**Constraint:** `UNIQUE(role, key)` — satu row per kombinasi role+key. UPSERT via `ON CONFLICT DO UPDATE`.
+**Constraint:** `UNIQUE(tenant_id, role, key)` — satu row per kombinasi tenant+role+key. UPSERT via `ON CONFLICT(tenant_id, role, key) DO UPDATE`. DB lama (`UNIQUE(role, key)`) di-rebuild otomatis oleh `DatabaseManager._rebuild_tables_for_multi_tenant` (lihat § Multi-Tenant).
 
 ---
 
@@ -29,13 +30,14 @@ Fakta semi-permanen yang diketahui agent per role.
 | Kolom | Tipe | Keterangan |
 |---|---|---|
 | `id` | INTEGER PK | |
+| `tenant_id` | TEXT | Multi-Tenant (TODO.md § Prioritas 5), default `'default'`. Kolom pasif — belum di-filter di kode query |
 | `role` | TEXT | Role yang punya fakta ini |
 | `fact` | TEXT | Isi fakta |
 | `importance` | INTEGER | Prioritas load (default 1) |
 | `locale` | TEXT | Locale fakta (default `"neutral"`) |
 | `created_at` | TIMESTAMP | |
 
-**Index:** `idx_l2_role` pada `(role, importance DESC)` — untuk load yang cepat.
+**Index:** `idx_l2_role` pada `(tenant_id, role, importance DESC)` — untuk load yang cepat.
 
 ---
 
@@ -74,13 +76,14 @@ Metadata TAMPILAN (judul, waktu, role) untuk sidebar riwayat chat single-agent (
 | Kolom | Tipe | Keterangan |
 |---|---|---|
 | `session_id` | TEXT PK | Sesi yang direpresentasikan |
+| `tenant_id` | TEXT | Multi-Tenant (TODO.md § Prioritas 5), default `'default'`. **WIRED PENUH** — `ChatSessionStore` benar-benar filter per-tenant (lihat § Multi-Tenant) |
 | `role` | TEXT | Role aktif saat sesi dibuat (label kecil di item sidebar) |
 | `title` | TEXT | `NULL` sampai turn pertama selesai; di-generate LLM lokal dari potongan pesan pertama (lihat `infra/chat_sessions.py`) |
 | `created_at` | TIMESTAMP | |
 | `updated_at` | TIMESTAMP | Diperbarui tiap turn (`ChatSessionStore.touch`) — dipakai urutan sidebar (terbaru dulu) & grouping bucket waktu |
 | `deleted_at` | TIMESTAMP | `NULL` = aktif. Diisi saat user hapus riwayat (soft-delete — metadata tetap ada untuk audit trail lama), TAPI `session_turns`/`session_workspace` terkait dihapus FISIK saat itu juga |
 
-**Index:** `idx_chat_sessions_active` pada `(deleted_at, updated_at DESC)` — load daftar sidebar cepat (filter aktif + urut terbaru).
+**Index:** `idx_chat_sessions_active` pada `(deleted_at, updated_at DESC)` (DB lama) + `idx_chat_sessions_tenant_active` pada `(tenant_id, deleted_at, updated_at DESC)` (DB baru/setelah migrasi) — load daftar sidebar cepat (filter aktif + tenant + urut terbaru).
 
 ---
 
@@ -91,6 +94,7 @@ Skill yang dipelajari agent beserta metadata decay.
 | Kolom | Tipe | Keterangan |
 |---|---|---|
 | `id` | INTEGER PK | |
+| `tenant_id` | TEXT | Multi-Tenant (TODO.md § Prioritas 5), default `'default'`. **WIRED PENUH** — `SkillDecayManager` benar-benar filter per-tenant (lihat § Multi-Tenant) |
 | `role` | TEXT | Role pemilik skill |
 | `skill_name` | TEXT | Nama unik skill (slug dari task) |
 | `trigger_pattern` | TEXT | Pola query yang memicu skill ini |
@@ -107,8 +111,10 @@ Skill yang dipelajari agent beserta metadata decay.
 | `version` | INTEGER | I3: dinaikkan tiap refine/merge (riwayat di `skill_versions`) |
 | `draft_success_count` | INTEGER | I2: berapa kali draft dipakai-sukses (→ promote di ambang `draft_promote_uses`) |
 
-**Constraint:** `UNIQUE(role, skill_name)` — nama skill unik per role.  
-**Index:** `idx_skills_active` pada `(role, status, decay_score DESC)` — untuk query `get_active_skills`.
+**Constraint:** `UNIQUE(tenant_id, role, skill_name)` — nama skill unik per tenant+role. DB lama (`UNIQUE(role, skill_name)`) di-rebuild otomatis (lihat § Multi-Tenant).  
+**Index:** `idx_skills_active` pada `(tenant_id, role, status, decay_score DESC)` — untuk query `get_active_skills`.
+
+Catatan: `ConfidenceCrystallizer` (§ Inovasi 3) belum menyertakan `tenant_id` eksplisit saat INSERT skill baru — jatuh ke DEFAULT `'default'` skema. Skill hasil crystallization SELALU masuk tenant `'default'` untuk saat ini (wiring penuh crystallizer adalah follow-up terpisah, bukan bagian dari bukti konsep Prioritas 5 saat ini).
 
 Status lifecycle: `active` → (decay) → `archived` → (mark_used) → `active` lagi; `draft` → (I2 promote) → `active`; `active` → (I1 merge) → `merged` (revertible). Status `merged` = isi diserap skill lain, tidak dihapus.
 
@@ -175,6 +181,7 @@ Setiap keputusan routing dicatat sebelum LLM call dan diupdate setelah selesai.
 | `correction_detail` | TEXT | Pesan koreksi user |
 | `evidence_json` | TEXT | Evidence-Based Response (§ Prioritas 2): snapshot JSON `{policy, memory, guardrail}` yang berlaku turn ini, diisi `RoutingAuditor.finalize(evidence=...)`. `NULL` bila turn belum selesai atau dari versi lama tanpa evidence. Query-able via `GET /evidence/{id}` |
 | `human_feedback` | INTEGER | Runtime Evaluation Engine (§ Prioritas 2): rating eksplisit user 1-5, diisi `RoutingAuditor.set_human_feedback()` via `POST /feedback/{id}`. `NULL` = belum diberi rating (beda dari `had_correction` yang implisit dari teks pesan berikutnya) |
+| `tenant_id` | TEXT | Multi-Tenant (TODO.md § Prioritas 5), default `'default'`. Kolom pasif — belum di-filter di kode query |
 | `created_at` | TIMESTAMP | |
 
 **Index:** `idx_routing_label` pada `(complexity_label, had_correction)` — untuk `calibration_report`.
@@ -215,6 +222,7 @@ Semua permintaan approval tool destruktif.
 | `tool_input` | TEXT | Input dalam JSON |
 | `decision` | TEXT | `pending` / `approved` / `rejected` / `timeout` / `auto:trust_mode` / `proposal:pending` |
 | `approval_id` | TEXT | Human Approval Pipeline (§ Prioritas 2): ID approval di kolom SENDIRI — SEBELUMNYA hanya tersirat sebagai substring `pending:{id}` di `decision`, hilang begitu decision ditimpa jadi keputusan final. Query-able lintas status via `GET /approval/{approval_id}`. `NULL` untuk baris dari `auto_approve()`/`queue_proposal()` (tak ada manusia menunggu ID untuk di-resolve) |
+| `tenant_id` | TEXT | Multi-Tenant (TODO.md § Prioritas 5), default `'default'`. Kolom pasif — belum di-filter di kode query |
 | `created_at` | TIMESTAMP | |
 
 **Index:** `idx_approval_id` pada `approval_id` — dibuat oleh `DatabaseManager._ensure_columns()` SETELAH kolom ditambal (bukan statis di migration script), karena DB lama baru mendapat kolom ini via `ALTER TABLE`; index yang dibuat lebih dulu akan gagal `no such column` untuk DB lama.
@@ -517,6 +525,29 @@ Event-sourcing RINGAN di atas SQLite yang sudah ada (bukan migrasi database baru
 **Index:** `idx_agent_events_session` pada `(session_id, turn_index)`.
 
 **Kenapa `token`/`thinking` TIDAK dipersist:** satu giliran agent bisa menghasilkan >1000 event token granular (diverifikasi live: turn nyata menghasilkan 1162 event `token`) — mempersist semuanya akan membanjiri DB untuk manfaat marginal, karena isi lengkap jawaban sudah tersimpan di `conversations.transcript_json` (arsip percakapan) dan `session_turns` (single-agent). Token-first §1.4: hanya event yang BERMAKNA untuk replay/audit ("siapa bicara kapan, tool apa dipanggil, ada approval apa") yang dipersist di sini.
+
+---
+
+## Multi-Tenant (TODO.md § Prioritas 5)
+
+Fondasi skema untuk multi-tenant, ditambahkan lewat `migrations/002_multi_tenant.sql` (dokumentasi rencana) + `DatabaseManager` (eksekusi sungguhan). Kolom `tenant_id` ditambahkan ke 6 tabel: `memory_l1`, `memory_l2`, `chat_sessions`, `skills`, `routing_events`, `approval_log`. Default `'default'` di semua tabel — kompatibilitas mundur penuh untuk deployment single-tenant existing (CLAUDE.md §7: single-user tetap MODE VALID).
+
+**Scope sadar — dua kategori:**
+
+| Kategori | Tabel | Wiring kode |
+|---|---|---|
+| **WIRED PENUH** (bukti konsep) | `chat_sessions`, `skills` | `ChatSessionStore` (`infra/chat_sessions.py`) dan `SkillDecayManager` (`memory/skill_decay.py`) benar-benar menerima `tenant_id` di constructor dan MEMFILTER semua query (`list_active`, `get_active_skills`, `mark_used`, decay pass, dst) — tenant lain tak pernah terlihat/tersentuh, termasuk defense-in-depth di operasi tunggal-ID (`soft_delete`, `mark_used`) yang menyertakan `tenant_id=?` di WHERE walau ID target sudah unik global |
+| **Kolom pasif** (skema siap, kode belum) | `memory_l1`, `memory_l2`, `routing_events`, `approval_log` | Kolom ADA (default `'default'`), tapi query BELUM di-filter per-tenant — perilaku LAMA tetap jalan apa adanya untuk deployment single-tenant. Wiring penuh tabel-tabel ini adalah follow-up terpisah, bukan bug |
+
+**Migrasi skema untuk DB existing** (`DatabaseManager._ensure_columns` + `_rebuild_tables_for_multi_tenant`, `infra/database.py`), dijalankan otomatis tiap startup (`run_migration`), idempoten via `PRAGMA table_info`:
+
+1. Tabel TANPA constraint UNIQUE yang berubah (`memory_l2`, `chat_sessions`, `routing_events`, `approval_log`) → cukup `ALTER TABLE ADD COLUMN tenant_id` (lewat `_ADDED_COLUMNS`, pola sama kolom-baru lain seperti `approval_id`).
+2. Tabel DENGAN constraint UNIQUE yang berubah (`memory_l1`: `UNIQUE(role,key)`→`UNIQUE(tenant_id,role,key)`; `skills`: `UNIQUE(role,skill_name)`→`UNIQUE(tenant_id,role,skill_name)`) → SQLite tak bisa ALTER constraint tabel existing, jadi di-rebuild penuh: `CREATE TABLE baru → INSERT...SELECT (kolom yang ADA di tabel lama, default aman untuk kolom yang TIDAK ada) → DROP tabel lama → RENAME`. Data lama 100% dipertahankan, tenant_id baris lama diisi `'default'`.
+3. Index yang mereferensikan `tenant_id` (`idx_l2_role`, `idx_chat_sessions_tenant_active`, `idx_skills_active`) DIBUAT SETELAH langkah 1-2 selesai, bukan statis di `migrations/001_initial.sql` — bila statis, `CREATE INDEX` akan gagal `no such column` untuk DB lama yang belum sempat ditambal kolomnya (bug pattern yang sama terulang 3× di proyek ini: `idx_approval_id`, lalu `idx_l2_role`/`idx_skills_active`).
+
+Test regresi migrasi: `tests/test_database.py` (`test_rebuild_adds_tenant_id_to_*`, `test_rebuild_enforces_new_unique_constraint`, `test_rebuild_idempotent_on_second_run`). Test isolasi tenant: `tests/test_chat_sessions.py` dan `tests/test_skill_decay.py` (bagian "Multi-Tenant isolation").
+
+**Jalur ke PostgreSQL:** SQLite tetap default (data sovereignty untuk deployment self-hosted single-organization). Skema `tenant_id` di atas sengaja kompatibel dengan model multi-tenant standar (satu kolom filter, bukan skema-per-tenant atau database-per-tenant) — migrasi ke Postgres untuk deployment yang butuh skala lintas-proses adalah perubahan `DatabaseManager`/driver, BUKAN perubahan skema logis ini.
 
 ---
 

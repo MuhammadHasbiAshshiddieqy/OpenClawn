@@ -166,3 +166,63 @@ async def test_draft_cleanup_disabled_when_zero(db):
     assert res["drafts_archived"] == 0
     row = await db.fetchone("SELECT status FROM skills WHERE skill_name='tua'")
     assert row["status"] == "draft"  # tetap draft
+
+
+# ── Multi-Tenant isolation (TODO.md § Prioritas 5) ─────────────────────────────
+
+
+async def test_get_active_skills_scoped_to_tenant(db, config):
+    """Skill tenant lain, walau role & trigger sama, tak boleh muncul."""
+    await db.execute(
+        "INSERT INTO skills (tenant_id, role, skill_name, skill_content, status) "
+        "VALUES ('tenant-a','pm','skill-a','isi','active')"
+    )
+    await db.execute(
+        "INSERT INTO skills (tenant_id, role, skill_name, skill_content, status) "
+        "VALUES ('tenant-b','pm','skill-b','isi','active')"
+    )
+    decay_a = SkillDecayManager(role="pm", db=db, config=config, tenant_id="tenant-a")
+    decay_b = SkillDecayManager(role="pm", db=db, config=config, tenant_id="tenant-b")
+
+    names_a = [s["skill_name"] for s in await decay_a.get_active_skills("apapun")]
+    names_b = [s["skill_name"] for s in await decay_b.get_active_skills("apapun")]
+    assert names_a == ["skill-a"]
+    assert names_b == ["skill-b"]
+
+
+async def test_mark_used_cannot_cross_tenant(db, config):
+    """Tenant A tak bisa revive/menaikkan skor skill milik tenant B via id tertebak."""
+    cursor = await db.execute(
+        "INSERT INTO skills (tenant_id, role, skill_name, skill_content, decay_score, status) "
+        "VALUES ('tenant-b','pm','skill-victim','isi',0.1,'archived')"
+    )
+    victim_id = cursor.lastrowid
+    decay_a = SkillDecayManager(role="pm", db=db, config=config, tenant_id="tenant-a")
+
+    await decay_a.mark_used(victim_id)
+
+    row = await db.fetchone("SELECT status, decay_score FROM skills WHERE id=?", (victim_id,))
+    assert row["status"] == "archived"  # TIDAK ter-revive oleh tenant lain
+    assert row["decay_score"] == 0.1
+
+
+async def test_decay_pass_scoped_to_tenant(db, config):
+    """Decay pass tenant A tak menyentuh skill tenant B walau role sama."""
+    await db.execute(
+        """INSERT INTO skills (tenant_id, role, skill_name, skill_content, decay_score, last_used_at)
+           VALUES ('tenant-b','pm','skill-b','isi',1.0, datetime('now','-10 days'))"""
+    )
+    decay_a = SkillDecayManager(role="pm", db=db, config=config, tenant_id="tenant-a")
+    await decay_a._run_decay_pass()
+
+    row = await db.fetchone("SELECT decay_score FROM skills WHERE skill_name='skill-b'")
+    assert row["decay_score"] == 1.0  # tak berubah — bukan tenant yang di-decay
+
+
+async def test_default_tenant_id_backward_compatible(db, config):
+    """Tanpa tenant_id eksplisit → 'default', skill lama (schema DEFAULT) tetap terlihat."""
+    await _insert_skill(db, "pm", "skill-lama-tanpa-tenant")
+    decay = SkillDecayManager(role="pm", db=db, config=config)  # tenant_id default
+    skills = await decay.get_active_skills("apapun")
+    names = [s["skill_name"] for s in skills]
+    assert "skill-lama-tanpa-tenant" in names

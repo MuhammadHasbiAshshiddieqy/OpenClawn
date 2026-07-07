@@ -42,8 +42,13 @@ def truncate_for_title_prompt(message: str) -> str:
 class ChatSessionStore:
     """CRUD metadata sesi chat + daftar untuk sidebar (grouping waktu, per-role)."""
 
-    def __init__(self, db: DatabaseManager):
+    def __init__(self, db: DatabaseManager, tenant_id: str = "default"):
         self.db = db
+        # Multi-Tenant (TODO.md § Prioritas 5) — bukti konsep wiring penuh: tiap
+        # instance ChatSessionStore terikat SATU tenant, list_active hanya
+        # mengembalikan sesi tenant ini. Deployment single-tenant existing tetap
+        # jalan tanpa perubahan (default 'default', konsisten dengan skema).
+        self.tenant_id = tenant_id
 
     async def ensure_created(self, session_id: str, role: str) -> None:
         """Daftarkan sesi baru bila belum ada — idempoten (INSERT OR IGNORE).
@@ -53,8 +58,8 @@ class ChatSessionStore:
         "kosong" alih-alih hilang total).
         """
         await self.db.execute(
-            "INSERT OR IGNORE INTO chat_sessions (session_id, role) VALUES (?, ?)",
-            (session_id, role),
+            "INSERT OR IGNORE INTO chat_sessions (session_id, role, tenant_id) VALUES (?, ?, ?)",
+            (session_id, role, self.tenant_id),
         )
 
     async def touch(self, session_id: str) -> None:
@@ -80,23 +85,29 @@ class ChatSessionStore:
         return bool(row and row["title"])
 
     async def list_active(self, limit: int = 200) -> list[dict]:
-        """Sesi belum dihapus, terbaru dulu — mentah untuk sidebar mengelompokkan
-        sendiri (per-waktu DAN per-role, § user request keduanya)."""
+        """Sesi belum dihapus MILIK TENANT INI, terbaru dulu — mentah untuk sidebar
+        mengelompokkan sendiri (per-waktu DAN per-role, § user request keduanya).
+        Isolasi tenant: sesi tenant lain tak pernah muncul di sidebar ini."""
         rows = await self.db.fetchall(
             """SELECT session_id, role, title, created_at, updated_at
-               FROM chat_sessions WHERE deleted_at IS NULL
+               FROM chat_sessions WHERE deleted_at IS NULL AND tenant_id=?
                ORDER BY updated_at DESC LIMIT ?""",
-            (limit,),
+            (self.tenant_id, limit),
         )
         return [dict(r) for r in rows]
 
     async def soft_delete(self, session_id: str) -> None:
         """Hapus dari sidebar (soft — metadata tetap ada untuk audit trail lama),
         TAPI transkrip (`session_turns`) dan folder aktif (`session_workspace`)
-        dihapus FISIK — user minta "hapus", isi percakapan harus benar hilang."""
+        dihapus FISIK — user minta "hapus", isi percakapan harus benar hilang.
+
+        Isolasi tenant: `tenant_id=?` di WHERE mencegah tenant A menghapus sesi
+        tenant B walau menebak session_id-nya (UUID sudah sulit ditebak, ini
+        lapis kedua defense-in-depth)."""
         await self.db.execute(
-            "UPDATE chat_sessions SET deleted_at=CURRENT_TIMESTAMP WHERE session_id=?",
-            (session_id,),
+            "UPDATE chat_sessions SET deleted_at=CURRENT_TIMESTAMP "
+            "WHERE session_id=? AND tenant_id=?",
+            (session_id, self.tenant_id),
         )
         await self.db.execute("DELETE FROM session_turns WHERE session_id=?", (session_id,))
         await self.db.execute("DELETE FROM session_workspace WHERE session_id=?", (session_id,))

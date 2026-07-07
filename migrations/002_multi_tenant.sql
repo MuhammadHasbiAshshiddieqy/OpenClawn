@@ -1,0 +1,31 @@
+-- migrations/002_multi_tenant.sql
+--
+-- Multi-Tenant & Enterprise Identity (TODO.md § Prioritas 5) — FONDASI, bukan
+-- migrasi lengkap. Kolom `tenant_id` ditambahkan ke 5 tabel yang eksplisit
+-- disebut TODO: skills, memory_l1, memory_l2, chat_sessions, routing_events,
+-- approval_log. Default 'default' untuk kompatibilitas mundur single-user
+-- existing (CLAUDE.md §7 v1.1 — single-user tetap MODE VALID, bukan lagi
+-- satu-satunya yang didukung arsitektur).
+--
+-- SCOPE SADAR (lihat TODO.md untuk detail): kode Python HANYA di-wire penuh
+-- untuk `chat_sessions` dan `skills` sebagai bukti konsep (isolasi tenant
+-- benar-benar berlaku). Tabel lain (memory_l1/l2, routing_events, approval_log)
+-- MENDAPAT kolomnya (agar skema konsisten & siap), TAPI kode query-nya BELUM
+-- di-filter per-tenant — itu perilaku LAMA yang tetap jalan (semua row
+-- tenant_id='default' untuk deployment single-tenant existing), bukan bug.
+-- Wiring penuh untuk tabel-tabel ini adalah follow-up terpisah.
+--
+-- Untuk `memory_l1` dan `skills`: kolom tenant_id TIDAK cukup ditambah via
+-- ALTER TABLE ADD COLUMN biasa, karena constraint UNIQUE(role, key) dan
+-- UNIQUE(role, skill_name) harus jadi UNIQUE(tenant_id, role, ...) — SQLite
+-- tidak bisa ALTER constraint tabel existing. Rebuild dilakukan di Python
+-- (DatabaseManager._rebuild_tables_for_multi_tenant, infra/database.py) via
+-- CREATE TABLE baru → COPY data → DROP → RENAME, BUKAN di sini (file ini
+-- murni dokumentasi rencana skema; eksekusi sungguhan ada di kode Python agar
+-- idempoten & bisa dicek "sudah pernah dijalankan atau belum" via PRAGMA
+-- table_info, sesuatu yang tak bisa dilakukan migration script SQL statis).
+--
+-- memory_l2, chat_sessions, routing_events, approval_log CUKUP dengan ALTER
+-- TABLE ADD COLUMN biasa (tidak ada UNIQUE constraint yang perlu diubah) —
+-- ditambahkan lewat _ADDED_COLUMNS di infra/database.py, bukan statis di sini,
+-- konsisten dengan pola kolom-baru yang sudah ada di proyek ini.

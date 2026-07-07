@@ -75,11 +75,11 @@ Skill dengan `decay_score < 0.3` → diarsipkan (`status='archived'`). Skill yan
 
 ### Kelas: `SkillDecayManager`
 
-**`__init__(role, db, config)`**  
-Cache `_last_decay_ts` untuk throttle.
+**`__init__(role, db, config, tenant_id="default")`**  
+Cache `_last_decay_ts` untuk throttle. Multi-Tenant (TODO.md § Prioritas 5, WIRED PENUH): `tenant_id` opsional, default `'default'` untuk kompatibilitas mundur — semua method di kelas ini men-scope query ke tenant ini, skill milik tenant lain tak pernah terlihat/tersentuh.
 
 **`get_active_skills(query) → list[dict]`** *(async)*  
-Ambil skill aktif yang relevan dengan query (trigger_pattern match). Urutkan berdasarkan `decay_score DESC, use_count DESC`. Maks `config.max_active_skills` skill. **I2:** ditambah 1 slot percobaan untuk skill `draft` yang trigger-nya cocok (agar draft bisa membuktikan diri & naik kelas) — draft trial TIDAK menggusur active.
+Ambil skill aktif MILIK TENANT INI yang relevan dengan query (trigger_pattern match). Urutkan berdasarkan `decay_score DESC, use_count DESC`. Maks `config.max_active_skills` skill. **I2:** ditambah 1 slot percobaan untuk skill `draft` yang trigger-nya cocok (agar draft bisa membuktikan diri & naik kelas) — draft trial TIDAK menggusur active.
 
 Return list dict dengan field: `id`, `skill_name`, `skill_content`, `trigger_pattern`, `decay_score`, `status`.
 
@@ -89,6 +89,7 @@ Tandai skill sebagai baru dipakai:
 - Update `last_used_at` ke sekarang
 - Tambah `skill_revive_boost` ke `decay_score` (maks 1.0)
 - Jika status `'archived'` → kembalikan ke `'active'`
+- WHERE menyertakan `tenant_id=?` (defense-in-depth) — tenant A tak bisa me-revive skill id milik tenant B walau id tertebak
 
 **`mark_many_used(skill_ids) → None`** *(async)*  
 Revive beberapa skill sekaligus (skill yang dipakai satu turn). **Prasyarat I2/I3:** sebelumnya `mark_used` ada tapi tak pernah dipanggil dari agent loop (revive dorman) — kini di-wire via `SkillFeedback`.
@@ -100,7 +101,7 @@ Revive beberapa skill sekaligus (skill yang dipakai satu turn). **Prasyarat I2/I
 Throttle gate: jika belum lewat `decay_interval_sec` sejak pass terakhir, return `{"skipped": True}` tanpa melakukan apa-apa. Dipanggil tiap turn tapi mayoritas adalah no-op.
 
 **`_run_decay_pass() → dict`** *(async, private)*  
-Jalankan decay sesungguhnya:
+Jalankan decay sesungguhnya, di-scope ke `tenant_id` + `role` milik instance ini (skill tenant lain tak tersentuh):
 1. UPDATE semua skill aktif: `decay_score = decay_score * POWER(0.97, hari_sejak_dipakai)` menggunakan custom function SQLite `POWER()`
 2. UPDATE skill aktif yang skor-nya < threshold → `status='archived'`
 3. **Draft cleanup:** UPDATE draft TUA (`> draft_stale_days`, default 14) & tak pernah terbukti (`draft_success_count=0`) → `status='archived'` (cegah menumpuk; ARSIP bukan hapus; `draft_stale_days=0` → nonaktif)

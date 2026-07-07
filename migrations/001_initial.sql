@@ -1,20 +1,28 @@
 -- migrations/001_initial.sql
 
 -- ===================== MEMORY =====================
+-- tenant_id: [Multi-Tenant, TODO.md § Prioritas 5] default 'default' untuk
+-- single-tenant. UNIQUE menyertakan tenant_id sejak skema awal — DB LAMA tanpa
+-- kolom ini di-rebuild otomatis via DatabaseManager._rebuild_tables_for_multi_tenant
+-- (lihat infra/database.py, migrations/002_multi_tenant.sql untuk rencana penuh).
 CREATE TABLE IF NOT EXISTS memory_l1 (
-    id INTEGER PRIMARY KEY, role TEXT NOT NULL,
+    id INTEGER PRIMARY KEY, tenant_id TEXT DEFAULT 'default', role TEXT NOT NULL,
     key TEXT NOT NULL, value TEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(role, key)
+    UNIQUE(tenant_id, role, key)
 );
 
 CREATE TABLE IF NOT EXISTS memory_l2 (
-    id INTEGER PRIMARY KEY, role TEXT NOT NULL,
+    id INTEGER PRIMARY KEY, tenant_id TEXT DEFAULT 'default', role TEXT NOT NULL,
     fact TEXT NOT NULL, importance INTEGER DEFAULT 1,
     locale TEXT DEFAULT 'neutral',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_l2_role ON memory_l2(role, importance DESC);
+-- idx_l2_role (dengan tenant_id) SENGAJA TIDAK statis di sini — dibuat di
+-- DatabaseManager._ensure_columns() SETELAH tenant_id ditambal ke DB LAMA.
+-- CREATE TABLE IF NOT EXISTS di atas adalah no-op untuk tabel existing (skema
+-- lama tanpa tenant_id), jadi index yang mereferensikan tenant_id di sini akan
+-- gagal "no such column" untuk DB lama. Lihat idx_approval_id untuk pola sama.
 
 -- Transkrip percakapan PER-SESI untuk single-agent chat. AgentLoop dibuat baru
 -- tiap request web (self.history selalu kosong di awal), sehingga sebelumnya turn
@@ -56,16 +64,19 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     session_id TEXT PRIMARY KEY,
     role TEXT NOT NULL,
     title TEXT,
+    tenant_id TEXT DEFAULT 'default',  -- [Multi-Tenant, TODO.md § Prioritas 5] wired penuh — lihat ChatSessionStore
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_active
-    ON chat_sessions(deleted_at, updated_at DESC);
+    ON chat_sessions(tenant_id, deleted_at, updated_at DESC);
 
 -- ===================== SKILLS + DECAY [#2] =====================
+-- tenant_id: [Multi-Tenant, TODO.md § Prioritas 5] WIRED PENUH — SkillDecayManager
+-- benar-benar filter per-tenant. UNIQUE menyertakan tenant_id sejak skema awal.
 CREATE TABLE IF NOT EXISTS skills (
-    id INTEGER PRIMARY KEY, role TEXT NOT NULL,
+    id INTEGER PRIMARY KEY, tenant_id TEXT DEFAULT 'default', role TEXT NOT NULL,
     skill_name TEXT NOT NULL, trigger_pattern TEXT, skill_content TEXT NOT NULL,
     visibility TEXT DEFAULT 'private',     -- private | shared | inherited
     status TEXT DEFAULT 'active',          -- active | draft | archived | merged
@@ -79,9 +90,14 @@ CREATE TABLE IF NOT EXISTS skills (
     merged_into INTEGER REFERENCES skills(id),  -- I1: skill yang menyerap isi ini (status='merged')
     version INTEGER NOT NULL DEFAULT 1,          -- I3: dinaikkan tiap refine/merge
     draft_success_count INTEGER NOT NULL DEFAULT 0,  -- I2: draft naik 'active' setelah N sukses
-    UNIQUE(role, skill_name)
+    UNIQUE(tenant_id, role, skill_name)
 );
-CREATE INDEX IF NOT EXISTS idx_skills_active ON skills(role, status, decay_score DESC);
+-- idx_skills_active (dengan tenant_id) SENGAJA TIDAK statis di sini — tabel
+-- `skills` untuk DB LAMA menjalani REBUILD PENUH (bukan cuma ALTER TABLE) via
+-- DatabaseManager._rebuild_tables_for_multi_tenant, karena UNIQUE constraint di
+-- atas berubah. Index index dibuat DI DALAM method rebuild itu setelah tabel
+-- baru siap — index statis di sini akan gagal "no such column" untuk skema
+-- lama sebelum rebuild sempat jalan (pola sama idx_l2_role/idx_approval_id).
 
 -- ===================== SESSION ARCHIVE (FTS5) =====================
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_l4 USING fts5(

@@ -143,6 +143,48 @@ async def test_soft_delete_hard_deletes_turns_and_workspace(db):
     assert row["deleted_at"] is not None
 
 
+# ── Multi-Tenant isolation (TODO.md § Prioritas 5) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_active_scoped_to_tenant(db):
+    """Sesi tenant lain tak pernah muncul di list_active tenant ini."""
+    store_a = ChatSessionStore(db, tenant_id="tenant-a")
+    store_b = ChatSessionStore(db, tenant_id="tenant-b")
+    await store_a.ensure_created("s1", "pm")
+    await store_b.ensure_created("s2", "pm")
+
+    sessions_a = await store_a.list_active()
+    sessions_b = await store_b.list_active()
+
+    assert [s["session_id"] for s in sessions_a] == ["s1"]
+    assert [s["session_id"] for s in sessions_b] == ["s2"]
+
+
+@pytest.mark.asyncio
+async def test_default_tenant_id_backward_compatible(db):
+    """Tanpa tenant_id eksplisit → 'default', konsisten dengan skema DEFAULT."""
+    store = ChatSessionStore(db)
+    await store.ensure_created("s1", "pm")
+    row = await db.fetchone("SELECT tenant_id FROM chat_sessions WHERE session_id='s1'")
+    assert row["tenant_id"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_cannot_cross_tenant(db):
+    """Tenant A tak bisa soft_delete sesi milik tenant B walau tahu session_id-nya."""
+    store_a = ChatSessionStore(db, tenant_id="tenant-a")
+    store_b = ChatSessionStore(db, tenant_id="tenant-b")
+    await store_b.ensure_created("s-victim", "pm")
+
+    await store_a.soft_delete("s-victim")
+
+    row = await db.fetchone("SELECT deleted_at FROM chat_sessions WHERE session_id='s-victim'")
+    assert row["deleted_at"] is None  # tak terhapus — bukan milik tenant-a
+    sessions_b = await store_b.list_active()
+    assert [s["session_id"] for s in sessions_b] == ["s-victim"]
+
+
 @pytest.mark.asyncio
 async def test_list_active_respects_limit(db):
     store = ChatSessionStore(db)

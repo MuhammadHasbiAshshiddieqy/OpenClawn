@@ -10,11 +10,17 @@ class SkillDecayManager:
     Decay formula: score = score * (0.97 ^ hari_sejak_dipakai).
     """
 
-    def __init__(self, role: str, db: DatabaseManager, config: AppConfig):
+    def __init__(
+        self, role: str, db: DatabaseManager, config: AppConfig, tenant_id: str = "default"
+    ):
         self.role = role
         self.db = db
         self.config = config
         self._last_decay_ts: float = 0.0
+        # Multi-Tenant (TODO.md § Prioritas 5) — bukti konsep wiring penuh: semua
+        # query skill (baca & decay) di-scope ke tenant ini. Deployment single-tenant
+        # existing tetap jalan tanpa perubahan (default 'default').
+        self.tenant_id = tenant_id
 
     async def get_active_skills(self, query: str) -> list[dict]:
         """Skill aktif yang trigger-nya cocok query, untuk disuntik ke context.
@@ -27,32 +33,36 @@ class SkillDecayManager:
         active = await self.db.fetchall(
             """SELECT id, skill_name, skill_content, trigger_pattern, decay_score, status
                FROM skills
-               WHERE role=? AND status='active'
+               WHERE tenant_id=? AND role=? AND status='active'
                  AND (trigger_pattern IS NULL OR ? LIKE '%' || trigger_pattern || '%')
                ORDER BY decay_score DESC, use_count DESC LIMIT ?""",
-            (self.role, query, self.config.max_active_skills),
+            (self.tenant_id, self.role, query, self.config.max_active_skills),
         )
         # I2: beri 1 slot percobaan untuk draft yang trigger-nya cocok — satu-satunya
         # cara draft bisa terbukti & dipromosikan. Draft trial TIDAK menggusur active.
         trial = await self.db.fetchall(
             """SELECT id, skill_name, skill_content, trigger_pattern, decay_score, status
                FROM skills
-               WHERE role=? AND status='draft'
+               WHERE tenant_id=? AND role=? AND status='draft'
                  AND trigger_pattern IS NOT NULL AND ? LIKE '%' || trigger_pattern || '%'
                ORDER BY draft_success_count DESC, id DESC LIMIT 1""",
-            (self.role, query),
+            (self.tenant_id, self.role, query),
         )
         return active + trial
 
     async def mark_used(self, skill_id: int) -> None:
-        """Skill dipakai lagi → revive: status kembali active, score naik."""
+        """Skill dipakai lagi → revive: status kembali active, score naik.
+
+        Isolasi tenant: `tenant_id=?` mencegah turn tenant A me-revive/mempengaruhi
+        skill id milik tenant B walau id tertebak (defense-in-depth, sama pola
+        ChatSessionStore.soft_delete)."""
         await self.db.execute(
             """UPDATE skills
                SET use_count = use_count + 1, last_used_at = ?,
                    decay_score = MIN(1.0, decay_score + ?),
                    status = CASE WHEN status='archived' THEN 'active' ELSE status END
-               WHERE id = ?""",
-            (datetime.now().isoformat(), self.config.skill_revive_boost, skill_id),
+               WHERE id = ? AND tenant_id = ?""",
+            (datetime.now().isoformat(), self.config.skill_revive_boost, skill_id, self.tenant_id),
         )
 
     async def mark_many_used(self, skill_ids: list[int]) -> None:
@@ -74,13 +84,17 @@ class SkillDecayManager:
         Hanya berefek pada skill berstatus 'draft'. Return ringkasan untuk audit.
         """
         row = await self.db.fetchone(
-            "SELECT status, draft_success_count, confidence FROM skills WHERE id=?", (skill_id,)
+            "SELECT status, draft_success_count, confidence FROM skills WHERE id=? AND tenant_id=?",
+            (skill_id, self.tenant_id),
         )
         if not row or row["status"] != "draft":
             return {"skill_id": skill_id, "action": "noop"}
 
         if not success:
-            await self.db.execute("UPDATE skills SET draft_success_count=0 WHERE id=?", (skill_id,))
+            await self.db.execute(
+                "UPDATE skills SET draft_success_count=0 WHERE id=? AND tenant_id=?",
+                (skill_id, self.tenant_id),
+            )
             return {"skill_id": skill_id, "action": "reset"}
 
         new_count = (row["draft_success_count"] or 0) + 1
@@ -89,13 +103,14 @@ class SkillDecayManager:
             promoted_conf = max(row["confidence"] or 0.0, self.config.confidence_threshold / 5.0)
             await self.db.execute(
                 """UPDATE skills SET status='active', draft_success_count=?,
-                       confidence=?, last_used_at=? WHERE id=?""",
-                (new_count, promoted_conf, datetime.now().isoformat(), skill_id),
+                       confidence=?, last_used_at=? WHERE id=? AND tenant_id=?""",
+                (new_count, promoted_conf, datetime.now().isoformat(), skill_id, self.tenant_id),
             )
             return {"skill_id": skill_id, "action": "promoted", "uses": new_count}
 
         await self.db.execute(
-            "UPDATE skills SET draft_success_count=? WHERE id=?", (new_count, skill_id)
+            "UPDATE skills SET draft_success_count=? WHERE id=? AND tenant_id=?",
+            (new_count, skill_id, self.tenant_id),
         )
         return {"skill_id": skill_id, "action": "incremented", "uses": new_count}
 
@@ -116,13 +131,13 @@ class SkillDecayManager:
             """UPDATE skills
                SET decay_score = decay_score * POWER(?,
                    julianday('now') - julianday(COALESCE(last_used_at, created_at)))
-               WHERE role=? AND status='active'""",
-            (self.config.skill_decay_base, self.role),
+               WHERE tenant_id=? AND role=? AND status='active'""",
+            (self.config.skill_decay_base, self.tenant_id, self.role),
         )
         cursor = await self.db.execute(
             """UPDATE skills SET status='archived'
-               WHERE role=? AND status='active' AND decay_score < ?""",
-            (self.role, self.config.skill_archive_threshold),
+               WHERE tenant_id=? AND role=? AND status='active' AND decay_score < ?""",
+            (self.tenant_id, self.role, self.config.skill_archive_threshold),
         )
         archived = cursor.rowcount
 
@@ -133,9 +148,9 @@ class SkillDecayManager:
         if self.config.draft_stale_days > 0:
             cur2 = await self.db.execute(
                 """UPDATE skills SET status='archived'
-                   WHERE role=? AND status='draft' AND draft_success_count=0
+                   WHERE tenant_id=? AND role=? AND status='draft' AND draft_success_count=0
                      AND julianday('now') - julianday(created_at) > ?""",
-                (self.role, self.config.draft_stale_days),
+                (self.tenant_id, self.role, self.config.draft_stale_days),
             )
             drafts_archived = cur2.rowcount
         return {"archived": archived, "drafts_archived": drafts_archived}

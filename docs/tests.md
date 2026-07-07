@@ -94,6 +94,10 @@ Test untuk `memory/skill_decay.py` (Inovasi 2).
 | `test_recent_draft_not_archived` | Draft baru tidak diarsipkan |
 | `test_proven_draft_not_archived` | Draft tua tapi terbukti (success_count>0) tidak diarsipkan |
 | `test_draft_cleanup_disabled_when_zero` | `draft_stale_days=0` menonaktifkan cleanup |
+| `test_get_active_skills_scoped_to_tenant` | Multi-Tenant (§ Prioritas 5): skill tenant lain tak muncul walau role & trigger sama |
+| `test_mark_used_cannot_cross_tenant` | Tenant A tak bisa revive/menaikkan skor skill milik tenant B via id tertebak |
+| `test_decay_pass_scoped_to_tenant` | Decay pass tenant A tak menyentuh skill tenant B walau role sama |
+| `test_default_tenant_id_backward_compatible` | Tanpa `tenant_id` eksplisit → `'default'`, skill lama tetap terlihat |
 
 ---
 
@@ -740,6 +744,10 @@ pernah dapat kolom baru (`CREATE TABLE IF NOT EXISTS` no-op pada tabel existing)
 | `test_ensure_columns_preserves_existing_data` | Tambal kolom TIDAK mengubah/menghapus data lama |
 | `test_ensure_columns_idempotent_on_second_run` | Jalan dua kali (restart berulang) tak error kolom duplikat |
 | `test_ensure_columns_noop_on_fresh_db` | DB baru (skema lengkap dari CREATE TABLE) — tak berefek |
+| `test_rebuild_adds_tenant_id_to_memory_l1_preserving_data` | Multi-Tenant (§ Prioritas 5): `memory_l1` lama (`UNIQUE(role,key)`) → `tenant_id='default'` ditambahkan, data utuh |
+| `test_rebuild_adds_tenant_id_to_skills_preserving_data` | `skills` lama (tanpa `trigger_pattern`/`visibility` sama sekali) → rebuild sukses, kolom hilang jatuh ke default aman, data utuh |
+| `test_rebuild_enforces_new_unique_constraint` | Setelah rebuild, dua tenant berbeda boleh punya `role+key`/`role+skill_name` sama |
+| `test_rebuild_idempotent_on_second_run` | `run_migration` dua kali pada DB yang sudah di-rebuild tak error/duplikat |
 
 ---
 
@@ -991,6 +999,9 @@ Test sidebar riwayat chat (§ user report: chat selalu ke-reset, tak ada cara bu
 | `test_get_chat_session_turns_empty_for_unknown_session` | Sesi tak dikenal → `turns: []`, bukan 404 |
 | `test_get_chat_session_turns_returns_transcript` | Transkrip lengkap urut lama→baru |
 | `test_delete_chat_session_removes_from_list_and_turns` | `DELETE` menghilangkan sesi dari daftar DAN transkripnya |
+| `test_list_active_scoped_to_tenant` | Multi-Tenant (§ Prioritas 5): sesi tenant lain tak pernah muncul di `list_active` tenant ini |
+| `test_default_tenant_id_backward_compatible` | Tanpa `tenant_id` eksplisit → `'default'`, konsisten dengan skema DEFAULT |
+| `test_soft_delete_cannot_cross_tenant` | Tenant A tak bisa `soft_delete` sesi milik tenant B walau tahu `session_id`-nya |
 
 ---
 

@@ -76,7 +76,7 @@ class MemoryManager:
     async def update_checkpoint(self, summary: str) -> None:
         await self.db.execute(
             """INSERT INTO memory_l1 (role, key, value) VALUES (?, 'last_summary', ?)
-               ON CONFLICT(role, key) DO UPDATE SET value=excluded.value,
+               ON CONFLICT(tenant_id, role, key) DO UPDATE SET value=excluded.value,
                updated_at=CURRENT_TIMESTAMP""",
             (self.role, summary[:500]),
         )

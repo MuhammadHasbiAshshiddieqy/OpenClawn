@@ -684,7 +684,7 @@ Ekspor & impor skill antar-instalasi (terinspirasi sistem skill + `skills-lock.j
 Render skill `active` (opsional per role) → satu pack Markdown berfrontmatter (`name/role/trigger_pattern/generator_model/confidence/hash` + konten). Hanya `active` (draft/archived tak dibagi).
 
 **`import_pack(text, target_role=None) → dict`** *(async)*  
-Impor pack → DB. **Berlapis keamanan (§1):** (2) `Shield.scan_input` tolak pola injeksi → (3) status **`draft`** (tak auto-masuk context; `get_active_skills` hanya ambil `active`) → (4) hash SHA-256 diverifikasi bila disertakan. `ON CONFLICT DO NOTHING` (tak menimpa skill lokal). Tiap skill divalidasi sendiri — gagal satu tak jatuhkan lainnya. Return `{imported, skipped, reasons}`. Batas `MAX_IMPORT_BYTES`.
+Impor pack → DB. **Berlapis keamanan (§1):** (2) `Shield.scan_input` tolak pola injeksi → (3) status **`draft`** (tak auto-masuk context; `get_active_skills` hanya ambil `active`) → (4) hash SHA-256 diverifikasi bila disertakan. `ON CONFLICT(tenant_id, role, skill_name) DO NOTHING` (tak menimpa skill lokal — constraint disesuaikan mengikuti Multi-Tenant, TODO.md § Prioritas 5; `tenant_id` tak disebut eksplisit di INSERT sehingga jatuh ke DEFAULT `'default'` skema). Tiap skill divalidasi sendiri — gagal satu tak jatuhkan lainnya. Return `{imported, skipped, reasons}`. Batas `MAX_IMPORT_BYTES`.
 
 **`import_url(url, target_role=None) → dict`** *(async)*  
 Impor dari URL publik. **Lapis 1:** `_ssrf_guard` (tolak host internal) + scheme `http(s)` saja, lalu delegasi ke `import_pack`.

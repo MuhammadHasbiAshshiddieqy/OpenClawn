@@ -249,14 +249,16 @@ Potong pesan jadi `head ... tail` bila melebihi `TITLE_INPUT_HEAD_WORDS + TITLE_
 
 Murni di atas `DatabaseManager` (tabel `chat_sessions`, lihat `docs/database.md`).
 
+**`__init__(db, tenant_id="default")`** — Multi-Tenant (TODO.md § Prioritas 5, WIRED PENUH): `tenant_id` opsional, default `'default'`. Instance ini terikat SATU tenant — semua method di bawah men-scope ke tenant tersebut.
+
 | Method | Keterangan |
 |---|---|
-| `ensure_created(session_id, role) → None` *(async)* | Daftarkan sesi baru (`INSERT OR IGNORE` — idempoten, tak menimpa title/waktu sesi yang sudah ada). Dipanggil `/chat/stream` SEBELUM turn jalan, agar sesi muncul di sidebar walau turn pertama gagal/timeout |
+| `ensure_created(session_id, role) → None` *(async)* | Daftarkan sesi baru (`INSERT OR IGNORE` — idempoten, tak menimpa title/waktu sesi yang sudah ada), menyertakan `tenant_id` instance. Dipanggil `/chat/stream` SEBELUM turn jalan, agar sesi muncul di sidebar walau turn pertama gagal/timeout |
 | `touch(session_id) → None` *(async)* | Perbarui `updated_at` — dipanggil tiap turn (`AgentLoop._post_turn`) agar urutan sidebar (terbaru dulu) mencerminkan aktivitas terakhir |
 | `set_title(session_id, title) → None` *(async)* | Simpan judul; strip tanda kutip pembungkus (LLM kadang membungkus jawaban dengan `"..."`) & potong ke `MAX_TITLE_CHARS` |
 | `has_title(session_id) → bool` *(async)* | Cek apakah sesi sudah punya judul — gate agar generate judul hanya sekali (turn pertama) |
-| `list_active(limit=200) → list[dict]` *(async)* | Sesi belum dihapus, terbaru dulu — mentah (tak dikelompokkan; `web/main.py` § `GET /chat-sessions` yang menghitung `bucket` waktu) |
-| `soft_delete(session_id) → None` *(async)* | Hapus dari sidebar (`deleted_at` terisi — metadata tetap ada untuk audit trail), TAPI `session_turns` & `session_workspace` terkait dihapus FISIK (user minta "hapus", isi percakapan harus benar hilang) |
+| `list_active(limit=200) → list[dict]` *(async)* | Sesi MILIK TENANT INI yang belum dihapus, terbaru dulu — mentah (tak dikelompokkan; `web/main.py` § `GET /chat-sessions` yang menghitung `bucket` waktu). Sesi tenant lain tak pernah muncul |
+| `soft_delete(session_id) → None` *(async)* | Hapus dari sidebar (`deleted_at` terisi — metadata tetap ada untuk audit trail), TAPI `session_turns` & `session_workspace` terkait dihapus FISIK (user minta "hapus", isi percakapan harus benar hilang). WHERE menyertakan `tenant_id=?` (defense-in-depth) — tenant A tak bisa menghapus sesi tenant B walau tahu `session_id`-nya |
 
 Judul di-generate `AgentLoop._generate_session_title` (dipanggil `_post_turn` di turn pertama, gated `has_title`) via `compaction_local_model` (gemma4:e2b) — model kecil yang sama dipakai `_maybe_compact`, konsisten & gratis (lokal). Fail-safe (§1.3): LLM/parsing gagal → sesi tetap tanpa judul (sidebar fallback ke `"New chat"`), tak menjatuhkan turn.
 

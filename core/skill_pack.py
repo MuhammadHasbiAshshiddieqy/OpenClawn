@@ -195,7 +195,7 @@ class SkillPack:
                                            visibility, status, confidence, generator_model,
                                            decay_score)
                        VALUES (?,?,?,?, 'inherited', 'draft', ?, ?, 1.0)
-                       ON CONFLICT(role, skill_name) DO NOTHING""",
+                       ON CONFLICT(tenant_id, role, skill_name) DO NOTHING""",
                     (
                         role,
                         name,
