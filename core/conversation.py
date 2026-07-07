@@ -9,12 +9,14 @@ Modul ini extractable (CLAUDE.md §1.6): hanya bergantung pada `DatabaseManager`
 `AgentLoop.run()` penuh (tool/memory/routing/crystallization tetap jalan per agent).
 """
 
+import asyncio
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from core.agent_loop import AgentLoop
+from core.event_bus import EventBus
 from infra.config import CONFIG, AppConfig
 from infra.database import DatabaseManager
 from infra.logging import log
@@ -290,6 +292,7 @@ class ConversationOrchestrator:
         config: AppConfig = CONFIG,
         control: ConversationControl | None = None,
         pattern: str = "",
+        event_bus: EventBus | None = None,
     ):
         self.strategy = strategy
         self.db = db
@@ -299,9 +302,33 @@ class ConversationOrchestrator:
         self.control = control or ConversationControl()
         # Untuk persistensi: pattern label + peserta (strategy memegang participants).
         self.pattern = pattern
+        # Event-Driven Runtime (TODO.md § Prioritas 4): giliran agent dipublish
+        # sebagai event lewat EventBus in-process, bukan dipanggil langsung
+        # inline. Default bus baru per-orchestrator (tak dishare lintas
+        # percakapan) — inject bus eksternal hanya bila butuh observasi lintas
+        # beberapa orchestrator sekaligus (belum ada kebutuhan itu saat ini).
+        self.event_bus = event_bus or EventBus()
+        # Subscriber TERPISAH dari yang dipakai run() untuk streaming UI —
+        # jalan sepanjang hidup orchestrator, mem-PERSIST event level-tinggi
+        # (bukan token/thinking granular, § migrations/001_initial.sql komentar
+        # agent_events) ke DB agar replay-able LINTAS-RESTART proses
+        # (EventBus.events in-memory hilang saat proses restart).
+        self.event_bus.subscribe("conversation.agent_event", self._persist_agent_event)
 
     async def run(self, initial_message: str):
-        """Yield ConversationEvent. Tiap giliran = AgentLoop.run() penuh."""
+        """Yield ConversationEvent. Tiap giliran = AgentLoop.run() penuh.
+
+        Internal event-driven (TODO.md § Prioritas 4): giliran agent dijalankan
+        via `_run_agent_turn`, yang mem-PUBLISH tiap `AgentEvent` granular
+        (token/thinking/status/usage/dll) sebagai topic `conversation.agent_event`
+        di `self.event_bus` — bukan menaruhnya langsung ke variabel lokal. `run()`
+        MENYUBSCRIBE topic itu (handler menaruh `ConversationEvent` yang sudah
+        dibentuk ke antrian internal) lalu men-`yield`-nya, sehingga API publik
+        (urutan/isi `ConversationEvent`, sifat generator streaming per-token)
+        tetap identik dengan sebelum refactor — hanya jalur internalnya yang
+        sekarang genuinely producer/consumer via event bus, bukan pemanggilan
+        langsung `agent.run()` yang di-inline ke loop `while`.
+        """
         state = ConversationState(transcript=[("user", initial_message)])
         # Akumulasi biaya lintas-giliran → ditampilkan di akhir percakapan.
         # context: PEAK (bukan jumlah) — tiap giliran context window independen,
@@ -337,34 +364,39 @@ class ConversationOrchestrator:
             ti = state.turn_index
             yield ConversationEvent("turn", role=role, text=role.upper(), turn_index=ti)
 
-            agent = self.agent_factory(role)
-            collected = ""
-            stopped_mid = False
-            async for ev in agent.run(turn_input):
-                if await self.control.is_stopped():
-                    stopped_mid = True
-                    break
-                # Usage bukan untuk ditampilkan per-token — akumulasi diam-diam.
-                if ev.type == "usage" and ev.usage:
-                    totals["tokens_in"] += ev.usage.get("tokens_in", 0)
-                    totals["tokens_out"] += ev.usage.get("tokens_out", 0)
-                    totals["cost_usd"] += ev.usage.get("cost_usd", 0.0)
-                    totals["latency_ms"] += ev.usage.get("latency_ms", 0)
-                    totals["peak_context_tokens"] = max(
-                        totals["peak_context_tokens"], ev.usage.get("context_tokens", 0)
-                    )
-                    totals["turns"] += 1
-                    continue
-                if ev.type == "token":
-                    collected += ev.text
-                yield ConversationEvent(
-                    ev.type,
-                    role=role,
-                    text=ev.text,
-                    detail=ev.detail,
-                    turn_index=ti,
-                    approval_id=ev.approval_id,
+            queue: asyncio.Queue = asyncio.Queue()
+
+            async def _on_agent_event(item: tuple[str, int, object], _q=queue) -> None:
+                await _q.put(item)
+
+            self.event_bus.subscribe("conversation.agent_event", _on_agent_event)
+            try:
+                run_task = asyncio.create_task(
+                    self._run_agent_turn(role, turn_input, ti, totals, queue)
                 )
+                while True:
+                    item = await queue.get()
+                    if item is None:  # sentinel: giliran ini selesai mem-publish
+                        break
+                    _role, _ti, ev = item
+                    # Usage TIDAK di-yield sebagai ConversationEvent ke caller —
+                    # sama seperti perilaku sebelum refactor (diakumulasi diam-diam
+                    # ke `totals` di _run_agent_turn, ditampilkan hanya di
+                    # conversation_end). Publish ke event_bus tetap terjadi (observer
+                    # eksternal bisa subscribe raw AgentEvent termasuk usage).
+                    if ev.type == "usage":
+                        continue
+                    yield ConversationEvent(
+                        ev.type,
+                        role=_role,
+                        text=ev.text,
+                        detail=ev.detail,
+                        turn_index=_ti,
+                        approval_id=ev.approval_id,
+                    )
+                collected, stopped_mid = await run_task
+            finally:
+                self.event_bus.unsubscribe("conversation.agent_event", _on_agent_event)
 
             if stopped_mid:
                 state.transcript.append((role, collected))  # simpan sebagian yang sempat terkumpul
@@ -386,6 +418,79 @@ class ConversationOrchestrator:
 
         await self._persist(initial_message, state, "max_turns", totals)
         yield ConversationEvent("conversation_end", detail="max_turns", usage=totals)
+
+    async def _persist_agent_event(self, item: tuple[str, int, object]) -> None:
+        """Subscriber `conversation.agent_event` — tulis event LEVEL TINGGI ke
+        `agent_events` (§ Event-Driven Runtime, TODO.md Prioritas 4). Token/thinking
+        granular SENGAJA di-skip (volume besar, isi lengkap sudah ada di
+        `conversations.transcript_json` — token-first §1.4). Fail-soft (pola sama
+        `_persist`/`_record_handoff`): kegagalan tulis di-log, tidak menjatuhkan
+        percakapan — event-sourcing adalah arsip tambahan, bukan jalur kritis.
+        """
+        role, ti, ev = item
+        if ev.type in ("token", "thinking"):
+            return
+        payload: dict = {"detail": ev.detail}
+        if ev.approval_id:
+            payload["approval_id"] = ev.approval_id
+        if ev.usage:
+            payload["usage"] = ev.usage
+        try:
+            await self.db.execute(
+                """INSERT INTO agent_events (session_id, role, turn_index, event_type, payload_json)
+                   VALUES (?,?,?,?,?)""",
+                (self.session_id, role, ti, ev.type, json.dumps(payload, ensure_ascii=False)),
+            )
+        except Exception as e:  # noqa: BLE001 — event-sourcing arsip, jangan jatuhkan percakapan
+            log.error("agent_event_persist_failed", session=self.session_id, error=str(e))
+
+    async def _run_agent_turn(
+        self,
+        role: str,
+        turn_input: str,
+        ti: int,
+        totals: dict,
+        queue: asyncio.Queue,
+    ) -> tuple[str, bool]:
+        """Jalankan satu giliran agent, PUBLISH tiap `AgentEvent` sebagai topic
+        `conversation.agent_event` (event-driven, bukan inline) — SATU-SATUNYA
+        jalur data ke `queue` adalah lewat subscriber `_on_agent_event` di
+        `run()` (di-setup SEBELUM task ini dibuat), bukan menulis `queue`
+        langsung di sini (itu akan menduplikasi tiap event: sekali dari
+        publish→subscriber→queue, sekali lagi dari tulis langsung).
+
+        `queue` di parameter HANYA dipakai untuk sentinel penanda selesai
+        (`None`) — payload event granular sendiri mengalir via `event_bus`.
+        Return `(collected_text, stopped_mid)` diambil `run()` setelah
+        `await run_task` (task ini selesai setelah sentinel dikirim).
+
+        Usage TIDAK dipublish sebagai `ConversationEvent` ke UI (diakumulasi
+        diam-diam ke `totals`, sama seperti perilaku sebelum refactor) — tapi
+        TETAP dipublish ke event bus untuk konsistensi (observer eksternal bisa
+        subscribe raw `AgentEvent` termasuk usage bila perlu).
+        """
+        agent = self.agent_factory(role)
+        collected = ""
+        stopped_mid = False
+        async for ev in agent.run(turn_input):
+            if await self.control.is_stopped():
+                stopped_mid = True
+                break
+            await self.event_bus.publish("conversation.agent_event", (role, ti, ev))
+            if ev.type == "usage" and ev.usage:
+                totals["tokens_in"] += ev.usage.get("tokens_in", 0)
+                totals["tokens_out"] += ev.usage.get("tokens_out", 0)
+                totals["cost_usd"] += ev.usage.get("cost_usd", 0.0)
+                totals["latency_ms"] += ev.usage.get("latency_ms", 0)
+                totals["peak_context_tokens"] = max(
+                    totals["peak_context_tokens"], ev.usage.get("context_tokens", 0)
+                )
+                totals["turns"] += 1
+                continue
+            if ev.type == "token":
+                collected += ev.text
+        await queue.put(None)  # sentinel: run() berhenti membaca dari queue
+        return collected, stopped_mid
 
     async def _persist(
         self, initial_message: str, state: ConversationState, end_reason: str, totals: dict

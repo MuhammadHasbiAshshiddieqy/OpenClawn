@@ -500,6 +500,26 @@ Tool MCP TIDAK mendapat jalur istimewa: lewat pagar yang sama (izin per-role via
 
 ---
 
+### `agent_events` — Event-Sourcing Ringan (Event-Driven Runtime, TODO.md § Prioritas 4)
+
+Event-sourcing RINGAN di atas SQLite yang sudah ada (bukan migrasi database baru) — persist event LEVEL TINGGI dari `ConversationOrchestrator.event_bus` (`core/event_bus.py`) agar replay-able LINTAS-RESTART proses (`EventBus.events` in-memory hilang saat proses restart).
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `session_id` | TEXT | Sesi percakapan multi-agent |
+| `role` | TEXT | Role yang sedang bicara saat event terjadi |
+| `turn_index` | INTEGER | Ordinal giliran (0-based, sama seperti `ConversationEvent.turn_index`) |
+| `event_type` | TEXT | `status` \| `file_created` \| `guardrail` \| `usage` — **BUKAN** `token`/`thinking` (sengaja di-skip, lihat catatan di bawah) |
+| `payload_json` | TEXT | `{"detail": ..., "approval_id": ..., "usage": {...}}` sebagai JSON, field opsional sesuai isi `AgentEvent` |
+| `created_at` | TIMESTAMP | — |
+
+**Index:** `idx_agent_events_session` pada `(session_id, turn_index)`.
+
+**Kenapa `token`/`thinking` TIDAK dipersist:** satu giliran agent bisa menghasilkan >1000 event token granular (diverifikasi live: turn nyata menghasilkan 1162 event `token`) — mempersist semuanya akan membanjiri DB untuk manfaat marginal, karena isi lengkap jawaban sudah tersimpan di `conversations.transcript_json` (arsip percakapan) dan `session_turns` (single-agent). Token-first §1.4: hanya event yang BERMAKNA untuk replay/audit ("siapa bicara kapan, tool apa dipanggil, ada approval apa") yang dipersist di sini.
+
+---
+
 ## Query Penting
 
 ```sql

@@ -165,6 +165,28 @@ Test untuk `core/conversation.py` (multi-agent conversation). Seam = fake `agent
 | `test_conversation_persisted_once_per_run` | Tepat satu baris arsip per run (persist hanya di `conversation_end`) |
 | `test_make_strategy_unknown_pattern_raises` | Pattern tak dikenal → `ValueError` |
 | `test_orchestrator_non_pm_lead_runs` | End-to-end: lead `dev` bicara lebih dulu |
+| `test_external_observer_can_subscribe_to_agent_events` | Event-Driven Runtime (§ Prioritas 4): observer EKSTERNAL bisa subscribe `event_bus` & menerima tiap `AgentEvent` granular per giliran |
+| `test_usage_not_yielded_to_ui_but_still_published_to_bus` | Regresi kunci refactor: `usage` tetap TIDAK muncul sebagai `ConversationEvent` ke caller, TAPI tetap dipublish ke bus |
+| `test_high_level_events_persisted_to_agent_events_table` | Event level tinggi (`status`) dipersist ke `agent_events` untuk replay lintas-restart |
+| `test_token_and_thinking_events_not_persisted_to_agent_events` | Token-first §1.4: `token`/`thinking` granular TIDAK dipersist ke `agent_events` |
+| `test_events_replayable_from_bus_queue` | `EventBus.events` (Queue) menyimpan riwayat event, bisa dibaca ulang setelah percakapan selesai |
+
+---
+
+### `tests/test_event_bus.py`
+
+Test untuk `core/event_bus.py` — Event Bus in-process (§ Event-Driven Runtime, TODO.md § Prioritas 4).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_publish_without_subscriber_does_not_error` | Publish tanpa subscriber sama sekali → tidak crash |
+| `test_subscriber_receives_published_event` | Subscriber menerima payload yang dipublish |
+| `test_multiple_subscribers_same_topic_all_receive` | Beberapa subscriber topic sama → semua menerima |
+| `test_subscriber_on_different_topic_does_not_receive` | Subscriber topic lain tidak menerima event topic berbeda |
+| `test_handler_exception_does_not_crash_publish` | Fail-safe §1.3: satu handler exception tidak menghentikan handler lain / tidak melempar dari `publish()` |
+| `test_events_queue_preserves_order` | `EventBus.events` menyimpan event berurutan (FIFO) untuk replay |
+| `test_unsubscribe_stops_receiving` | Setelah `unsubscribe`, handler tak lagi menerima event baru |
+| `test_concurrent_publishes_all_handled` | Beberapa `publish()` paralel (`asyncio.gather`) — semua tetap diterima, tak ada yang hilang |
 
 ---
 

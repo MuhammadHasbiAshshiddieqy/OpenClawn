@@ -360,6 +360,168 @@ async def test_conversation_persisted_on_completion(db):
     assert spoken == ["user", "pm", "dev", "qa"]
 
 
+# ── Event-Driven Runtime (TODO.md § Prioritas 4) ──────────────────────────────
+
+
+async def test_external_observer_can_subscribe_to_agent_events(db):
+    """Bukti genuinely event-driven: observer EKSTERNAL (bukan run() sendiri)
+    bisa subscribe ke event_bus dan menerima tiap AgentEvent granular tiap
+    giliran — bukan cuma internal implementation detail yang kebetulan
+    menghasilkan ConversationEvent yang benar."""
+    calls: list = []
+    orch = ConversationOrchestrator(
+        strategy=PipelineStrategy(["pm", "dev"]),
+        db=db,
+        agent_factory=make_factory({}, calls),
+        session_id="s-observer",
+    )
+
+    observed: list = []
+
+    async def observer(item):
+        role, ti, ev = item
+        observed.append((role, ti, ev.type))
+
+    orch.event_bus.subscribe("conversation.agent_event", observer)
+    await _collect(orch, "x")
+
+    # Kedua giliran (pm, dev) tercatat observer — termasuk usage yang TIDAK
+    # di-yield ke UI (dikonfirmasi via test_usage_not_yielded_but_still_published).
+    observed_roles = {r for r, _, _ in observed}
+    assert observed_roles == {"pm", "dev"}
+    assert any(t == "status" for _, _, t in observed)
+    assert any(t == "token" for _, _, t in observed)
+
+
+async def test_usage_not_yielded_to_ui_but_still_published_to_bus(db):
+    """Regresi kunci: usage TETAP tidak muncul sebagai ConversationEvent ke
+    caller (perilaku identik sebelum refactor — diakumulasi diam-diam ke
+    totals), TAPI tetap dipublish ke event_bus untuk observer eksternal."""
+
+    class UsageAgent:
+        def __init__(self, role, calls):
+            self.role = role
+            self.calls = calls
+
+        async def run(self, prompt):
+            self.calls.append((self.role, prompt))
+            yield AgentEvent(type="token", text="halo")
+            yield AgentEvent(
+                type="usage",
+                usage={"tokens_in": 5, "tokens_out": 3, "cost_usd": 0.001, "latency_ms": 50},
+            )
+
+    calls: list = []
+    orch = ConversationOrchestrator(
+        strategy=PipelineStrategy(["pm"]),
+        db=db,
+        agent_factory=lambda role: UsageAgent(role, calls),
+        session_id="s-usage",
+    )
+
+    bus_events = []
+
+    async def observer(item):
+        _, _, ev = item
+        bus_events.append(ev.type)
+
+    orch.event_bus.subscribe("conversation.agent_event", observer)
+    events = await _collect(orch, "x")
+
+    ui_event_types = [e.type for e in events]
+    assert "usage" not in ui_event_types  # tidak di-yield ke UI
+    assert "usage" in bus_events  # tapi tetap dipublish ke bus
+
+
+async def test_high_level_events_persisted_to_agent_events_table(db):
+    """Event level tinggi (status) dipersist ke agent_events agar replay-able
+    LINTAS-RESTART (EventBus.events in-memory hilang saat proses restart) —
+    §Event-Driven Runtime TODO.md Prioritas 4."""
+
+    class StatusAgent:
+        def __init__(self, role, calls):
+            self.role = role
+            self.calls = calls
+
+        async def run(self, prompt):
+            self.calls.append((self.role, prompt))
+            yield AgentEvent(type="status", text="thinking", detail="routing")
+            yield AgentEvent(type="token", text="hasil")
+
+    calls: list = []
+    orch = ConversationOrchestrator(
+        strategy=PipelineStrategy(["pm"]),
+        db=db,
+        agent_factory=lambda role: StatusAgent(role, calls),
+        session_id="s-persist-events",
+    )
+    await _collect(orch, "x")
+
+    rows = await db.fetchall(
+        "SELECT role, turn_index, event_type FROM agent_events WHERE session_id='s-persist-events'"
+    )
+    assert len(rows) == 1
+    assert rows[0]["role"] == "pm"
+    assert rows[0]["turn_index"] == 0
+    assert rows[0]["event_type"] == "status"
+
+
+async def test_token_and_thinking_events_not_persisted_to_agent_events(db):
+    """Token-first (§1.4): token/thinking granular TIDAK dipersist ke
+    agent_events (volume besar, isi lengkap sudah ada di
+    conversations.transcript_json) — hanya event level tinggi."""
+
+    class ChattyAgent:
+        def __init__(self, role, calls):
+            self.role = role
+            self.calls = calls
+
+        async def run(self, prompt):
+            self.calls.append((self.role, prompt))
+            for _ in range(50):
+                yield AgentEvent(type="token", text="x")
+            yield AgentEvent(type="thinking", text="mikir")
+            yield AgentEvent(type="status", text="tool", detail="grep")
+
+    calls: list = []
+    orch = ConversationOrchestrator(
+        strategy=PipelineStrategy(["pm"]),
+        db=db,
+        agent_factory=lambda role: ChattyAgent(role, calls),
+        session_id="s-no-token-persist",
+    )
+    await _collect(orch, "x")
+
+    rows = await db.fetchall(
+        "SELECT event_type FROM agent_events WHERE session_id='s-no-token-persist'"
+    )
+    event_types = [r["event_type"] for r in rows]
+    assert "token" not in event_types
+    assert "thinking" not in event_types
+    assert event_types == ["status"]  # hanya satu event level tinggi
+
+
+async def test_events_replayable_from_bus_queue(db):
+    """EventBus.events (asyncio.Queue) menyimpan riwayat event terpublikasi —
+    bisa dibaca ulang SETELAH percakapan selesai (replay/audit), terpisah
+    dari mekanisme subscribe langsung yang dipakai run() sendiri."""
+    calls: list = []
+    orch = ConversationOrchestrator(
+        strategy=PipelineStrategy(["pm"]),
+        db=db,
+        agent_factory=make_factory({}, calls),
+        session_id="s-replay",
+    )
+    await _collect(orch, "x")
+
+    replayed = []
+    while not orch.event_bus.events.empty():
+        replayed.append(await orch.event_bus.events.get())
+
+    assert len(replayed) > 0
+    assert all(e.topic == "conversation.agent_event" for e in replayed)
+
+
 async def test_conversation_persisted_once_per_run(db):
     """Tepat satu baris arsip per run (persist hanya di conversation_end)."""
     calls: list = []

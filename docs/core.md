@@ -35,16 +35,46 @@ Kontrol STOP + INTERJECT, web-agnostic. `stop()`, `add_interjection(text)`, `pop
 | `OrchestratorStrategy(lead, workers)` | Lead delegasi dinamis via directive JSON (`{"delegate_to","task"}`/`{"done":true}`). Setelah worker → balik ke lead. | Lead `done`, atau **fallback** alur tetap (lead→workers→lead) bila directive tak terbaca |
 
 ### Kelas: `ConversationOrchestrator`
-`__init__(strategy, db, agent_factory, session_id, config=CONFIG, control=None, pattern="")`. `pattern` dipakai saat persistensi (label arsip).
+`__init__(strategy, db, agent_factory, session_id, config=CONFIG, control=None, pattern="", event_bus=None)`. `pattern` dipakai saat persistensi (label arsip). `event_bus` opsional (default: `EventBus` baru per-orchestrator, tak dishare lintas percakapan).
 
 **`run(initial_message) → AsyncGenerator[ConversationEvent, None]`** *(async)*
-Loop sampai `max_conversation_turns`/strategy selesai/STOP. Per giliran: cek stop → `next_speaker` → rakit input (+interjection) → emit `turn` → jalankan `agent_factory(role).run()` (re-wrap token/status, cek stop tiap event) → bila `wants_contract` validasi + tulis `role_handoffs` (**gagal → tetap lanjut dgn teks mentah**, keputusan degrade-graceful). Di setiap `conversation_end` memanggil `_persist`.
+Loop sampai `max_conversation_turns`/strategy selesai/STOP. Per giliran: cek stop → `next_speaker` → rakit input (+interjection) → emit `turn` → **event-driven internal** (§ Event-Driven Runtime, TODO.md Prioritas 4): `_run_agent_turn` dijalankan sebagai `asyncio.Task` terpisah yang mem-PUBLISH tiap `AgentEvent` (token/thinking/status/usage) ke `self.event_bus` topic `conversation.agent_event`; `run()` sendiri SUBSCRIBE topic itu (handler menaruh item ke `asyncio.Queue` lokal per-giliran) dan membaca dari queue tersebut untuk `yield` `ConversationEvent` — bukan lagi memanggil `agent.run()` langsung inline dalam loop `while`. Perilaku publik (urutan/isi event yang di-yield, sifat streaming per-token) **identik** dengan sebelum refactor; `usage` TETAP tidak pernah di-yield ke caller (diakumulasi diam-diam ke `totals`), hanya dipublish ke bus untuk observer eksternal. Bila `wants_contract` validasi + tulis `role_handoffs` (**gagal → tetap lanjut dgn teks mentah**, keputusan degrade-graceful). Di setiap `conversation_end` memanggil `_persist`.
+
+**`_run_agent_turn(role, turn_input, ti, totals, queue) → tuple[str, bool]`** *(async, private)*
+Jalankan `agent_factory(role).run()`, publish tiap `AgentEvent` ke `event_bus`, kirim sentinel `None` ke `queue` saat selesai (penanda `run()` berhenti membaca). Return `(collected_text, stopped_mid)` — diambil `run()` via `await run_task` setelah loop baca queue selesai.
+
+**`_persist_agent_event(item)`** *(async, private)*
+Subscriber `conversation.agent_event` yang jalan **sepanjang hidup orchestrator** (didaftarkan di `__init__`, beda dari subscriber sementara per-giliran yang dipakai `run()` untuk streaming UI) — menulis event LEVEL TINGGI (`status`/`file_created`/`guardrail`/`usage`) ke tabel `agent_events` agar replay-able **lintas-restart proses** (`EventBus.events` in-memory hilang saat restart). `token`/`thinking` SENGAJA di-skip (volume besar per turn, isi lengkap sudah ada di `conversations.transcript_json` — token-first §1.4). Fail-soft, pola sama `_persist`.
 
 **`_persist(initial_message, state, end_reason, totals)`** *(async, private)*
 Simpan transkrip ke tabel `conversations` (pattern, participants, transcript JSON, turns, end_reason, cost). Fail-soft — arsip bukan jalur kritis. Satu baris per run.
 
 ### Fungsi: `make_strategy(pattern, participants, rounds, config) → TurnStrategy`
 Bangun strategy dari parameter request (`pipeline`/`debate`/`orchestrator`); default participants dari config.
+
+---
+
+## `core/event_bus.py` — Event-Driven Runtime (TODO.md § Prioritas 4)
+
+Event bus in-process murni Python (`asyncio.Queue` + callback registry) — **TANPA broker eksternal**. Menjawab "agent jadi producer/consumer event, bukan saling panggil langsung" untuk komunikasi antar-role di `core/conversation.py`. Extractable (§1.6): tanpa dependency web/DB/config.
+
+### Dataclass: `Event`
+`topic: str`, `payload: Any` — satu entri di `EventBus.events` (untuk replay/audit, terpisah dari mekanisme subscribe langsung).
+
+### Kelas: `EventBus`
+
+| Method | Keterangan |
+|---|---|
+| `subscribe(topic, handler)` | Daftarkan callback async untuk topic |
+| `unsubscribe(topic, handler)` | Hapus callback (no-op bila tak terdaftar) |
+| `publish(topic, payload) → None` *(async)* | Panggil SEMUA handler subscribe topic itu (fail-safe: satu handler exception di-log, tidak menghentikan handler lain atau melempar dari `publish()`), LALU taruh `Event(topic, payload)` ke `self.events` (`asyncio.Queue`) untuk replay tanpa perlu subscribe di awal |
+
+**Jalur upgrade opsional (evaluasi, BUKAN implementasi — TODO.md § Prioritas 4 item 3):** versi ini sengaja single-proses/in-memory. Untuk deployment yang butuh skala LINTAS-PROSES (mis. worker terpisah per role, horizontal scaling), dua jalur upgrade dievaluasi:
+
+- **PostgreSQL LISTEN/NOTIFY** — paling murah secara operasional bila proyek sudah migrasi ke Postgres (§ TODO.md Prioritas 5, multi-tenant). Native ke DB yang sudah ada, tanpa infra tambahan. Batasan: payload NOTIFY terbatas ~8KB, tidak ada persistent queue bawaan (consumer yang sedang down akan kehilangan notifikasi, perlu polling `agent_events` sebagai fallback).
+- **NATS** — lebih cocok bila kebutuhan sudah melampaui satu database tunggal (throughput tinggi, banyak consumer independen, deployment multi-region). Butuh infra tambahan (broker terpisah) — TIDAK diaktifkan kecuali ada pilot nyata yang membutuhkannya (prinsip token-first/minimalis §1.4, §8: jangan bangun kompleksitas yang belum terbukti perlu).
+
+Keduanya TIDAK diaktifkan sekarang — `EventBus` in-process + persist `agent_events` sudah cukup untuk single-proses (skala saat ini). Migrasi ke salah satu jalur ini hanya dilakukan saat ada bukti konkret (pilot/beban nyata) yang membutuhkan skala lintas-proses, bukan spekulatif.
 
 ---
 

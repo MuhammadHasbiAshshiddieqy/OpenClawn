@@ -351,3 +351,21 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
     enabled INTEGER NOT NULL DEFAULT 1,       -- 1 = dimuat saat startup
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ===================== AGENT EVENTS [Event-Driven Runtime, TODO.md § Prioritas 4] =====================
+-- Event-sourcing RINGAN di atas SQLite yang sudah ada (bukan migrasi database
+-- baru) — persist event LEVEL TINGGI (status/file_created/guardrail/usage) dari
+-- ConversationOrchestrator.event_bus agar replay-able LINTAS-RESTART proses
+-- (EventBus.events in-memory hilang saat proses restart). SENGAJA TIDAK
+-- menyimpan token/thinking granular (bisa >1000 event per turn, isi lengkapnya
+-- sudah ada di conversations.transcript_json/session_turns) — token-first §1.4.
+CREATE TABLE IF NOT EXISTS agent_events (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    turn_index INTEGER NOT NULL,
+    event_type TEXT NOT NULL,                 -- status | file_created | guardrail | usage
+    payload_json TEXT,                        -- detail/approval_id/usage dict sebagai JSON
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events(session_id, turn_index);
