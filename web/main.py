@@ -56,6 +56,14 @@ from security.auth import (
     verify_login_token,
     verify_session_token,
 )
+from security.oidc import (
+    OIDCError,
+    build_authorize_url,
+    exchange_code,
+    generate_nonce,
+    generate_state,
+    verify_id_token,
+)
 from security.question import QuestionGate
 from security.rate_limit import RateLimiter
 from tools import TOOL_REGISTRY
@@ -193,7 +201,7 @@ async def _ui_ctx(page: str = "", request: Request | None = None) -> dict:
     `csrf_token` diambil dari cookie (diset saat login) agar template bisa
     menyuntikkannya ke tiap form POST (`security/auth.py`, §P0). Kosong bila
     auth nonaktif (cookie tak pernah diset) — form tetap render, middleware
-    hanya menegakkan CSRF saat `CONFIG.auth_token` terisi.
+    hanya menegakkan CSRF saat `CONFIG.auth_active` (shared-secret ATAU OIDC).
     """
     locale = await SettingsStore(db).get_ui_locale()
     csrf = request.cookies.get(CSRF_COOKIE, "") if request else ""
@@ -202,7 +210,7 @@ async def _ui_ctx(page: str = "", request: Request | None = None) -> dict:
         "locale": locale,
         "page": page,
         "csrf_token": csrf,
-        "auth_enabled": bool(CONFIG.auth_token),
+        "auth_enabled": CONFIG.auth_active,
     }
 
 
@@ -226,7 +234,8 @@ async def lifespan(app: FastAPI):
         ollama=("up" if ollama_ok else "down"),
         anthropic_key=bool(os.environ.get("ANTHROPIC_API_KEY")),
         gemini_key=bool(os.environ.get("GOOGLE_API_KEY")),
-        auth_enabled=bool(CONFIG.auth_token),
+        auth_enabled=CONFIG.auth_active,
+        oidc_enabled=_oidc_configured(),
     )
     if not ollama_ok and not (
         os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -236,11 +245,20 @@ async def lifespan(app: FastAPI):
             hint="Ollama down dan tak ada API key cloud terkonfigurasi — "
             "agent tak akan bisa menjawab sampai salah satu tersedia.",
         )
-    if not CONFIG.auth_token:
+    if not CONFIG.auth_active:
         log.warning(
             "startup_auth_disabled",
-            hint="OPENCLAWN_AUTH_TOKEN kosong — siapa pun yang reach port ini "
-            "bisa memakai agent tanpa login. Aman HANYA di localhost/VPN.",
+            hint="OPENCLAWN_AUTH_TOKEN dan OIDC keduanya kosong — siapa pun "
+            "yang reach port ini bisa memakai agent tanpa login. Aman HANYA "
+            "di localhost/VPN.",
+        )
+    elif not CONFIG.auth_token and not os.environ.get("OPENCLAWN_SESSION_SECRET"):
+        log.warning(
+            "startup_oidc_without_session_secret",
+            hint="OIDC aktif tanpa OPENCLAWN_AUTH_TOKEN atau "
+            "OPENCLAWN_SESSION_SECRET — sesi ditandatangani secret ACAK yang "
+            "hilang tiap restart (semua user ter-logout). Isi salah satu di "
+            ".env agar sesi bertahan lintas-restart.",
         )
     # Muat tool dari server MCP eksternal yang enabled → TOOL_REGISTRY (fail-safe).
     # Server tak terjangkau di-skip; tool MCP selalu requires_approval (§1).
@@ -266,9 +284,12 @@ templates = Jinja2Templates(directory="web/templates")
 async def auth_and_csrf_middleware(request: Request, call_next):
     """Self-host auth + CSRF + rate limit (§P0 production-readiness).
 
-    Auth+CSRF DIMATIKAN bila `CONFIG.auth_token` kosong (default) — perilaku lama
-    tetap jalan tanpa login, aman untuk localhost dev. Diaktifkan hanya bila
-    OPENCLAWN_AUTH_TOKEN diisi di .env (self-host di VPS publik).
+    Auth+CSRF DIMATIKAN bila `CONFIG.auth_active` False (default, keduanya
+    kosong) — perilaku lama tetap jalan tanpa login, aman untuk localhost dev.
+    Diaktifkan bila OPENCLAWN_AUTH_TOKEN ATAU OIDC (TODO.md § Prioritas 5)
+    diisi di .env — sesi ditandatangani `CONFIG.session_secret` (BUKAN
+    `auth_token` langsung), agar OIDC-only tanpa `auth_token` tetap punya
+    secret sesi yang valid (lihat `infra/config.py::AppConfig.session_secret`).
 
     Rate limit SELALU aktif (independen dari auth) — endpoint LLM tetap perlu
     dibatasi biayanya walau auth dimatikan (mis. localhost dev yang lupa
@@ -284,14 +305,16 @@ async def auth_and_csrf_middleware(request: Request, call_next):
     path = request.url.path
     refresh_session_cookie = False
 
-    if CONFIG.auth_token and not is_public_path(path):
+    if CONFIG.auth_active and not is_public_path(path):
         effective_max_age = (
             min(CONFIG.idle_timeout_sec, SESSION_MAX_AGE_SEC)
             if CONFIG.idle_timeout_sec
             else SESSION_MAX_AGE_SEC
         )
         session_valid = verify_session_token(
-            request.cookies.get(SESSION_COOKIE), CONFIG.auth_token, max_age_sec=effective_max_age
+            request.cookies.get(SESSION_COOKIE),
+            CONFIG.session_secret,
+            max_age_sec=effective_max_age,
         )
         if not session_valid:
             if request.method == "GET":
@@ -335,7 +358,7 @@ async def auth_and_csrf_middleware(request: Request, call_next):
     if refresh_session_cookie:
         response.set_cookie(
             SESSION_COOKIE,
-            create_session_token(CONFIG.auth_token),
+            create_session_token(CONFIG.session_secret),
             max_age=SESSION_MAX_AGE_SEC,
             httponly=True,
             samesite="lax",
@@ -365,15 +388,44 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
+def _oidc_configured() -> bool:
+    return bool(CONFIG.oidc_issuer and CONFIG.oidc_client_id and CONFIG.oidc_client_secret)
+
+
+def _issue_session_cookies(resp: RedirectResponse) -> None:
+    """Set cookie sesi + CSRF — dipakai KEDUA jalur login (shared-secret & OIDC),
+    karena setelah verifikasi identitas berhasil, mekanisme sesi sama persis."""
+    resp.set_cookie(
+        SESSION_COOKIE,
+        create_session_token(CONFIG.session_secret),
+        max_age=SESSION_MAX_AGE_SEC,
+        httponly=True,
+        samesite="lax",
+    )
+    resp.set_cookie(
+        CSRF_COOKIE,
+        generate_csrf_token(),
+        max_age=SESSION_MAX_AGE_SEC,
+        httponly=False,  # harus terbaca JS/Jinja untuk disuntik ke form
+        samesite="lax",
+    )
+
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, next: str = "/", error: bool = False):
-    if not CONFIG.auth_token:
+    if not CONFIG.auth_active:
         return RedirectResponse(url="/", status_code=303)
     locale = await SettingsStore(db).get_ui_locale()
     return templates.TemplateResponse(
         request,
         "login.html",
-        {"t": translator(locale), "next": next, "error": error},
+        {
+            "t": translator(locale),
+            "next": next,
+            "error": error,
+            "shared_secret_enabled": bool(CONFIG.auth_token),
+            "oidc_enabled": _oidc_configured(),
+        },
     )
 
 
@@ -391,20 +443,89 @@ async def login_submit(request: Request):
 
     log.info("login_ok", ip=request.client.host if request.client else "unknown")
     resp = RedirectResponse(url=next_url, status_code=303)
+    _issue_session_cookies(resp)
+    return resp
+
+
+# Cookie sementara untuk `state`/`nonce` antara redirect awal dan callback (TODO.md
+# § Prioritas 5) — httponly, umur pendek (10 menit, cukup untuk login flow wajar),
+# TERPISAH dari SESSION_COOKIE (bukan sesi terautentikasi, hanya anti-CSRF/replay
+# selama proses login berlangsung).
+_OIDC_STATE_COOKIE = "openclawn_oidc_state"
+_OIDC_NONCE_COOKIE = "openclawn_oidc_nonce"
+_OIDC_FLOW_MAX_AGE_SEC = 600
+
+
+@app.get("/login/oidc")
+async def login_oidc_start(request: Request, next: str = "/"):
+    """Mulai alur OIDC: redirect ke authorization_endpoint provider dengan state/nonce baru."""
+    if not _oidc_configured():
+        return RedirectResponse(url="/login", status_code=303)
+    if not next.startswith("/") or next.startswith("//"):
+        next = "/"
+
+    state = generate_state()
+    nonce = generate_nonce()
+    redirect_uri = f"{CONFIG.oidc_redirect_base.rstrip('/')}/auth/callback"
+    try:
+        authorize_url = await build_authorize_url(
+            CONFIG.oidc_issuer, CONFIG.oidc_client_id, redirect_uri, state, nonce
+        )
+    except OIDCError as e:
+        log.error("oidc_authorize_url_failed", error=str(e))
+        return RedirectResponse(url="/login?error=true", status_code=303)
+
+    resp = RedirectResponse(url=authorize_url, status_code=303)
+    # `next` disematkan ke state cookie (bukan query provider) agar tak bocor/diubah
+    # via redirect provider — dibaca lagi persis di callback lewat cookie yang sama.
     resp.set_cookie(
-        SESSION_COOKIE,
-        create_session_token(CONFIG.auth_token),
-        max_age=SESSION_MAX_AGE_SEC,
+        _OIDC_STATE_COOKIE,
+        f"{state}:{next}",
+        max_age=_OIDC_FLOW_MAX_AGE_SEC,
         httponly=True,
         samesite="lax",
     )
     resp.set_cookie(
-        CSRF_COOKIE,
-        generate_csrf_token(),
-        max_age=SESSION_MAX_AGE_SEC,
-        httponly=False,  # harus terbaca JS/Jinja untuk disuntik ke form
-        samesite="lax",
+        _OIDC_NONCE_COOKIE, nonce, max_age=_OIDC_FLOW_MAX_AGE_SEC, httponly=True, samesite="lax"
     )
+    return resp
+
+
+@app.get("/auth/callback")
+async def oidc_callback(request: Request, code: str = "", state: str = ""):
+    """Kembalian dari provider OIDC: tukar code → id_token, verifikasi, buat sesi.
+
+    Gagal di titik manapun (state tak cocok, network, verifikasi token) → tolak
+    login, redirect ke /login?error=true — TIDAK fail-open."""
+    if not _oidc_configured():
+        return RedirectResponse(url="/login", status_code=303)
+
+    cookie_state_raw = request.cookies.get(_OIDC_STATE_COOKIE, "")
+    cookie_nonce = request.cookies.get(_OIDC_NONCE_COOKIE, "")
+    cookie_state, _, next_url = cookie_state_raw.partition(":")
+    next_url = next_url or "/"
+
+    if not code or not state or not cookie_state or state != cookie_state:
+        log.warning("oidc_state_mismatch", ip=request.client.host if request.client else "unknown")
+        return RedirectResponse(url="/login?error=true", status_code=303)
+
+    redirect_uri = f"{CONFIG.oidc_redirect_base.rstrip('/')}/auth/callback"
+    try:
+        id_token = await exchange_code(
+            CONFIG.oidc_issuer, CONFIG.oidc_client_id, CONFIG.oidc_client_secret, redirect_uri, code
+        )
+        claims = await verify_id_token(
+            CONFIG.oidc_issuer, CONFIG.oidc_client_id, id_token, expected_nonce=cookie_nonce
+        )
+    except OIDCError as e:
+        log.warning("oidc_login_failed", error=str(e))
+        return RedirectResponse(url="/login?error=true", status_code=303)
+
+    log.info("oidc_login_ok", subject=claims.subject, email=claims.email)
+    resp = RedirectResponse(url=next_url, status_code=303)
+    _issue_session_cookies(resp)
+    resp.delete_cookie(_OIDC_STATE_COOKIE)
+    resp.delete_cookie(_OIDC_NONCE_COOKIE)
     return resp
 
 
@@ -474,7 +595,8 @@ async def health():
             "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
             "gemini": bool(os.environ.get("GOOGLE_API_KEY")),
         },
-        "auth_enabled": bool(CONFIG.auth_token),
+        "auth_enabled": CONFIG.auth_active,
+        "oidc_enabled": _oidc_configured(),
         "tools": len(TOOL_REGISTRY),
     }
 

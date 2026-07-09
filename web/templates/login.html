@@ -22,6 +22,7 @@
         {% if error %}
         <p class="login-error">{{ t('login.error') }}</p>
         {% endif %}
+        {% if shared_secret_enabled %}
         <form method="post" action="/login">
             <input type="hidden" name="next" value="{{ next or '/' }}">
             <label for="token">{{ t('login.token_label') }}</label>
@@ -29,6 +30,13 @@
             <button type="submit" class="btn" style="width:100%;margin-top:10px">{{ t('login.submit') }}</button>
         </form>
         <p class="muted login-hint">{{ t('login.hint') }}</p>
+        {% endif %}
+        {% if shared_secret_enabled and oidc_enabled %}
+        <div class="login-divider"><span>{{ t('login.or') }}</span></div>
+        {% endif %}
+        {% if oidc_enabled %}
+        <a href="/login/oidc?next={{ next or '/' }}" class="btn" style="width:100%;display:block;text-align:center;box-sizing:border-box">{{ t('login.oidc_submit') }}</a>
+        {% endif %}
     </div>
 </div>
 </body>

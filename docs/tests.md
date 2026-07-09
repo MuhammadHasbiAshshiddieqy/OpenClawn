@@ -808,6 +808,51 @@ Test end-to-end untuk `auth_and_csrf_middleware` di `web/main.py` (bukan unit
 
 ---
 
+### `tests/test_oidc.py`
+
+Test untuk `security/oidc.py` (unit, tanpa HTTP web) — discovery document, JWKS,
+verifikasi ID token (TODO.md § Prioritas 5). Security-critical: signature/iss/aud/
+exp/nonce yang tak cocok HARUS ditolak. Network (discovery/JWKS/token exchange)
+di-mock via `httpx.AsyncClient` palsu — test tak pernah memanggil provider sungguhan.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_generate_state_and_nonce_are_random_and_url_safe` | Tiap panggilan menghasilkan nilai unik & URL-safe |
+| `test_build_authorize_url_includes_required_params` | URL redirect memuat `client_id`/`state`/`nonce`/`response_type=code` |
+| `test_build_authorize_url_missing_endpoint_raises` | Discovery document tanpa `authorization_endpoint` → `OIDCError` |
+| `test_exchange_code_returns_id_token` | Tukar code sukses → `id_token` mentah dikembalikan |
+| `test_exchange_code_missing_id_token_raises` | Response `token_endpoint` tanpa `id_token` → `OIDCError` |
+| `test_verify_id_token_valid_returns_claims` | Token valid (signature+klaim cocok) → `OIDCClaims` terisi benar |
+| `test_verify_id_token_wrong_issuer_rejected` | Klaim `iss` tak cocok issuer terkonfigurasi → ditolak |
+| `test_verify_id_token_wrong_audience_rejected` | Klaim `aud` tak menyertakan `client_id` kita → ditolak |
+| `test_verify_id_token_expired_rejected` | Klaim `exp` di masa lalu → ditolak |
+| `test_verify_id_token_wrong_nonce_rejected` | Klaim `nonce` tak cocok expected → ditolak (anti-replay) |
+| `test_verify_id_token_tampered_signature_rejected` | Signature token diubah → verifikasi gagal |
+| `test_verify_id_token_missing_subject_rejected` | Klaim `sub` kosong/tak ada → ditolak |
+
+---
+
+### `tests/test_oidc_web.py`
+
+Test end-to-end untuk alur login OIDC di `web/main.py` (TODO.md § Prioritas 5) —
+berbeda dari `test_auth_web.py`: OIDC dikonfigurasi SENDIRIAN (tanpa
+`OPENCLAWN_AUTH_TOKEN`) untuk membuktikan mode OIDC-only benar-benar menegakkan
+auth (bukan celah fail-open) via `CONFIG.session_secret`. Network di-mock.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_no_oidc_configured_login_oidc_redirects_to_login` | OIDC tak dikonfigurasi → `/login/oidc` redirect `/login` |
+| `test_no_oidc_health_reports_oidc_disabled` | `/health.oidc_enabled == False` saat OIDC kosong |
+| `test_oidc_only_root_redirects_unauthenticated_to_login` | **CRITICAL:** OIDC-only (tanpa `auth_token`) tetap redirect `/` ke `/login` — bukan fail-open |
+| `test_oidc_only_health_reports_auth_and_oidc_enabled` | `/health` melaporkan `auth_enabled` DAN `oidc_enabled` True saat OIDC-only |
+| `test_login_page_shows_oidc_button_when_configured` | Halaman login merender tombol/link `/login/oidc` |
+| `test_login_oidc_start_redirects_to_provider_with_state_and_nonce` | `/login/oidc` redirect ke provider dengan `state`/`nonce`, cookie sementara ter-set |
+| `test_callback_full_flow_grants_session_and_access` | Alur penuh start→callback dengan ID token valid → sesi granted, akses ke halaman terproteksi berhasil |
+| `test_callback_state_mismatch_rejected` | `state` di query tak cocok cookie → login ditolak, tak ada cookie sesi |
+| `test_callback_verification_failure_rejected` | ID token dengan `nonce` salah → login ditolak |
+
+---
+
 ### `tests/test_rate_limit.py`
 
 Test untuk `security/rate_limit.py` (`RateLimiter`) — sliding window in-memory.

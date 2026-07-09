@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 import os
+import secrets
 
 from infra.env import load_dotenv
 
@@ -19,6 +20,30 @@ class AppConfig:
     # Kosong (default) → auth DIMATIKAN, perilaku lama tetap jalan tanpa login
     # (aman untuk localhost dev). Isi di .env untuk self-host di VPS publik.
     auth_token: str = ""
+    # OAuth2/OIDC (TODO.md § Prioritas 5) — mode auth TAMBAHAN, bukan pengganti
+    # shared-secret di atas. Kosong (default) → OIDC DIMATIKAN, perilaku lama
+    # (shared-secret atau tanpa auth) tak berubah sama sekali. Operator pilih
+    # SATU provider generik yang kompatibel dengan Google/Microsoft/Okta/dsb
+    # via discovery document standar (`{issuer}/.well-known/openid-configuration`)
+    # — bukan integrasi vendor-spesifik, konsisten prinsip "no SDK vendor" (§1.6:
+    # yang dilarang adalah SDK vendor-LLM, OIDC adalah protokol terbuka seperti MCP).
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    # Base URL publik server ini, dipakai membangun redirect_uri callback
+    # (`{oidc_redirect_base}/auth/callback`) — perlu eksplisit karena self-host
+    # di belakang reverse proxy/domain kustom, tak bisa diasumsikan dari request.
+    oidc_redirect_base: str = "http://localhost:8000"
+    # Secret HMAC untuk menandatangani cookie sesi (`create_session_token`/
+    # `verify_session_token`, security/auth.py). SEBELUM OIDC ada, `auth_token`
+    # dipakai langsung sebagai secret (aman karena hanya SATU deployment shared-
+    # secret yang tahu nilainya). Dengan OIDC, operator bisa memilih TAK mengisi
+    # `auth_token` sama sekali (login HANYA lewat provider) — di situ `auth_token`
+    # kosong tak bisa jadi secret sesi. `OPENCLAWN_SESSION_SECRET` eksplisit
+    # menutup celah ini; bila juga kosong, di-generate acak saat boot (aman,
+    # tapi restart server akan me-logout semua sesi aktif — operator yang ingin
+    # sesi bertahan lintas-restart HARUS mengisi salah satu secret eksplisit).
+    session_secret: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     # Idle timeout (opt-in, TODO.md § Prioritas 1.5): logout otomatis setelah N
     # detik TAK aktif — berbeda dari SESSION_MAX_AGE_SEC (absolute expiry 7 hari
     # sejak login, tetap berlaku sebagai batas atas walau idle timeout aktif).
@@ -167,21 +192,47 @@ class AppConfig:
         )
     )
 
+    @property
+    def auth_active(self) -> bool:
+        """True bila SALAH SATU mode auth (shared-secret ATAU OIDC) aktif —
+        middleware harus menegakkan sesi. Beda dari `bool(auth_token)` lama yang
+        tak tahu soal OIDC-only (operator bisa isi OIDC tanpa auth_token sama sekali)."""
+        return bool(self.auth_token) or bool(
+            self.oidc_issuer and self.oidc_client_id and self.oidc_client_secret
+        )
+
     @classmethod
     def from_env(cls) -> "AppConfig":
-        return cls(
+        # session_secret: auth_token dulu (kompatibilitas mundur — deployment shared-
+        # secret existing tak berubah), lalu OPENCLAWN_SESSION_SECRET eksplisit
+        # (dibutuhkan untuk OIDC-only agar sesi tahan restart), baru fallback acak
+        # (default dataclass field bila kedua env kosong).
+        auth_token = os.environ.get("OPENCLAWN_AUTH_TOKEN", "")
+        explicit_session_secret = os.environ.get("OPENCLAWN_SESSION_SECRET", "")
+        kwargs = dict(
             db_path=os.environ.get("OPENCLAWN_DB", "data/openclawn.db"),
             ollama_base=os.environ.get("OLLAMA_BASE", "http://localhost:11434"),
             anthropic_base=os.environ.get("ANTHROPIC_BASE", "https://api.anthropic.com"),
             gemini_base=os.environ.get("GEMINI_BASE", "https://generativelanguage.googleapis.com"),
             workspace_root=os.environ.get("OPENCLAWN_WORKSPACE", "."),
-            auth_token=os.environ.get("OPENCLAWN_AUTH_TOKEN", ""),
+            auth_token=auth_token,
+            oidc_issuer=os.environ.get("OPENCLAWN_OIDC_ISSUER", ""),
+            oidc_client_id=os.environ.get("OPENCLAWN_OIDC_CLIENT_ID", ""),
+            oidc_client_secret=os.environ.get("OPENCLAWN_OIDC_CLIENT_SECRET", ""),
+            oidc_redirect_base=os.environ.get(
+                "OPENCLAWN_OIDC_REDIRECT_BASE", "http://localhost:8000"
+            ),
             idle_timeout_sec=(
                 int(os.environ["OPENCLAWN_IDLE_TIMEOUT_SEC"])
                 if os.environ.get("OPENCLAWN_IDLE_TIMEOUT_SEC")
                 else None
             ),
         )
+        if auth_token:
+            kwargs["session_secret"] = auth_token
+        elif explicit_session_secret:
+            kwargs["session_secret"] = explicit_session_secret
+        return cls(**kwargs)
 
 
 # Singleton global — di-inject ke semua modul via dependency injection

@@ -22,8 +22,12 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `ollama_base` | `http://localhost:11434` | URL base Ollama |
 | `anthropic_base` | `https://api.anthropic.com` | URL base Anthropic API |
 | `gemini_base` | `https://generativelanguage.googleapis.com` | URL base Google AI Studio (Gemini) |
-| `auth_token` | `""` (kosong) | §P0 self-host auth — password shared satu-satunya user. Kosong = auth DIMATIKAN (default, aman localhost). Isi via `OPENCLAWN_AUTH_TOKEN` di `.env` untuk self-host di VPS publik. Lihat `security/auth.py` & README § Scope and Production Posture |
-| `idle_timeout_sec` | `None` (OFF) | Opt-in, TODO.md § Prioritas 1.5 — logout otomatis setelah N detik TAK aktif (beda dari `SESSION_MAX_AGE_SEC` = absolute expiry 7 hari sejak login, tetap berlaku sebagai batas atas). Isi via `OPENCLAWN_IDLE_TIMEOUT_SEC` di `.env`. Hanya berpengaruh bila `auth_token` juga diisi. Lihat `security/auth.py` & middleware `auth_and_csrf_middleware` di `web/main.py` |
+| `auth_token` | `""` (kosong) | §P0 self-host auth — password shared satu-satunya user. Kosong = mode shared-secret DIMATIKAN (default, aman localhost). Isi via `OPENCLAWN_AUTH_TOKEN` di `.env` untuk self-host di VPS publik. Lihat `security/auth.py` & README § Scope and Production Posture |
+| `oidc_issuer`, `oidc_client_id`, `oidc_client_secret` | `""` (kosong) | OAuth2/OIDC login (TODO.md § Prioritas 5) — mode auth TAMBAHAN, bukan pengganti shared-secret. Kosong (salah satu saja) = OIDC DIMATIKAN. Isi via `OPENCLAWN_OIDC_ISSUER`/`OPENCLAWN_OIDC_CLIENT_ID`/`OPENCLAWN_OIDC_CLIENT_SECRET`. Lihat `security/oidc.py` |
+| `oidc_redirect_base` | `http://localhost:8000` | Base URL publik server, dipakai membangun `redirect_uri` callback (`{ini}/auth/callback`). HARUS diisi eksplisit (`OPENCLAWN_OIDC_REDIRECT_BASE`) untuk self-host di belakang reverse proxy/domain kustom |
+| `session_secret` | acak per-boot (`secrets.token_urlsafe(32)`) | Secret HMAC untuk menandatangani cookie sesi. `from_env()` resolve: `auth_token` (bila diisi, kompatibilitas mundur) → `OPENCLAWN_SESSION_SECRET` eksplisit → fallback acak. **Operator OIDC-only (tanpa `auth_token`) HARUS mengisi `OPENCLAWN_SESSION_SECRET`** agar sesi tak hilang tiap restart server |
+| `auth_active` | *(property, bukan field)* | `True` bila SALAH SATU mode auth (`auth_token` ATAU OIDC) aktif — dipakai middleware, BUKAN `bool(auth_token)` lama yang tak tahu soal OIDC-only |
+| `idle_timeout_sec` | `None` (OFF) | Opt-in, TODO.md § Prioritas 1.5 — logout otomatis setelah N detik TAK aktif (beda dari `SESSION_MAX_AGE_SEC` = absolute expiry 7 hari sejak login, tetap berlaku sebagai batas atas). Isi via `OPENCLAWN_IDLE_TIMEOUT_SEC` di `.env`. Hanya berpengaruh bila auth aktif (`auth_active`). Lihat `security/auth.py` & middleware `auth_and_csrf_middleware` di `web/main.py` |
 | `max_context_tokens` | `28_000` | Batas token context window |
 | `max_tool_hops` | `5` | Maksimum iterasi tool loop per turn |
 | `llm_max_tokens_default` | `4096` | Cap output per hop LLM saat hop TANPA tool (`tools_schema` kosong, mis. ringkas percakapan di `_maybe_compact`) |
@@ -63,6 +67,8 @@ Baca konfigurasi dari environment variables. Variabel yang dibaca:
 - `OLLAMA_BASE` → `ollama_base`
 - `ANTHROPIC_BASE` → `anthropic_base`
 - `GEMINI_BASE` → `gemini_base`
+- `OPENCLAWN_OIDC_ISSUER`/`OPENCLAWN_OIDC_CLIENT_ID`/`OPENCLAWN_OIDC_CLIENT_SECRET`/`OPENCLAWN_OIDC_REDIRECT_BASE` → field `oidc_*`
+- `OPENCLAWN_SESSION_SECRET` → `session_secret` (hanya dipakai bila `auth_token` kosong — lihat tabel field di atas)
 
 > **API key** (`ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`) tidak masuk `AppConfig` — diambil saat dibutuhkan lewat `Vault` (lihat [security.md](security.md)), bukan disimpan di config.
 

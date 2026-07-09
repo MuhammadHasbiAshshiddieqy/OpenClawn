@@ -660,6 +660,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Single-user instance — the token is set via OPENCLAWN_AUTH_TOKEN.",
         "id": "Instansi single-user — token diatur lewat OPENCLAWN_AUTH_TOKEN.",
     },
+    "login.or": {"en": "or", "id": "atau"},
+    "login.oidc_submit": {
+        "en": "Sign in with SSO",
+        "id": "Masuk dengan SSO",
+    },
     "nav.logout": {"en": "Sign out", "id": "Keluar"},
     # ── Error pages ───────────────────────────────────────────────────────────
     "error.404_title": {"en": "Page not found", "id": "Halaman tidak ditemukan"},

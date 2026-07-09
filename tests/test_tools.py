@@ -504,13 +504,21 @@ async def test_approval_called_for_destructive_tool():
 
 @pytest.mark.asyncio
 async def test_approval_log_contains_tool_input():
-    """Approval log harus menyimpan tool_input untuk audit trail."""
+    """Approval log harus menyimpan tool_input untuk audit trail.
+
+    Regresi performa: request() TIDAK di-resolve di sini (tak ada `.resolve()`
+    dipanggil), jadi tadinya menunggu penuh approval_timeout_sec DEFAULT (120s)
+    sebelum fail-safe timeout mengembalikan kontrol — bikin test ini (dan suite
+    penuh) makan waktu 2 menit ekstra, terlihat seperti hang padahal cuma lambat.
+    approval_timeout_sec di-set sangat kecil karena test ini hanya perlu baris
+    ter-insert SEGERA saat request() dipanggil, bukan menunggu siklus timeout.
+    """
     from security.approval import ApprovalGate
     from infra.config import AppConfig
     from infra.database import DatabaseManager
     import json
 
-    cfg = AppConfig(db_path=":memory:")
+    cfg = AppConfig(db_path=":memory:", approval_timeout_sec=1)
     db = DatabaseManager(cfg)
     with open("migrations/001_initial.sql") as f:
         conn = await db.conn()

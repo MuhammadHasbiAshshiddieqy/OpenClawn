@@ -21,3 +21,12 @@
     padding: 9px 12px; font-size: .85rem; margin-bottom: 14px;
 }
 .login-hint { text-align: center; margin-top: 16px; font-size: .78rem; }
+/* OAuth2/OIDC (TODO.md § Prioritas 5) — separator antara form shared-secret dan tombol SSO */
+.login-divider {
+    display: flex; align-items: center; text-align: center;
+    margin: 16px 0; color: var(--text-dim); font-size: .78rem;
+}
+.login-divider::before, .login-divider::after {
+    content: ""; flex: 1; border-bottom: 1px solid var(--border-2);
+}
+.login-divider span { padding: 0 10px; }

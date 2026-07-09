@@ -251,10 +251,21 @@ Jika user tidak merespons dalam `approval_timeout_sec` (default 120 detik) → F
 stdlib (`hmac` + `secrets`) — sengaja tidak memakai `itsdangerous`/`SessionMiddleware`
 Starlette agar tidak menambah dependency baru (§7) tanpa persetujuan eksplisit.
 
-**Fail-open by default:** `CONFIG.auth_token` kosong (default) → seluruh
+**Fail-open by default:** `CONFIG.auth_active` False (baik `auth_token` MAUPUN
+OIDC — lihat `security/oidc.py` di bawah — keduanya kosong, default) → seluruh
 middleware auth di `web/main.py` di-skip, perilaku lama (tanpa login) tetap
-jalan — aman untuk localhost dev. Diaktifkan hanya bila `OPENCLAWN_AUTH_TOKEN`
-diisi di `.env` (self-host di VPS publik, lihat README § Scope & Production Posture).
+jalan — aman untuk localhost dev. Diaktifkan bila `OPENCLAWN_AUTH_TOKEN` ATAU
+OIDC diisi di `.env` (self-host di VPS publik, lihat README § Scope & Production Posture).
+
+**Session secret independen dari `auth_token`** (TODO.md § Prioritas 5):
+`create_session_token`/`verify_session_token` menerima `CONFIG.session_secret`,
+BUKAN `auth_token` langsung — sebelum OIDC ada, keduanya identik (aman, hanya
+SATU deployment shared-secret yang tahu nilainya). Dengan OIDC, operator bisa
+memilih login HANYA lewat provider (tanpa `auth_token` sama sekali) — di situ
+`auth_token` kosong tak bisa jadi secret HMAC. `session_secret` resolve:
+`auth_token` (bila diisi) → `OPENCLAWN_SESSION_SECRET` eksplisit → fallback acak
+saat boot (aman, tapi restart me-logout semua sesi — operator OIDC-only yang
+ingin sesi bertahan lintas-restart HARUS mengisi `OPENCLAWN_SESSION_SECRET`).
 
 **`create_session_token(secret) → str`**  
 Token sesi `{timestamp}.{hmac_hex}` ditandatangani HMAC-SHA256. Dipanggil saat login sukses.
@@ -295,6 +306,72 @@ diisi, middleware melakukan dua hal tambahan:
 
 Default `None` (OFF) → kedua langkah di atas di-skip sepenuhnya, perilaku lama
 (hanya absolute expiry 7 hari) tak berubah.
+
+---
+
+## `security/oidc.py` — OAuth2/OIDC login (TODO.md § Prioritas 5)
+
+Mode auth **TAMBAHAN** di samping shared-secret di atas, bukan penggantinya —
+operator pilih SATU provider generik yang kompatibel Google/Microsoft/Okta/dsb
+via discovery document standar (`{issuer}/.well-known/openid-configuration`),
+BUKAN integrasi vendor-spesifik. `authlib` (httpx-based, konsisten stack) untuk
+JWKS verification via `joserfc` — bukan implementasi JWT manual sendiri (risiko
+bug keamanan lebih tinggi ketimbang library teraudit). Dependency baru disetujui
+owner secara eksplisit; OIDC adalah protokol terbuka (seperti MCP), bukan SDK
+vendor-LLM, jadi tak melanggar prinsip "no SDK Anthropic/OpenAI" (§1.6 — yang
+dilarang khusus SDK vendor-LLM).
+
+Alur (Authorization Code + state/nonce, TANPA PKCE — client_secret confidential
+client cukup untuk server-side self-host; PKCE penting untuk public client
+seperti SPA/mobile yang tak bisa simpan secret):
+
+1. `GET /login/oidc` → `build_authorize_url()` → redirect ke provider dengan
+   `state` (anti-CSRF) dan `nonce` (anti-replay ID token) acak, disimpan di
+   cookie sementara `openclawn_oidc_state`/`openclawn_oidc_nonce` (httponly,
+   umur 10 menit).
+2. Provider redirect balik ke `GET /auth/callback?code=...&state=...`.
+3. `exchange_code()` — tukar `code` → `id_token` mentah (network, POST ke
+   `token_endpoint`).
+4. `verify_id_token()` — verifikasi signature (JWKS provider, cache in-process
+   TTL 1 jam) + klaim standar (`iss`/`aud`/`exp`/`nonce`) SEBELUM dipercaya.
+
+**Fail-closed, BUKAN fail-open:** gagal di titik manapun (discovery/JWKS/exchange
+network error, signature tak valid, `iss`/`aud`/`exp`/`nonce` tak cocok) →
+`OIDCError`, login DITOLAK (redirect `/login?error=true`) — beda dari
+`auth_token` kosong yang sengaja fail-open (desain opt-in lama). OIDC yang SUDAH
+dikonfigurasi harus verifikasi ketat, tanpa pengecualian.
+
+### Dataclass: `OIDCClaims`
+
+`subject`, `email`, `name` — klaim ID token yang relevan setelah verifikasi berhasil.
+
+### Fungsi
+
+**`generate_state() → str`** / **`generate_nonce() → str`**  
+Token acak (`secrets.token_urlsafe(32)`) untuk anti-CSRF (state) dan anti-replay (nonce).
+
+**`build_authorize_url(issuer, client_id, redirect_uri, state, nonce) → str`** *(async)*  
+Ambil discovery document (cache TTL 1 jam), susun URL `authorization_endpoint` +
+`response_type=code&scope=openid email profile&state=...&nonce=...`.
+
+**`exchange_code(issuer, client_id, client_secret, redirect_uri, code) → str`** *(async)*  
+POST ke `token_endpoint`, return `id_token` MENTAH (belum diverifikasi) — caller
+WAJIB memanggil `verify_id_token()` sebelum mempercayai isinya.
+
+**`verify_id_token(issuer, client_id, id_token, expected_nonce) → OIDCClaims`** *(async)*  
+Verifikasi signature via JWKS provider (`joserfc.jwt.decode`, algoritma RS256/ES256)
++ klaim `iss`/`aud`/`exp`/`nonce`/`sub`. Gagal di titik manapun → `OIDCError`.
+
+Setelah verifikasi sukses, sesi yang diterbitkan (`web/main.py::_issue_session_cookies`)
+SAMA PERSIS dengan shared-secret — OIDC hanya mengganti CARA membuktikan identitas
+di titik login, bukan mekanisme sesi setelahnya. Tetap single-user secara internal
+(§7): OIDC memverifikasi SIAPA yang login, bukan membuka multi-akun/RBAC (RBAC per
+tenant adalah sub-item Prioritas 5 terpisah, belum dikerjakan).
+
+Config: `OPENCLAWN_OIDC_ISSUER`, `OPENCLAWN_OIDC_CLIENT_ID`,
+`OPENCLAWN_OIDC_CLIENT_SECRET`, `OPENCLAWN_OIDC_REDIRECT_BASE` (default
+`http://localhost:8000`, HARUS diisi eksplisit untuk self-host di belakang
+reverse proxy/domain kustom — tak bisa diasumsikan dari request).
 
 ---
 
@@ -374,6 +451,7 @@ Dievaluasi di **DUA titik** (defense-in-depth, pola sama `_TRUST_MODE_EXEMPT`):
 | `ApprovalGate` | Tool destruktif jalan tanpa izin | Tool execution |
 | `PolicyEngine` | Kondisi spesifik tool (path/domain/nilai) yang allow-list statis tak bisa tangkap | Tool execution (sebelum approval) |
 | `QuestionGate` | (bukan keamanan) klarifikasi interaktif `ask_user` | Tool execution |
-| `security/auth.py` | Akses tanpa login saat self-host publik (opt-in) | Semua route (kecuali `/health`, `/login`, `/static/*`) |
+| `security/auth.py` | Akses tanpa login saat self-host publik (opt-in) | Semua route (kecuali `/health`, `/login`, `/login/oidc`, `/auth/callback`, `/static/*`) |
+| `security/oidc.py` | Login via SSO enterprise (Google/Microsoft/Okta/dsb), opt-in | `/login/oidc`, `/auth/callback` |
 | `security/rate_limit.py` | Biaya LLM tak terkendali / DoS sederhana | `/chat/stream`, `/converse/stream` |
 | `DockerSandbox` | Kode berbahaya akses host/network | **Pertahanan utama** |

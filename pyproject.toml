@@ -32,6 +32,14 @@ dependencies = [
     # menulis serializer TOML manual sendiri). soul.toml existing TETAP TOML,
     # tidak dimigrasi — hanya clawn.yaml (file baru) yang memakai format ini.
     "pyyaml>=6.0",
+    # OAuth2/OIDC login (TODO.md § Prioritas 5) — mode auth TAMBAHAN di samping
+    # shared-secret (security/auth.py), bukan pengganti. authlib dipilih owner
+    # secara eksplisit: httpx-based (konsisten stack, bukan requests), dukung
+    # discovery document (.well-known/openid-configuration) + JWKS verification
+    # (via joserfc, dependency authlib) tanpa implementasi JWT manual sendiri
+    # (risiko bug keamanan lebih tinggi ketimbang library teraudit). OIDC adalah
+    # protokol terbuka (seperti MCP), bukan SDK vendor-LLM — tak melanggar §1.6.
+    "authlib>=1.7",
 ]
 
 [project.optional-dependencies]

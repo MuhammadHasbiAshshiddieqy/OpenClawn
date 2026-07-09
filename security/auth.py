@@ -39,7 +39,9 @@ SESSION_MAX_AGE_SEC = 7 * 24 * 3600  # 7 hari
 
 # Endpoint yang harus tetap bisa diakses TANPA login (health check monitoring,
 # aset statis untuk merender halaman login itu sendiri, dan login flow itu sendiri).
-PUBLIC_PATHS = {"/health", "/login"}
+# `/login/oidc` (redirect ke provider) dan `/auth/callback` (kembalian provider)
+# TERMASUK — pengguna belum punya sesi sama sekali di titik ini (TODO.md § Prioritas 5).
+PUBLIC_PATHS = {"/health", "/login", "/login/oidc", "/auth/callback"}
 PUBLIC_PREFIXES = ("/static/",)
 
 

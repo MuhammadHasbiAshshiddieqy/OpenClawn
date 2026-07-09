@@ -18,17 +18,19 @@ approval_gate = ApprovalGate(db, CONFIG)  # singleton level app
 ### Lifespan (`lifespan`)
 
 Dipanggil oleh FastAPI saat startup dan shutdown:
-- **Startup:** setup logging, jalankan migration SQL (`migrations/001_initial.sql`), **startup health check** (§P0 production-readiness) — cek Ollama reachability + API key cloud yang terkonfigurasi, di-LOG (`startup_health`) TIDAK memblokir boot (§8: "Ollama offline ≠ agent mati"); warning terpisah bila tak ada provider LLM sama sekali terjangkau, atau bila `OPENCLAWN_AUTH_TOKEN` kosong (auth nonaktif)
+- **Startup:** setup logging, jalankan migration SQL (`migrations/001_initial.sql`), **startup health check** (§P0 production-readiness) — cek Ollama reachability + API key cloud yang terkonfigurasi, di-LOG (`startup_health`) TIDAK memblokir boot (§8: "Ollama offline ≠ agent mati"); warning terpisah bila tak ada provider LLM sama sekali terjangkau, bila TIDAK ADA mode auth aktif (`CONFIG.auth_active` False — baik shared-secret maupun OIDC, TODO.md § Prioritas 5), atau bila OIDC aktif tanpa `OPENCLAWN_AUTH_TOKEN`/`OPENCLAWN_SESSION_SECRET` eksplisit (sesi akan hilang tiap restart)
 - **Shutdown:** tutup koneksi DB
 
 ### Middleware (`auth_and_csrf_middleware`)
 
 Self-host auth + CSRF + rate limit (§P0 production-readiness, `security/auth.py` +
-`security/rate_limit.py`). **Fail-open**: `CONFIG.auth_token` kosong (default) → seluruh
-middleware di-skip, perilaku lama tanpa login tetap jalan. Aktif hanya bila
-`OPENCLAWN_AUTH_TOKEN` diisi:
+`security/oidc.py` + `security/rate_limit.py`). **Fail-open**: `CONFIG.auth_active`
+False (default, kedua mode kosong) → seluruh middleware di-skip, perilaku lama tanpa
+login tetap jalan. Aktif bila `OPENCLAWN_AUTH_TOKEN` ATAU OIDC diisi — sesi
+ditandatangani `CONFIG.session_secret` (BUKAN `auth_token` langsung, lihat
+`docs/security.md` § `security/auth.py` untuk kenapa):
 1. Sesi tak valid → redirect `/login` (GET) atau 401 JSON (non-GET). `/health`, `/login`,
-   `/static/*` selalu publik.
+   `/login/oidc`, `/auth/callback`, `/static/*` selalu publik.
 2. POST form biasa tanpa `csrf_token` cocok (cookie vs field form) → 403 JSON. Endpoint
    SSE/fetch JS (`/chat/stream`, `/converse/stream`, `/converse/interject`,
    `/converse/stop`, `/answer`, `/approve`) di-exempt — dilindungi cookie auth +
@@ -52,7 +54,9 @@ client.
 **Health check** untuk monitoring self-hosted (single-user, §7) + Docker healthcheck.
 Verifikasi DB (`SELECT 1` murah) + Ollama (`GET /api/tags`, timeout 2s) + key cloud yang
 terkonfigurasi. Return JSON `{ok, service, database: "up"|"down", ollama: "up"|"down",
-cloud_keys: {anthropic, gemini}, auth_enabled, tools}`. `ok` hanya bergantung DB — Ollama
+cloud_keys: {anthropic, gemini}, auth_enabled, oidc_enabled, tools}` — `auth_enabled`
+mencerminkan `CONFIG.auth_active` (shared-secret ATAU OIDC), `oidc_enabled` khusus
+menandai apakah OIDC spesifiknya dikonfigurasi (TODO.md § Prioritas 5). `ok` hanya bergantung DB — Ollama
 down TIDAK membuat `ok=False` (fallback chain menangani), dilaporkan terpisah di `ollama`.
 Dipakai oleh `docker-compose.yml` healthcheck (stdlib `urllib`, bukan `curl` — image slim
 tak menyertakannya).
@@ -63,16 +67,40 @@ tak menyertakannya).
 
 **Self-host auth** (§P0 production-readiness, opt-in via `OPENCLAWN_AUTH_TOKEN`).
 
-`GET /login` → redirect `/` bila auth nonaktif; render `login.html` (form password,
-query `?next=` dibawa sebagai hidden field, `?error=true` menampilkan pesan token salah).
+`GET /login` → redirect `/` bila `CONFIG.auth_active` False (tak ada mode auth
+aktif sama sekali); render `login.html` (form password bila `shared_secret_enabled`,
+tombol SSO bila `oidc_enabled` — keduanya bisa aktif bersamaan, lihat § OIDC di
+bawah). Query `?next=` dibawa sebagai hidden field, `?error=true` menampilkan
+pesan token salah.
 
 `POST /login` → verifikasi `token` vs `OPENCLAWN_AUTH_TOKEN` (constant-time). Salah →
-redirect `/login?error=true`. Benar → set cookie `openclawn_session` (signed HMAC, 7 hari)
-+ `openclawn_csrf` (dibaca template untuk field CSRF form), redirect ke `next` (divalidasi
-harus path relatif — cegah open-redirect ke domain eksternal).
+redirect `/login?error=true`. Benar → set cookie `openclawn_session` (signed HMAC,
+7 hari, ditandatangani `CONFIG.session_secret`) + `openclawn_csrf` (dibaca template
+untuk field CSRF form), redirect ke `next` (divalidasi harus path relatif — cegah
+open-redirect ke domain eksternal).
 
 `POST /logout` → hapus kedua cookie, redirect `/login`. Butuh `csrf_token` valid seperti
 form lain (tombol Sign out di sidebar, hanya tampil bila `auth_enabled`).
+
+---
+
+#### `GET /login/oidc`, `GET /auth/callback`
+
+**OAuth2/OIDC login** (TODO.md § Prioritas 5, opt-in via `OPENCLAWN_OIDC_ISSUER`
++ `OPENCLAWN_OIDC_CLIENT_ID` + `OPENCLAWN_OIDC_CLIENT_SECRET`). Detail alur
+lengkap & keamanan di `docs/security.md` § `security/oidc.py` — ringkasan endpoint:
+
+`GET /login/oidc` → redirect `/login` bila OIDC tak dikonfigurasi. Bila dikonfigurasi:
+generate `state`+`nonce`, simpan di cookie sementara `openclawn_oidc_state`
+(berisi `{state}:{next}`) + `openclawn_oidc_nonce` (httponly, umur 10 menit),
+redirect ke `authorization_endpoint` provider (dari discovery document).
+
+`GET /auth/callback?code=...&state=...` → validasi `state` cocok dengan cookie,
+tukar `code` → `id_token` (network), verifikasi signature+klaim (JWKS provider).
+Gagal di titik manapun → redirect `/login?error=true` (fail-closed, BUKAN
+fail-open). Sukses → set cookie sesi SAMA PERSIS seperti `POST /login` biasa
+(`_issue_session_cookies`, shared helper kedua jalur login), hapus cookie
+state/nonce sementara, redirect ke `next` yang tersimpan di cookie state.
 
 ---
 
