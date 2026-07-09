@@ -270,6 +270,22 @@ Judul di-generate `AgentLoop._generate_session_title` (dipanggil `_post_turn` di
 
 ---
 
+## `infra/users.py` — Multi-user + RBAC (TODO.md § Prioritas 5, revisi eksplisit CLAUDE.md §7)
+
+Multi-user SUNGGUHAN per tenant (bukan lagi "satu identitas per deployment") —
+revisi eksplisit CLAUDE.md §7, disetujui owner (tabel penuh, bukan role tunggal
+per identitas seperti pola bukti-konsep sub-item Prioritas 5 lain). Detail
+lengkap di `docs/security.md` § `infra/users.py` (tempat modul ini didokumentasikan
+utuh, karena erat kaitannya dengan `security/auth.py`/`security/oidc.py`) dan
+`docs/database.md` § `users`. Ringkasan:
+
+- `SHARED_SECRET_SUBJECT`, `ACCESS_ROLES = ("admin", "member", "viewer")`.
+- `role_at_least(access_role, minimum) → bool` — hierarki `viewer < member < admin`.
+- `UserStore(db, tenant_id="default")`: `upsert_on_login`, `set_access_role`,
+  `get_by_subject`, `get_by_id`, `list_users` — semua `*(async)*`.
+
+---
+
 ## `infra/manifest.py` — clawn.yaml (TODO.md § Prioritas 3)
 
 Manifest deklaratif tim/role DI ATAS `soul.toml` — operator menulis policy sekali per tool di `clawn.yaml`, bukan menyunting `[policy.*]` manual di tiap `soul.toml`. Dijalankan via `scripts/apply_manifest.py`, bukan otomatis saat startup (perubahan config harus sadar/eksplisit, bukan tersirat tiap restart).

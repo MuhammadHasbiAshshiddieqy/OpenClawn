@@ -385,3 +385,31 @@ CREATE TABLE IF NOT EXISTS agent_events (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events(session_id, turn_index);
+
+-- ===================== USERS + RBAC [TODO.md § Prioritas 5, revisi CLAUDE.md §7] =====================
+-- Multi-user SUNGGUHAN per tenant (bukan lagi "satu identitas per deployment") —
+-- revisi eksplisit CLAUDE.md §7, disetujui owner. Role AKSES (admin/member/viewer)
+-- berbeda dari `role` fungsional (pm/qa/dev/data/security = persona agent) di
+-- tabel lain — kolom di sini sengaja bernama `access_role` untuk menghindari
+-- ambiguitas dengan `role` fungsional yang sudah ada di mana-mana.
+--
+-- `subject`: identitas unik per pengguna. Shared-secret login (single-secret,
+-- security/auth.py) SELALU memetakan ke subject tetap 'shared-secret' (satu baris,
+-- role admin, dibuat otomatis saat pertama login). OIDC login memetakan ke
+-- klaim `sub` provider (unik per akun, lihat security/oidc.py::OIDCClaims).
+--
+-- Bootstrap: user OIDC PERTAMA yang login untuk satu tenant otomatis jadi admin
+-- (tak ada admin sebelumnya untuk mengangkatnya) — user berikutnya default
+-- 'member'. Admin mengelola role user lain lewat UI (GET/POST /admin/users).
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    subject TEXT NOT NULL,                    -- 'shared-secret' ATAU klaim 'sub' provider OIDC
+    email TEXT,
+    name TEXT,
+    access_role TEXT NOT NULL DEFAULT 'member', -- admin | member | viewer
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_login_at TIMESTAMP,
+    UNIQUE(tenant_id, subject)
+);
+CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);

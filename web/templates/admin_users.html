@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCLAWN · Users</title>
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+    {% include '_sidebar.html' %}
+
+    <main class="main">
+        <div class="topbar">
+            <div>
+                <h1>{{ t('admin_users.title') }}</h1>
+                <div class="sub">{{ t('admin_users.subtitle') }}</div>
+            </div>
+        </div>
+
+        <div class="page">
+            {% if saved %}
+            <div class="card autopilot-safety">✅ {{ t('admin_users.saved') }}</div>
+            {% endif %}
+
+            {% if not users %}
+            <p class="muted">{{ t('admin_users.empty') }}</p>
+            {% else %}
+            <div class="autopilot-list">
+                {% for u in users %}
+                <div class="autopilot-row on">
+                    <div class="ap-main">
+                        <div class="ap-head">
+                            <span class="ap-name">{{ u.name or u.email or u.subject }}</span>
+                            <span class="tag">{{ u.access_role }}</span>
+                        </div>
+                        <div class="ap-prompt">{{ u.email or u.subject }}</div>
+                    </div>
+                    <div class="ap-actions">
+                        <form method="post" action="/admin/users/set-role">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="user_id" value="{{ u.id }}">
+                            <select name="access_role" onchange="this.form.submit()">
+                                {% for r in access_roles %}
+                                <option value="{{ r }}" {{ 'selected' if r == u.access_role }}>{{ r }}</option>
+                                {% endfor %}
+                            </select>
+                        </form>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+    </main>
+</div>
+</body>
+</html>

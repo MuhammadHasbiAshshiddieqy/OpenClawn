@@ -84,6 +84,12 @@
                 <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
                 {{ t('nav.settings') }}
             </a>
+            {% if is_admin and auth_enabled %}
+            <a href="/admin/users" class="nav-link {{ 'active' if page == 'admin_users' else '' }}" {{ 'aria-current="page"'|safe if page == 'admin_users' else '' }}>
+                <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="5.5" r="2.5"/><path d="M3 14c0-2.5 2.2-4.5 5-4.5s5 2 5 4.5"/></svg>
+                {{ t('nav.admin_users') }}
+            </a>
+            {% endif %}
         </nav>
     </div>
 

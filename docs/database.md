@@ -530,7 +530,7 @@ Event-sourcing RINGAN di atas SQLite yang sudah ada (bukan migrasi database baru
 
 ## Multi-Tenant (TODO.md § Prioritas 5)
 
-Fondasi skema untuk multi-tenant, ditambahkan lewat `migrations/002_multi_tenant.sql` (dokumentasi rencana) + `DatabaseManager` (eksekusi sungguhan). Kolom `tenant_id` ditambahkan ke 6 tabel: `memory_l1`, `memory_l2`, `chat_sessions`, `skills`, `routing_events`, `approval_log`. Default `'default'` di semua tabel — kompatibilitas mundur penuh untuk deployment single-tenant existing (CLAUDE.md §7: single-user tetap MODE VALID).
+Fondasi skema untuk multi-tenant, ditambahkan lewat `migrations/002_multi_tenant.sql` (dokumentasi rencana) + `DatabaseManager` (eksekusi sungguhan). Kolom `tenant_id` ditambahkan ke 6 tabel: `memory_l1`, `memory_l2`, `chat_sessions`, `skills`, `routing_events`, `approval_log`. Default `'default'` di semua tabel — kompatibilitas mundur penuh untuk deployment single-tenant existing (CLAUDE.md §7, direvisi 2026-07-09: multi-user dengan RBAC sekarang ADA, lihat § Multi-User & RBAC di bawah — deployment single-secret existing tetap jalan tanpa perubahan).
 
 **Scope sadar — dua kategori:**
 
@@ -548,6 +548,36 @@ Fondasi skema untuk multi-tenant, ditambahkan lewat `migrations/002_multi_tenant
 Test regresi migrasi: `tests/test_database.py` (`test_rebuild_adds_tenant_id_to_*`, `test_rebuild_enforces_new_unique_constraint`, `test_rebuild_idempotent_on_second_run`). Test isolasi tenant: `tests/test_chat_sessions.py` dan `tests/test_skill_decay.py` (bagian "Multi-Tenant isolation").
 
 **Jalur ke PostgreSQL:** SQLite tetap default (data sovereignty untuk deployment self-hosted single-organization). Skema `tenant_id` di atas sengaja kompatibel dengan model multi-tenant standar (satu kolom filter, bukan skema-per-tenant atau database-per-tenant) — migrasi ke Postgres untuk deployment yang butuh skala lintas-proses adalah perubahan `DatabaseManager`/driver, BUKAN perubahan skema logis ini.
+
+---
+
+## Multi-User & RBAC (TODO.md § Prioritas 5, revisi eksplisit CLAUDE.md §7)
+
+### `users` — Identitas + Role Akses
+
+Multi-user SUNGGUHAN per tenant (bukan lagi "satu identitas per deployment") — revisi eksplisit CLAUDE.md §7, disetujui owner (owner memilih tabel penuh, bukan role tunggal per identitas seperti pola bukti-konsep sub-item Prioritas 5 lain).
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | Ditandatangani ke dalam cookie sesi (`security/auth.py::create_session_token`) |
+| `tenant_id` | TEXT | Default `'default'`. Sama pola multi-tenant tabel lain |
+| `subject` | TEXT | Identitas unik: `'shared-secret'` (konstanta `infra.users.SHARED_SECRET_SUBJECT`, SATU baris untuk seluruh login shared-secret) ATAU klaim `sub` provider OIDC (unik per akun) |
+| `email` | TEXT | Dari klaim OIDC (`NULL` untuk shared-secret) |
+| `name` | TEXT | Dari klaim OIDC (`NULL` untuk shared-secret) |
+| `access_role` | TEXT | `admin` / `member` / `viewer` — **BEDA dari `role` fungsional** (pm/qa/dev/data/security = persona agent) yang dipakai tabel lain; nama kolom sengaja `access_role` untuk menghindari ambiguitas |
+| `created_at` | TIMESTAMP | |
+| `last_login_at` | TIMESTAMP | Diperbarui tiap login (shared-secret ATAU OIDC) via `UserStore.upsert_on_login` |
+
+**Constraint:** `UNIQUE(tenant_id, subject)` — satu baris per identitas per tenant.
+**Index:** `idx_users_tenant` pada `tenant_id`.
+
+**Bootstrap admin:** user OIDC PERTAMA yang login untuk satu tenant otomatis `access_role='admin'` (tak ada admin lain untuk mengangkatnya) — `UserStore.upsert_on_login` mengecek `COUNT(*)` sebelum INSERT. User berikutnya default `member`. Shared-secret login SELALU admin (satu-satunya user shared-secret per tenant).
+
+**Hierarki role** (`infra/users.py::role_at_least`): `viewer < member < admin`. Endpoint config sistem (`/settings`, `/skills/import`, `/mcp/*`, `/router`, `/autopilots/delete`, `/admin/users`) memanggil `_require_role(request, "admin")` (`web/main.py`) di awal handler — 403 bila `access_role` user sesi ini kurang dari `admin`. Chat, lihat skills/metrics/conversations TETAP terbuka untuk semua role login (member/viewer).
+
+**RBAC tak aktif bila auth nonaktif:** `_require_role` di-skip sepenuhnya bila `CONFIG.auth_active` False (default localhost dev) — perilaku lama (semua endpoint terbuka tanpa login) tak berubah sama sekali.
+
+Test: `tests/test_users.py` (unit `UserStore`+`role_at_least`), `tests/test_rbac_web.py` (end-to-end: bootstrap admin, member forbidden, promote via `/admin/users/set-role`, auth-nonaktif tak terpengaruh).
 
 ---
 

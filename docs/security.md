@@ -267,15 +267,20 @@ memilih login HANYA lewat provider (tanpa `auth_token` sama sekali) — di situ
 saat boot (aman, tapi restart me-logout semua sesi — operator OIDC-only yang
 ingin sesi bertahan lintas-restart HARUS mengisi `OPENCLAWN_SESSION_SECRET`).
 
-**`create_session_token(secret) → str`**  
-Token sesi `{timestamp}.{hmac_hex}` ditandatangani HMAC-SHA256. Dipanggil saat login sukses.
+**`create_session_token(secret, user_id=None) → str`**  
+Token sesi `{timestamp}.{user_id}.{hmac_hex}` ditandatangani HMAC-SHA256. Dipanggil
+saat login sukses. `user_id` (TODO.md § Prioritas 5, RBAC): id baris `infra.users.User`
+pemilik sesi, ditandatangani ke dalam payload (bukan cookie terpisah yang bisa
+dipalsukan lepas) — `None` (kompatibilitas mundur) tersimpan sebagai string kosong.
 
-**`verify_session_token(token, secret, max_age_sec=SESSION_MAX_AGE_SEC) → bool`**  
+**`verify_session_token(token, secret, max_age_sec=SESSION_MAX_AGE_SEC) → tuple[bool, int|None]`**  
 Verifikasi signature (constant-time via `hmac.compare_digest`, cegah timing attack) +
-expiry (`max_age_sec`, default `SESSION_MAX_AGE_SEC` = 7 hari). Token tanpa titik,
-signature tak cocok, atau kedaluwarsa/masa depan → ditolak. Parameter `max_age_sec`
-memungkinkan pemanggil (middleware) memakai batas lebih ketat dari absolute expiry —
-dasar mekanisme idle timeout di bawah.
+expiry (`max_age_sec`, default `SESSION_MAX_AGE_SEC` = 7 hari). Return `(valid, user_id)`
+— `user_id` bagian dari payload yang SUDAH diverifikasi signature-nya, aman dipercaya
+begitu `valid=True`. Token dengan jumlah bagian salah, signature tak cocok, atau
+kedaluwarsa/masa depan → `(False, None)`. Parameter `max_age_sec` memungkinkan
+pemanggil (middleware) memakai batas lebih ketat dari absolute expiry — dasar
+mekanisme idle timeout di bawah.
 
 **`verify_login_token(candidate, secret) → bool`**  
 Bandingkan password yang diketik user vs `OPENCLAWN_AUTH_TOKEN`, constant-time.
@@ -375,6 +380,74 @@ reverse proxy/domain kustom — tak bisa diasumsikan dari request).
 
 ---
 
+## `infra/users.py` — Multi-user + RBAC (TODO.md § Prioritas 5, revisi eksplisit CLAUDE.md §7)
+
+Multi-user SUNGGUHAN per tenant — revisi eksplisit CLAUDE.md §7 (owner memilih
+tabel `users` penuh, BUKAN role tunggal per identitas seperti pola bukti-konsep
+sub-item Prioritas 5 lain seperti tenant_id/OIDC). Role AKSES (`admin`/`member`/
+`viewer`) berbeda dari `role` fungsional (pm/qa/dev/data/security = persona
+agent) — sengaja dinamai `access_role` untuk menghindari ambiguitas.
+
+### Konstanta
+
+`SHARED_SECRET_SUBJECT = "shared-secret"` — subject tetap untuk login shared-secret.
+`ACCESS_ROLES = ("admin", "member", "viewer")`.
+
+### Dataclass: `User`
+
+`id`, `tenant_id`, `subject`, `email`, `name`, `access_role`.
+
+### Fungsi: `role_at_least(access_role, minimum) → bool`
+
+True bila `access_role` setara/lebih tinggi dari `minimum` dalam hierarki
+`viewer < member < admin`. Role tak dikenal (data korup) → fail-safe False
+(paling ketat, BUKAN paling longgar).
+
+### Kelas: `UserStore`
+
+**`__init__(db, tenant_id="default")`** — sama pola `ChatSessionStore`/`SkillDecayManager`.
+
+**`upsert_on_login(subject, email=None, name=None) → User`** *(async)*  
+Dipanggil TIAP login sukses (shared-secret ATAU OIDC callback, `web/main.py`).
+User baru → INSERT; bootstrap `admin` bila tenant ini belum punya user SAMA
+SEKALI (dicek via `COUNT(*)`), else default `member`. User existing → UPDATE
+`email`/`name`/`last_login_at` — **`access_role` TAK PERNAH ditimpa di sini**,
+perubahan role hanya lewat `set_access_role` (admin action eksplisit).
+
+**`set_access_role(user_id, access_role) → bool`** *(async)*  
+Admin action (`POST /admin/users/set-role`, `web/main.py`). Role tak dikenal
+→ ditolak (`False`), tak crash. Return `True` bila user ada & role valid.
+
+**`get_by_subject(subject) → User | None`** / **`get_by_id(user_id) → User | None`** *(async)*  
+Lookup — `get_by_id` dipanggil middleware TIAP request (dari `user_id` yang
+ditandatangani di cookie sesi) untuk mengisi `request.state.user`.
+
+**`list_users() → list[User]`** *(async)*  
+Semua user di tenant ini, urut `id` — dipakai halaman `/admin/users`.
+
+### Gate RBAC di `web/main.py`
+
+**`_require_role(request, minimum)`** — helper (bukan bagian modul ini, tapi
+konsumen utamanya): raise `HTTPException(403)` bila `request.state.user` None
+atau `role_at_least(user.access_role, minimum)` False. **Fail-safe bila
+`CONFIG.auth_active` False** (auth nonaktif sepenuhnya) → gate DILEWATI, RBAC
+tak bermakna tanpa auth (perilaku lama, semua endpoint terbuka). Dipanggil di
+AWAL endpoint admin-only: `/settings`, `/skills/import`, `/mcp/add|toggle|delete`,
+`/router`, `/autopilots/delete`, `/admin/users`, `/admin/users/set-role`. Chat,
+lihat skills/metrics/conversations TETAP terbuka untuk semua role login.
+
+Middleware (`auth_and_csrf_middleware`) memuat `request.state.user` via
+`UserStore(db).get_by_id(session_user_id)` tiap request tervalidasi (fetch
+ringan, satu row by PK) — `session_user_id` didapat dari
+`verify_session_token` (lihat `security/auth.py` di atas).
+
+Test: `tests/test_users.py` (unit), `tests/test_rbac_web.py` (end-to-end:
+bootstrap admin shared-secret & OIDC, member forbidden dari endpoint admin,
+member tetap bisa chat/lihat skills, promote via `/admin/users/set-role`,
+auth-nonaktif tak terpengaruh RBAC).
+
+---
+
 ## `security/rate_limit.py` — Rate limiting (§P0 production-readiness)
 
 **Sliding window in-memory**, single-process — cukup untuk single-user (§7),
@@ -453,5 +526,6 @@ Dievaluasi di **DUA titik** (defense-in-depth, pola sama `_TRUST_MODE_EXEMPT`):
 | `QuestionGate` | (bukan keamanan) klarifikasi interaktif `ask_user` | Tool execution |
 | `security/auth.py` | Akses tanpa login saat self-host publik (opt-in) | Semua route (kecuali `/health`, `/login`, `/login/oidc`, `/auth/callback`, `/static/*`) |
 | `security/oidc.py` | Login via SSO enterprise (Google/Microsoft/Okta/dsb), opt-in | `/login/oidc`, `/auth/callback` |
+| `infra/users.py` (`_require_role`) | User non-admin mengubah config sistem | `/settings`, `/skills/import`, `/mcp/*`, `/router`, `/autopilots/delete`, `/admin/users*` |
 | `security/rate_limit.py` | Biaya LLM tak terkendali / DoS sederhana | `/chat/stream`, `/converse/stream` |
 | `DockerSandbox` | Kode berbahaya akses host/network | **Pertahanan utama** |

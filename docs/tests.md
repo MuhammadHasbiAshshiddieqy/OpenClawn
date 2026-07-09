@@ -773,12 +773,15 @@ Locale UI murni untuk teks statis (nav/tombol) — TIDAK menyentuh bahasa respon
 
 Test untuk `security/auth.py` (unit, tanpa HTTP) — signing/verifikasi token sesi, CSRF
 token, deteksi path publik. Security-critical: signature harus tolak token dipalsukan.
+Format token (TODO.md § Prioritas 5, RBAC): `{ts}.{user_id}.{hmac_hex}`,
+`verify_session_token` return `(valid, user_id)` bukan bool sederhana.
 
 | Test | Yang Diverifikasi |
 |---|---|
 | `test_valid_token_verifies` / `test_wrong_secret_rejected` | Token sah lolos, secret salah ditolak |
-| `test_none_token_rejected` / `test_empty_token_rejected` / `test_malformed_token_no_dot_rejected` / `test_non_numeric_timestamp_rejected` | Input aneh ditolak, tak exception |
-| `test_tampered_timestamp_rejected` / `test_tampered_signature_rejected` | Modifikasi token → signature tak cocok, ditolak |
+| `test_valid_token_with_user_id_carries_it` | `user_id` yang di-encode saat `create_session_token` terbawa balik di `verify_session_token` |
+| `test_none_token_rejected` / `test_empty_token_rejected` / `test_malformed_token_no_dot_rejected` / `test_malformed_token_wrong_part_count_rejected` / `test_non_numeric_timestamp_rejected` | Input aneh ditolak, tak exception |
+| `test_tampered_timestamp_rejected` / `test_tampered_signature_rejected` / `test_tampered_user_id_rejected` | Modifikasi token (termasuk `user_id`, mencegah privilege escalation) → signature tak cocok, ditolak |
 | `test_expired_token_rejected` / `test_future_timestamp_rejected` | Token di luar `SESSION_MAX_AGE_SEC` (masa lalu/masa depan) ditolak |
 | `test_login_token_matches` / `test_login_token_mismatch` | Verifikasi password login constant-time |
 | `test_csrf_token_is_random_and_url_safe` | Tiap token CSRF unik |
@@ -850,6 +853,48 @@ auth (bukan celah fail-open) via `CONFIG.session_secret`. Network di-mock.
 | `test_callback_full_flow_grants_session_and_access` | Alur penuh start→callback dengan ID token valid → sesi granted, akses ke halaman terproteksi berhasil |
 | `test_callback_state_mismatch_rejected` | `state` di query tak cocok cookie → login ditolak, tak ada cookie sesi |
 | `test_callback_verification_failure_rejected` | ID token dengan `nonce` salah → login ditolak |
+
+---
+
+### `tests/test_users.py`
+
+Test untuk `infra/users.py` (unit, tanpa HTTP) — `UserStore` + `role_at_least`
+(TODO.md § Prioritas 5, RBAC — revisi eksplisit CLAUDE.md §7).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_role_at_least_admin_satisfies_all` | Admin memenuhi hierarki `viewer`/`member`/`admin` |
+| `test_role_at_least_viewer_fails_member_and_admin` | Viewer TAK memenuhi `member`/`admin` |
+| `test_role_at_least_member_satisfies_member_and_viewer_not_admin` | Member antara viewer dan admin |
+| `test_role_at_least_unknown_role_fails_safe` | Role tak dikenal → `False` (paling ketat) |
+| `test_first_user_bootstrapped_as_admin` | User OIDC pertama per tenant → `access_role='admin'` |
+| `test_second_user_defaults_to_member` | User kedua → default `'member'` |
+| `test_upsert_idempotent_does_not_reset_role` | Login berulang TAK menimpa role yang sudah diubah admin, tapi profil (email/name) di-refresh |
+| `test_shared_secret_subject_constant_used_consistently` | Shared-secret login selalu `SHARED_SECRET_SUBJECT`, bootstrap admin |
+| `test_set_access_role_updates_role` / `test_set_access_role_rejects_unknown_role` / `test_set_access_role_unknown_user_returns_false` | Ubah role: sukses, role tak valid ditolak, user tak ada ditolak — semua fail-safe (tak crash) |
+| `test_list_users_returns_all_in_tenant` | Daftar user urut `id` |
+| `test_get_by_subject_unknown_returns_none` / `test_get_by_id_unknown_returns_none` | Lookup tak ditemukan → `None`, bukan exception |
+| `test_users_scoped_to_tenant` | Subject sama boleh ada di tenant berbeda, masing-masing bootstrap admin independen |
+
+---
+
+### `tests/test_rbac_web.py`
+
+Test end-to-end untuk RBAC di `web/main.py` — role akses menggerbangi endpoint
+config sistem (`/settings`, `/skills/import`, `/mcp/*`, `/router`,
+`/autopilots/delete`, `/admin/users`). Network OIDC di-mock.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_shared_secret_login_grants_admin_access_to_settings` | Shared-secret login → bootstrap admin → `/settings` GET 200 |
+| `test_shared_secret_login_can_post_settings` | Admin bisa POST `/settings` (303, bukan 403) |
+| `test_shared_secret_login_can_access_admin_users_page` | Admin bisa akses `/admin/users` |
+| `test_oidc_first_user_is_admin_can_post_settings` | User OIDC pertama (admin) bisa POST `/settings` |
+| `test_oidc_second_user_is_member_forbidden_from_settings` | **CRITICAL:** user OIDC kedua (member) POST `/settings` → 403 |
+| `test_oidc_second_user_member_can_still_use_chat` | RBAC hanya menggerbangi admin-config — member tetap bisa `/skills` (200) |
+| `test_oidc_second_user_member_forbidden_from_admin_users_page` | Member GET `/admin/users` → 403 |
+| `test_admin_can_promote_member_to_admin` | `set_access_role` via DB langsung → user yang di-promote langsung dapat akses admin di request BERIKUTNYA (role dimuat ulang tiap request, bukan cache) |
+| `test_no_auth_settings_accessible_without_rbac` | Auth nonaktif sepenuhnya → RBAC tak berlaku, `/settings` tetap 200 (perilaku lama) |
 
 ---
 

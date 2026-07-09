@@ -227,12 +227,13 @@ def test_idle_timeout_rejects_session_older_than_idle_window():
     from security.auth import _sign, verify_session_token
 
     old_ts = str(int(time.time()) - 120)  # 120 detik lalu
-    token = f"{old_ts}.{_sign(old_ts, 'test-secret-token')}"
+    payload = f"{old_ts}."
+    token = f"{payload}.{_sign(payload, 'test-secret-token')}"
 
     # Idle window 60 detik → token berusia 120 detik ditolak walau absolute expiry (7 hari) belum lewat.
-    assert verify_session_token(token, "test-secret-token", max_age_sec=60) is False
+    assert verify_session_token(token, "test-secret-token", max_age_sec=60) == (False, None)
     # Tanpa idle timeout (absolute expiry biasa) token yang sama masih valid.
-    assert verify_session_token(token, "test-secret-token") is True
+    assert verify_session_token(token, "test-secret-token") == (True, None)
 
 
 def test_rate_limit_blocks_after_quota_exhausted(client_no_auth):

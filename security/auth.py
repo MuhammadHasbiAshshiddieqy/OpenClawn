@@ -54,30 +54,46 @@ def _sign(payload: str, secret: str) -> str:
     return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
 
-def create_session_token(secret: str) -> str:
-    """Buat token sesi baru: `{timestamp}.{hmac_hex}`. Dipanggil saat login sukses."""
+def create_session_token(secret: str, user_id: int | None = None) -> str:
+    """Buat token sesi baru: `{timestamp}.{user_id}.{hmac_hex}`.
+
+    `user_id` (TODO.md § Prioritas 5, RBAC): id baris `infra.users.User` pemilik
+    sesi — dibutuhkan middleware untuk memuat `request.state.user` tiap request
+    tanpa query tambahan berbasis cookie lain. `None` (default, kompatibilitas
+    mundur untuk pemanggil yang belum diupdate) → disimpan sebagai string kosong,
+    `verify_session_token` mengembalikan `user_id=None` untuk token semacam ini.
+    """
     ts = str(int(time.time()))
-    return f"{ts}.{_sign(ts, secret)}"
+    uid = str(user_id) if user_id is not None else ""
+    payload = f"{ts}.{uid}"
+    return f"{payload}.{_sign(payload, secret)}"
 
 
 def verify_session_token(
     token: str | None, secret: str, max_age_sec: int = SESSION_MAX_AGE_SEC
-) -> bool:
-    """Verifikasi signature HMAC + expiry. Gagal parse/signature/expired → False.
+) -> tuple[bool, int | None]:
+    """Verifikasi signature HMAC + expiry. Return `(valid, user_id)`.
 
     `hmac.compare_digest` mencegah timing attack saat membandingkan signature.
     `max_age_sec` default ke absolute expiry (7 hari); middleware boleh mengoper
     nilai lebih kecil untuk enforce idle timeout (lihat docstring modul).
+    Gagal parse/signature/expired → `(False, None)`. `user_id` bagian dari
+    payload yang SUDAH diverifikasi signature-nya — aman dipercaya begitu
+    `valid=True` (bukan diambil dari cookie terpisah yang bisa dipalsukan lepas).
     """
-    if not token or "." not in token:
-        return False
-    ts_str, _, sig = token.partition(".")
+    if not token or token.count(".") != 2:
+        return False, None
+    ts_str, uid_str, sig = token.split(".")
     if not ts_str.isdigit():
-        return False
-    if not hmac.compare_digest(sig, _sign(ts_str, secret)):
-        return False
+        return False, None
+    payload = f"{ts_str}.{uid_str}"
+    if not hmac.compare_digest(sig, _sign(payload, secret)):
+        return False, None
     age = time.time() - int(ts_str)
-    return 0 <= age <= max_age_sec
+    if not (0 <= age <= max_age_sec):
+        return False, None
+    user_id = int(uid_str) if uid_str.isdigit() else None
+    return True, user_id
 
 
 def verify_login_token(candidate: str, secret: str) -> bool:

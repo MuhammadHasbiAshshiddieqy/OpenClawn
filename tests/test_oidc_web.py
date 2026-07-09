@@ -23,6 +23,20 @@ CLIENT_SECRET = "test-client-secret"
 _TEST_KEY = RSAKey.generate_key(2048, private=True)
 
 
+@pytest.fixture(autouse=True)
+def _clear_oidc_caches():
+    """Cache discovery/JWKS in-process per issuer (TTL 1 jam) bocor ANTAR file
+    test yang memakai ISSUER sama tapi RSA key berbeda (test_oidc.py,
+    test_rbac_web.py) — bersihkan sebelum & sesudah tiap test di file ini."""
+    from security.oidc import _discovery_cache, _jwks_cache
+
+    _discovery_cache.clear()
+    _jwks_cache.clear()
+    yield
+    _discovery_cache.clear()
+    _jwks_cache.clear()
+
+
 def _make_client_oidc(tmp_path, monkeypatch, oidc_configured: bool = True):
     db_file = tmp_path / "test.db"
     monkeypatch.setenv("OPENCLAWN_DB", str(db_file))

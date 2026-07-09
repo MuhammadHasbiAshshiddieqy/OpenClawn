@@ -186,14 +186,40 @@ async def test_sesuatu():
 
 ## 7. Pengetahuan domain yang sudah final (jangan ditanyakan ulang)
 
+> **Revisi 2026-07-09:** Baris "Fase" di bawah ini DIREVISI dari "single-user,
+> belum perlu auth/multi-tenant" — TODO.md § Prioritas 5 (Multi-Tenant &
+> Enterprise Identity) sudah dikerjakan penuh: skema `tenant_id`, OAuth2/OIDC
+> login (`security/oidc.py`), dan **multi-user sungguhan dengan RBAC**
+> (`infra/users.py`, tabel `users`, role admin/member/viewer) — bukan lagi
+> "satu identitas per deployment". Revisi RBAC disetujui EKSPLISIT oleh owner
+> saat ditanya langsung (bukan asumsi/inisiatif agent), karena ini melampaui
+> batas "fondasi/bukti konsep" yang dipakai sub-item Prioritas 5 sebelumnya
+> (tenant_id, OIDC) — owner memilih tabel users+role penuh, bukan role tunggal
+> per identitas. Baris lain (LLM, nama model, decay, confidence threshold)
+> TETAP final seperti sebelumnya.
+
 Hal-hal ini sudah diputuskan. Jangan tanya ulang atau ubah tanpa instruksi eksplisit:
 
 - **Stack:** Python 3.12, FastAPI, HTMX, SQLite (aiosqlite), Pydantic, httpx, tenacity, structlog. Final.
   - **Pengecualian sadar (disetujui owner):** `pypdf` (tool `pdf_read`); `python-docx`, `python-pptx`, `openpyxl` (tool `doc_write` — docx/pptx/xlsx); `reportlab` (tool `pdf_write` — PDF). Semua murni-Python, tanpa dependency sistem. Owner memutuskan "kecanggihan & keamanan di atas minimalis"; penambahan ini di luar default §8 dan dilakukan atas persetujuan eksplisit, bukan inisiatif agent.
   - **Pengecualian sadar #2 (disetujui owner):** `mcp` (SDK resmi Model Context Protocol) untuk menyambung server MCP eksternal (tool dari ekosistem MCP). Owner memilih SDK resmi atas raw-JSON-RPC karena cakupan penuh (resources/prompts/SSE/OAuth/versi) & ditambal upstream — MCP adalah protokol tool terbuka, BUKAN SDK vendor-LLM, jadi tak melanggar prinsip "no SDK Anthropic/OpenAI" yang menjaga transparansi jalur LLM. Tool MCP SELALU `requires_approval=True` (§1, server tak terkendali); remote di-guard SSRF.
+  - **Pengecualian sadar #3 (disetujui owner):** `authlib` (client OAuth2/OIDC berbasis httpx + verifikasi JWKS via `joserfc`) untuk `security/oidc.py`. OIDC adalah protokol terbuka (seperti MCP), BUKAN SDK vendor-LLM — tak melanggar prinsip "no SDK Anthropic/OpenAI". Dipilih atas implementasi JWT manual sendiri (risiko bug keamanan lebih tinggi).
 - **LLM:** Hybrid. Ollama (`gemma4:e2b/e4b/12b`) untuk ringan, Claude (`claude-haiku-4-5-20251001`, `claude-sonnet-4-6`) untuk berat. Final.
 - **Interface:** Web UI dengan SSE streaming. Final untuk research phase.
-- **Fase:** Research/eksperimen. Single-user. Belum perlu auth, multi-tenant, atau scaling horizontal.
+- **Fase:** ~~Research/eksperimen. Single-user. Belum perlu auth, multi-tenant,
+  atau scaling horizontal.~~ **DIREVISI (lihat catatan di atas):** Multi-tenant
+  (`tenant_id`, fondasi + `ChatSessionStore`/`SkillDecayManager` wired penuh
+  sebagai bukti konsep), OAuth2/OIDC login (opsional, di samping shared-secret,
+  BUKAN pengganti), dan **multi-user dengan RBAC** (tabel `users`,
+  `access_role` admin/member/viewer per tenant, endpoint config sistem seperti
+  `/settings`/`/skills/import`/`/mcp/*`/`/router`/`/admin/users` di-gate
+  admin-only via `_require_role`) semuanya SUDAH ADA. Shared-secret login
+  (`OPENCLAWN_AUTH_TOKEN`) tetap ADA & selalu bootstrap admin (kompatibilitas
+  mundur deployment self-host single-secret existing) — bukan dihapus, RBAC
+  hanya menambah lapisan di atasnya. Auth (baik shared-secret maupun OIDC)
+  tetap OPT-IN — default kosong = tanpa login sama sekali (localhost dev, tak
+  berubah). Scaling horizontal tetap di luar scope (belum ada kebutuhan pilot
+  nyata yang memvalidasinya, §8).
 - **Nama model Claude:** sudah diverifikasi benar per Juni 2026. Jangan "perbaiki" ke versi lama.
 - **Decay:** eksponensial, base 0.97, throttle 1 jam, archive di 0.3. Final.
 - **Confidence threshold:** 4 dari 5. Final kecuali data menunjukkan perlu disesuaikan.

@@ -1,6 +1,10 @@
 """Test untuk security/auth.py — session token signing, verifikasi, CSRF token.
 
 Security-critical: signature harus tolak token dipalsukan/kedaluwarsa/secret salah.
+
+Format token (TODO.md § Prioritas 5, RBAC): `{ts}.{user_id}.{hmac_hex}` — beda dari
+`{ts}.{hmac_hex}` lama, ditambah `user_id` agar middleware bisa memuat identitas
+tanpa cookie terpisah. `verify_session_token` return `(valid, user_id)`, bukan bool.
 """
 
 import time
@@ -18,57 +22,79 @@ from security.auth import (
 
 def test_valid_token_verifies():
     token = create_session_token("secret123")
-    assert verify_session_token(token, "secret123") is True
+    assert verify_session_token(token, "secret123") == (True, None)
+
+
+def test_valid_token_with_user_id_carries_it():
+    token = create_session_token("secret123", user_id=42)
+    assert verify_session_token(token, "secret123") == (True, 42)
 
 
 def test_wrong_secret_rejected():
     token = create_session_token("secret123")
-    assert verify_session_token(token, "wrong-secret") is False
+    assert verify_session_token(token, "wrong-secret") == (False, None)
 
 
 def test_none_token_rejected():
-    assert verify_session_token(None, "secret123") is False
+    assert verify_session_token(None, "secret123") == (False, None)
 
 
 def test_empty_token_rejected():
-    assert verify_session_token("", "secret123") is False
+    assert verify_session_token("", "secret123") == (False, None)
 
 
 def test_malformed_token_no_dot_rejected():
-    assert verify_session_token("not-a-valid-token", "secret123") is False
+    assert verify_session_token("not-a-valid-token", "secret123") == (False, None)
+
+
+def test_malformed_token_wrong_part_count_rejected():
+    """Token dengan jumlah bagian salah (bukan persis 2 titik) harus ditolak."""
+    assert verify_session_token("a.b.c.d", "secret123") == (False, None)
+    assert verify_session_token("a.b", "secret123") == (False, None)
 
 
 def test_tampered_timestamp_rejected():
     """Ubah timestamp tanpa mengubah signature → signature tak lagi cocok."""
     token = create_session_token("secret123")
-    ts, _, sig = token.partition(".")
-    tampered = f"{int(ts) + 1000}.{sig}"
-    assert verify_session_token(tampered, "secret123") is False
+    ts, uid, sig = token.split(".")
+    tampered = f"{int(ts) + 1000}.{uid}.{sig}"
+    assert verify_session_token(tampered, "secret123") == (False, None)
 
 
 def test_tampered_signature_rejected():
     token = create_session_token("secret123")
-    ts, _, sig = token.partition(".")
-    tampered = f"{ts}.{'0' * len(sig)}"
-    assert verify_session_token(tampered, "secret123") is False
+    ts, uid, sig = token.split(".")
+    tampered = f"{ts}.{uid}.{'0' * len(sig)}"
+    assert verify_session_token(tampered, "secret123") == (False, None)
+
+
+def test_tampered_user_id_rejected():
+    """Ubah user_id tanpa mengubah signature → signature tak lagi cocok
+    (mencegah privilege escalation dengan menukar user_id di cookie)."""
+    token = create_session_token("secret123", user_id=1)
+    ts, _, sig = token.split(".")
+    tampered = f"{ts}.999.{sig}"
+    assert verify_session_token(tampered, "secret123") == (False, None)
 
 
 def test_expired_token_rejected():
     """Token dengan timestamp di luar SESSION_MAX_AGE_SEC harus ditolak."""
     old_ts = str(int(time.time()) - SESSION_MAX_AGE_SEC - 10)
-    forged = f"{old_ts}.{_sign(old_ts, 'secret123')}"
-    assert verify_session_token(forged, "secret123") is False
+    payload = f"{old_ts}."
+    forged = f"{payload}.{_sign(payload, 'secret123')}"
+    assert verify_session_token(forged, "secret123") == (False, None)
 
 
 def test_future_timestamp_rejected():
     """Timestamp di masa depan (clock skew ekstrem/serangan) juga ditolak."""
     future_ts = str(int(time.time()) + 3600)
-    forged = f"{future_ts}.{_sign(future_ts, 'secret123')}"
-    assert verify_session_token(forged, "secret123") is False
+    payload = f"{future_ts}."
+    forged = f"{payload}.{_sign(payload, 'secret123')}"
+    assert verify_session_token(forged, "secret123") == (False, None)
 
 
 def test_non_numeric_timestamp_rejected():
-    assert verify_session_token("abc.somesignature", "secret123") is False
+    assert verify_session_token("abc..somesignature", "secret123") == (False, None)
 
 
 def test_login_token_matches():
@@ -102,18 +128,23 @@ def test_protected_paths_not_public():
 def test_max_age_sec_default_matches_session_max_age():
     """Tanpa argumen eksplisit, perilaku lama tak berubah (absolute expiry 7 hari)."""
     token = create_session_token("secret123")
-    assert verify_session_token(token, "secret123") is True
+    assert verify_session_token(token, "secret123") == (True, None)
 
 
 def test_custom_max_age_sec_rejects_token_older_than_it():
     """Idle timeout: max_age_sec lebih ketat dari absolute expiry harus ditolak."""
     old_ts = str(int(time.time()) - 100)
-    token = f"{old_ts}.{_sign(old_ts, 'secret123')}"
-    assert verify_session_token(token, "secret123", max_age_sec=SESSION_MAX_AGE_SEC) is True
-    assert verify_session_token(token, "secret123", max_age_sec=50) is False
+    payload = f"{old_ts}."
+    token = f"{payload}.{_sign(payload, 'secret123')}"
+    assert verify_session_token(token, "secret123", max_age_sec=SESSION_MAX_AGE_SEC) == (
+        True,
+        None,
+    )
+    assert verify_session_token(token, "secret123", max_age_sec=50) == (False, None)
 
 
 def test_custom_max_age_sec_accepts_token_within_window():
     ts = str(int(time.time()) - 10)
-    token = f"{ts}.{_sign(ts, 'secret123')}"
-    assert verify_session_token(token, "secret123", max_age_sec=60) is True
+    payload = f"{ts}."
+    token = f"{payload}.{_sign(payload, 'secret123')}"
+    assert verify_session_token(token, "secret123", max_age_sec=60) == (True, None)

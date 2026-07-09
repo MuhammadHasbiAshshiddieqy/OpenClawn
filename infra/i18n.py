@@ -26,6 +26,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "nav.conversations": {"en": "Conversations", "id": "Percakapan"},
     "nav.router": {"en": "Router", "id": "Router"},
     "nav.settings": {"en": "Settings", "id": "Pengaturan"},
+    "nav.admin_users": {"en": "Users", "id": "Pengguna"},
     "nav.workspace": {"en": "Workspace", "id": "Ruang Kerja"},
     "nav.roles": {"en": "Roles", "id": "Peran"},
     "nav.single_agent": {"en": "single-agent", "id": "agen-tunggal"},
@@ -666,6 +667,17 @@ STRINGS: dict[str, dict[str, str]] = {
         "id": "Masuk dengan SSO",
     },
     "nav.logout": {"en": "Sign out", "id": "Keluar"},
+    # ── Admin: user role management (TODO.md § Prioritas 5, RBAC) ────────────
+    "admin_users.title": {"en": "Users", "id": "Pengguna"},
+    "admin_users.subtitle": {
+        "en": "Manage access roles (admin / member / viewer) per user.",
+        "id": "Kelola role akses (admin / member / viewer) per pengguna.",
+    },
+    "admin_users.empty": {
+        "en": "No users yet — they appear here after their first login.",
+        "id": "Belum ada pengguna — akan muncul di sini setelah login pertama.",
+    },
+    "admin_users.saved": {"en": "Role updated.", "id": "Role diperbarui."},
     # ── Error pages ───────────────────────────────────────────────────────────
     "error.404_title": {"en": "Page not found", "id": "Halaman tidak ditemukan"},
     "error.404_body": {

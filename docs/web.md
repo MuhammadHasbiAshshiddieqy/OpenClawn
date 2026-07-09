@@ -493,7 +493,7 @@ membocorkan struktur filesystem di luar workspace). Dipicu dari chip download di
 
 `GET /skills/export?role=` → unduh skill `active` sebagai berkas Markdown (`Content-Disposition: attachment`); role tak dikenal → ekspor semua.
 
-`POST /skills/import` → impor pack dari `pack_text` (tempel) atau `url`, opsional `target_role`. **Berlapis keamanan (§1):** SSRF guard (URL) → Shield scan → status **`draft`** (tak auto-masuk context, user aktifkan manual) → hash. Redirect `/skills?import_msg=...` dengan ringkasan. UI ada di `skills.html` (panel `<details>` ekspor/impor).
+`POST /skills/import` → impor pack dari `pack_text` (tempel) atau `url`, opsional `target_role`. **Berlapis keamanan (§1):** `_require_role(request, "admin")` (TODO.md § Prioritas 5, RBAC — impor kode/konten pihak ketiga adalah config sistem) → SSRF guard (URL) → Shield scan → status **`draft`** (tak auto-masuk context, user aktifkan manual) → hash. Redirect `/skills?import_msg=...` dengan ringkasan. UI ada di `skills.html` (panel `<details>` ekspor/impor).
 
 `POST /skills/apply-merge` → terapkan satu usulan merge `pending` (I1, gated `curation_auto=False` §8 default): winner menyerap konten sintesis, loser → `merged`. Form: `role`, `curation_id`. Redirect `/skills`. Panel "Curation" menampilkan tombol **Terapkan** untuk usulan `pending` terbaru.
 
@@ -517,7 +517,7 @@ Tandai blocker `resolved` (`agent_blockers.status`, set `resolved_at`). Form: `b
 
 **Kelola server MCP eksternal** (tool ekosistem Model Context Protocol). Template: `web/templates/mcp.html`.
 
-`GET /mcp` → daftar server (`mcp_servers`) + tool yang ditemukan (`MCPRegistry.discovered_tools`). `POST /mcp/add` → tambah server (`name`, `transport` stdio|http, `command` dipisah spasi, atau `url`) lalu `load_all()` untuk discover segera. `toggle`/`delete` mengubah status & reload. **Keamanan (§1):** tool MCP selalu butuh approval; remote di-guard SSRF; role harus opt-in via `soul.toml` (`mcp__*`). Server dimuat saat lifespan startup (fail-safe).
+`GET /mcp` → daftar server (`mcp_servers`) + tool yang ditemukan (`MCPRegistry.discovered_tools`). `POST /mcp/add` → tambah server (`name`, `transport` stdio|http, `command` dipisah spasi, atau `url`) lalu `load_all()` untuk discover segera. `toggle`/`delete` mengubah status & reload. **Keamanan (§1):** tool MCP selalu butuh approval; remote di-guard SSRF; role harus opt-in via `soul.toml` (`mcp__*`). Server dimuat saat lifespan startup (fail-safe). **RBAC (TODO.md § Prioritas 5):** ketiga endpoint POST (`add`/`toggle`/`delete`) memanggil `_require_role(request, "admin")` — menambah server MCP eksternal adalah config sistem sensitif.
 
 ---
 
@@ -533,11 +533,15 @@ Tandai blocker `resolved` (`agent_blockers.status`, set `resolved_at`). Form: `b
 
 Aktif/jeda (`set_enabled`) dan hapus (`delete`) autopilot. Form: `autopilot_id` (+ `enabled` untuk toggle). Redirect `/autopilots`.
 
+**RBAC (TODO.md § Prioritas 5):** `POST /autopilots/delete` memanggil `_require_role(request, "admin")` — menghapus tugas terjadwal tak bisa dibatalkan. `/autopilots/toggle` TIDAK di-gate (pause/resume dianggap operasional biasa, bukan config sistem destruktif).
+
 ---
 
 #### `GET /router` & `POST /router`
 
 **Editor peta tier→model.** Template: `web/templates/router.html`.
+
+**RBAC (TODO.md § Prioritas 5):** `POST /router` memanggil `_require_role(request, "admin")` — mengubah peta model adalah config sistem, bukan aksi member/viewer biasa. `GET` tetap terbuka untuk semua role login (lihat mapping aktif tanpa mengubahnya). Tak berlaku bila `CONFIG.auth_active` False (auth nonaktif).
 
 `GET` menampilkan 5 tier (TRIVIAL→CRITICAL) dengan dropdown model dari `KNOWN_MODELS`, preselect model aktif, + tanda `default` per tier. `POST` menyimpan: tiap tier dikirim sebagai field `tier_<key>` berformat `provider|model` → `RouterConfigStore.set_map()`; `action=reset` → `RouterConfigStore.reset()`. Redirect `/router?saved=true`.
 
@@ -567,10 +571,24 @@ Context yang dikirim:
 
 **Simpan pilihan model.**
 
+**RBAC (TODO.md § Prioritas 5):** `_require_role(request, "admin")` di awal handler — override model & mode compaction adalah config sistem. Tak berlaku bila `CONFIG.auth_active` False.
+
 Form data:
 - `model_choice` — `"auto"` (kembali ke router otomatis) atau `"provider|model"` (mis. `"gemini|gemini-2.0-flash"`)
 
 Menyimpan via `SettingsStore.set_model_override()`, lalu redirect (303) ke `/settings?saved=true`.
+
+---
+
+#### `GET /admin/users` & `POST /admin/users/set-role`
+
+**Kelola role akses user** (TODO.md § Prioritas 5, RBAC — revisi eksplisit CLAUDE.md §7). Template: `web/templates/admin_users.html`. **Admin-only** — kedua endpoint memanggil `_require_role(request, "admin")` (tak berlaku bila `CONFIG.auth_active` False).
+
+`GET` menampilkan semua user tenant ini (`UserStore.list_users()`) beserta `access_role`. Link sidebar "Users" hanya muncul bila `is_admin and auth_enabled` (lihat `_ui_ctx`, `_sidebar.html`).
+
+`POST /admin/users/set-role` — form `user_id` + `access_role` (dropdown, auto-submit `onchange`). Role tak valid → diam-diam diabaikan (`UserStore.set_access_role` fail-safe `False`, bukan crash). Redirect `/admin/users?saved=true`.
+
+Admin bisa demote diri sendiri — TIDAK dicegah secara khusus (konsisten "admin tahu apa yang dilakukan", mirip Unix root).
 
 > **Hubungan dengan router:** Override adalah *pilihan sadar* yang memaksa semua query ke satu model — berguna untuk eksperimen (mis. memakai Gemini saja). Router otomatis (Inovasi #1) tetap default saat `model_choice=auto`. Keputusan router asli tetap tercatat di audit walaupun override aktif.
 

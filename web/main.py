@@ -45,6 +45,7 @@ from infra.i18n import LOCALES, translator
 from infra.logging import log, setup_logging
 from infra.settings import KNOWN_MODELS, SettingsStore
 from infra.chat_sessions import ChatSessionStore
+from infra.users import SHARED_SECRET_SUBJECT, UserStore, role_at_least
 from infra.workspace import WorkspaceViolation, resolve_in_workspace, validate_workdir_candidate
 from security.approval import ApprovalGate
 from security.auth import (
@@ -202,15 +203,22 @@ async def _ui_ctx(page: str = "", request: Request | None = None) -> dict:
     menyuntikkannya ke tiap form POST (`security/auth.py`, §P0). Kosong bila
     auth nonaktif (cookie tak pernah diset) — form tetap render, middleware
     hanya menegakkan CSRF saat `CONFIG.auth_active` (shared-secret ATAU OIDC).
+
+    `is_admin` (TODO.md § Prioritas 5, RBAC): True bila auth NONAKTIF (semua
+    fitur terbuka, perilaku lama) ATAU user sesi ini `access_role='admin'` —
+    dipakai `_sidebar.html` menampilkan link "Users" hanya untuk admin.
     """
     locale = await SettingsStore(db).get_ui_locale()
     csrf = request.cookies.get(CSRF_COOKIE, "") if request else ""
+    user = getattr(request.state, "user", None) if request else None
+    is_admin = (not CONFIG.auth_active) or (user is not None and user.access_role == "admin")
     return {
         "t": translator(locale),
         "locale": locale,
         "page": page,
         "csrf_token": csrf,
         "auth_enabled": CONFIG.auth_active,
+        "is_admin": is_admin,
     }
 
 
@@ -304,6 +312,8 @@ async def auth_and_csrf_middleware(request: Request, call_next):
     """
     path = request.url.path
     refresh_session_cookie = False
+    session_user_id: int | None = None
+    request.state.user = None
 
     if CONFIG.auth_active and not is_public_path(path):
         effective_max_age = (
@@ -311,7 +321,7 @@ async def auth_and_csrf_middleware(request: Request, call_next):
             if CONFIG.idle_timeout_sec
             else SESSION_MAX_AGE_SEC
         )
-        session_valid = verify_session_token(
+        session_valid, session_user_id = verify_session_token(
             request.cookies.get(SESSION_COOKIE),
             CONFIG.session_secret,
             max_age_sec=effective_max_age,
@@ -321,6 +331,14 @@ async def auth_and_csrf_middleware(request: Request, call_next):
                 nxt = quote(str(request.url.path))
                 return RedirectResponse(url=f"/login?next={nxt}", status_code=303)
             return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+        # RBAC (TODO.md § Prioritas 5): muat identitas user ke request.state agar
+        # endpoint admin-only (lihat require_role) bisa cek access_role tanpa
+        # query ulang cookie. user_id=None untuk sesi lama (pra-RBAC, sebelum
+        # migrasi token) — diperlakukan sebagai "tak dikenal", require_role gagal
+        # aman (403), bukan crash. Fetch ringan (satu row by PK) per request.
+        if session_user_id is not None:
+            request.state.user = await UserStore(db).get_by_id(session_user_id)
 
         # Sesi valid + idle timeout aktif → tandai untuk refresh `ts` di response
         # akhir (perpanjang jendela idle, TIDAK melewati absolute expiry 7 hari).
@@ -358,7 +376,7 @@ async def auth_and_csrf_middleware(request: Request, call_next):
     if refresh_session_cookie:
         response.set_cookie(
             SESSION_COOKIE,
-            create_session_token(CONFIG.session_secret),
+            create_session_token(CONFIG.session_secret, user_id=session_user_id),
             max_age=SESSION_MAX_AGE_SEC,
             httponly=True,
             samesite="lax",
@@ -392,12 +410,33 @@ def _oidc_configured() -> bool:
     return bool(CONFIG.oidc_issuer and CONFIG.oidc_client_id and CONFIG.oidc_client_secret)
 
 
-def _issue_session_cookies(resp: RedirectResponse) -> None:
+def _require_role(request: Request, minimum: str) -> None:
+    """RBAC gate (TODO.md § Prioritas 5): tolak 403 bila user sesi ini tak
+    punya `access_role` minimal `minimum`. Dipanggil di AWAL endpoint admin-only
+    (mis. /settings, /skills/import) — konsisten pola `StarletteHTTPException`
+    inline yang sudah dipakai proyek ini untuk error non-2xx spesifik.
+
+    Fail-safe: bila `CONFIG.auth_active` False (auth nonaktif sepenuhnya,
+    default localhost dev), gate ini DILEWATI — RBAC tak bermakna tanpa auth,
+    konsisten perilaku lama (semua endpoint terbuka tanpa login). Bila auth
+    aktif tapi `request.state.user` None (sesi lama pra-RBAC, atau race
+    kondisi), fail-safe ke DENY (403), bukan izinkan diam-diam.
+    """
+    if not CONFIG.auth_active:
+        return
+    user = getattr(request.state, "user", None)
+    if user is None or not role_at_least(user.access_role, minimum):
+        raise StarletteHTTPException(status_code=403, detail="insufficient_role")
+
+
+def _issue_session_cookies(resp: RedirectResponse, user_id: int) -> None:
     """Set cookie sesi + CSRF — dipakai KEDUA jalur login (shared-secret & OIDC),
-    karena setelah verifikasi identitas berhasil, mekanisme sesi sama persis."""
+    karena setelah verifikasi identitas berhasil, mekanisme sesi sama persis.
+    `user_id` (TODO.md § Prioritas 5, RBAC) WAJIB — ditandatangani ke dalam
+    token sesi agar middleware bisa memuat `request.state.user` tanpa cookie lain."""
     resp.set_cookie(
         SESSION_COOKIE,
-        create_session_token(CONFIG.session_secret),
+        create_session_token(CONFIG.session_secret, user_id=user_id),
         max_age=SESSION_MAX_AGE_SEC,
         httponly=True,
         samesite="lax",
@@ -442,8 +481,11 @@ async def login_submit(request: Request):
         return RedirectResponse(url=f"/login?error=true&next={quote(next_url)}", status_code=303)
 
     log.info("login_ok", ip=request.client.host if request.client else "unknown")
+    # Shared-secret login selalu memetakan ke identitas tetap (RBAC, TODO.md §
+    # Prioritas 5) — satu-satunya user shared-secret, admin sejak pertama login.
+    user = await UserStore(db).upsert_on_login(SHARED_SECRET_SUBJECT)
     resp = RedirectResponse(url=next_url, status_code=303)
-    _issue_session_cookies(resp)
+    _issue_session_cookies(resp, user_id=user.id)
     return resp
 
 
@@ -522,8 +564,11 @@ async def oidc_callback(request: Request, code: str = "", state: str = ""):
         return RedirectResponse(url="/login?error=true", status_code=303)
 
     log.info("oidc_login_ok", subject=claims.subject, email=claims.email)
+    # RBAC (TODO.md § Prioritas 5): upsert user berdasarkan klaim 'sub' provider —
+    # user OIDC PERTAMA di tenant ini otomatis admin (bootstrap), berikutnya member.
+    user = await UserStore(db).upsert_on_login(claims.subject, email=claims.email, name=claims.name)
     resp = RedirectResponse(url=next_url, status_code=303)
-    _issue_session_cookies(resp)
+    _issue_session_cookies(resp, user_id=user.id)
     resp.delete_cookie(_OIDC_STATE_COOKIE)
     resp.delete_cookie(_OIDC_NONCE_COOKIE)
     return resp
@@ -1209,6 +1254,7 @@ async def skills_import(request: Request):
     Lapis: SSRF guard (URL) → Shield scan → status draft → hash. Skill impor TIDAK
     auto-masuk context; user meninjau di /skills lalu mengaktifkan manual.
     """
+    _require_role(request, "admin")
     form = await request.form()
     pack_text = (form.get("pack_text") or "").strip()
     url = (form.get("url") or "").strip()
@@ -1369,6 +1415,7 @@ async def autopilots_toggle(request: Request):
 @app.post("/autopilots/delete")
 async def autopilots_delete(request: Request):
     """Hapus autopilot."""
+    _require_role(request, "admin")
     form = await request.form()
     try:
         ap_id = int(form.get("autopilot_id") or 0)
@@ -1399,6 +1446,7 @@ async def mcp_page(request: Request):
 @app.post("/mcp/add")
 async def mcp_add(request: Request):
     """Tambah server MCP (stdio: command; http: url), lalu reload tool."""
+    _require_role(request, "admin")
     form = await request.form()
     name = (form.get("name") or "").strip()
     transport = (form.get("transport") or "stdio").strip()
@@ -1416,6 +1464,7 @@ async def mcp_add(request: Request):
 
 @app.post("/mcp/toggle")
 async def mcp_toggle(request: Request):
+    _require_role(request, "admin")
     form = await request.form()
     try:
         sid = int(form.get("server_id") or 0)
@@ -1431,6 +1480,7 @@ async def mcp_toggle(request: Request):
 
 @app.post("/mcp/delete")
 async def mcp_delete(request: Request):
+    _require_role(request, "admin")
     form = await request.form()
     try:
         sid = int(form.get("server_id") or 0)
@@ -1441,6 +1491,44 @@ async def mcp_delete(request: Request):
         await reg.delete(sid)
         await reg.load_all()
     return RedirectResponse(url="/mcp", status_code=303)
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+async def admin_users_page(request: Request, saved: bool = False):
+    """Kelola role akses user (TODO.md § Prioritas 5, RBAC) — admin-only.
+
+    Daftar user OIDC + shared-secret di tenant ini beserta `access_role`.
+    Admin bisa ubah role user lain (termasuk demote diri sendiri, TIDAK dicegah
+    secara khusus — konsisten "admin tahu apa yang dilakukan", mirip Unix root).
+    """
+    _require_role(request, "admin")
+    users = await UserStore(db).list_users()
+    return templates.TemplateResponse(
+        request,
+        "admin_users.html",
+        {
+            "users": users,
+            "access_roles": ("admin", "member", "viewer"),
+            "saved": saved,
+            **await _ui_ctx("admin_users", request),
+        },
+    )
+
+
+@app.post("/admin/users/set-role")
+async def admin_users_set_role(request: Request):
+    """Ubah access_role satu user. Role tak valid → diam-diam diabaikan
+    (UserStore.set_access_role fail-safe False, tak crash), redirect tetap normal."""
+    _require_role(request, "admin")
+    form = await request.form()
+    try:
+        user_id = int(form.get("user_id") or 0)
+    except (ValueError, TypeError):
+        user_id = 0
+    access_role = (form.get("access_role") or "").strip()
+    if user_id:
+        await UserStore(db).set_access_role(user_id, access_role)
+    return RedirectResponse(url="/admin/users?saved=true", status_code=303)
 
 
 @app.get("/router", response_class=HTMLResponse)
@@ -1478,6 +1566,7 @@ async def router_page(request: Request, saved: bool = False):
 @app.post("/router")
 async def router_save(request: Request):
     """Simpan peta tier→model. Tiap tier kirim 'tier_<key>' berformat 'provider|model'."""
+    _require_role(request, "admin")
     form = await request.form()
     if (form.get("action") or "") == "reset":
         await RouterConfigStore(db).reset()
@@ -1517,6 +1606,7 @@ async def settings_page(request: Request, saved: bool = False):
 @app.post("/settings")
 async def settings_save(request: Request):
     """Simpan override + mode compaction + bahasa UI. 'auto'/kosong → router otomatis."""
+    _require_role(request, "admin")
     form = await request.form()
     choice = (form.get("model_choice") or "").strip()
     store = SettingsStore(db)
