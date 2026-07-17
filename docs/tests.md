@@ -98,6 +98,13 @@ Test untuk `memory/skill_decay.py` (Inovasi 2).
 | `test_mark_used_cannot_cross_tenant` | Tenant A tak bisa revive/menaikkan skor skill milik tenant B via id tertebak |
 | `test_decay_pass_scoped_to_tenant` | Decay pass tenant A tak menyentuh skill tenant B walau role sama |
 | `test_default_tenant_id_backward_compatible` | Tanpa `tenant_id` eksplisit → `'default'`, skill lama tetap terlihat |
+| `test_private_skill_not_visible_to_other_role` | Skill Marketplace (§ Prioritas 6): `visibility='private'` (default) TAK terlihat role lain — perilaku lama tak berubah |
+| `test_shared_skill_visible_to_other_role` | `visibility='shared'` dari role lain ikut disuntik saat trigger cocok |
+| `test_inherited_skill_visible_to_other_role` | `visibility='inherited'` (impor skill pack) sama-sama lintas-role seperti `shared` |
+| `test_own_role_skills_not_duplicated_via_shared_query` | Skill milik role sendiri (walau `visibility='shared'`) tak muncul dobel |
+| `test_shared_skills_capped_at_max_shared_skills` | Skill lintas-role dibatasi `CONFIG.max_shared_skills` (token-first §1.4) |
+| `test_archived_shared_skill_not_visible` | Skill `shared` tapi `status='archived'` tak muncul lintas-role |
+| `test_shared_skill_scoped_to_tenant` | Isolasi tenant (§ Prioritas 5) tetap berlaku untuk skill shared |
 
 ---
 
@@ -650,6 +657,9 @@ Smoke test untuk endpoints Web UI.
 | `test_skills_import_blocks_injection` | Pack berpola injeksi ditolak, tak muncul |
 | `test_skills_page_shows_curation` | Jejak merge (I1) tampil + tombol Batalkan |
 | `test_skills_revert_merge_endpoint` | `/skills/revert-merge` kembalikan loser ke active |
+| `test_skills_set_visibility_toggles_private_to_shared` | Skill Marketplace (§ Prioritas 6): `/skills/set-visibility` ubah private↔shared |
+| `test_skills_set_visibility_cannot_change_inherited` | `visibility='inherited'` tak bisa diubah lewat endpoint ini |
+| `test_skills_page_shows_visibility_toggle_button` | `/skills` merender tombol toggle visibility untuk skill non-inherited |
 | `test_metrics_shows_auto_apply_badge` | `/metrics` tampilkan badge auto-tune (I4) |
 
 ---

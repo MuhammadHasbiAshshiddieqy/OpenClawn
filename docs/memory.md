@@ -81,6 +81,8 @@ Cache `_last_decay_ts` untuk throttle. Multi-Tenant (TODO.md § Prioritas 5, WIR
 **`get_active_skills(query) → list[dict]`** *(async)*  
 Ambil skill aktif MILIK TENANT INI yang relevan dengan query (trigger_pattern match). Urutkan berdasarkan `decay_score DESC, use_count DESC`. Maks `config.max_active_skills` skill. **I2:** ditambah 1 slot percobaan untuk skill `draft` yang trigger-nya cocok (agar draft bisa membuktikan diri & naik kelas) — draft trial TIDAK menggusur active.
 
+**Skill Marketplace lintas-role (TODO.md § Prioritas 6):** ditambah bagian ketiga — skill milik role LAIN (dalam tenant yang sama) dengan `visibility IN ('shared','inherited')` dan `status='active'`, di-LIMIT `config.max_shared_skills` (default 3, lebih kecil dari `max_active_skills` — token-first §1.4, skill role sendiri selalu lebih relevan). Ditambahkan di BELAKANG hasil `active`+`trial`, tak menggusurnya. `visibility='private'` (default) TETAP hanya terlihat role pemiliknya — perilaku lama tak berubah untuk skill yang belum di-share sadar. Toggle private↔shared via `POST /skills/set-visibility` (`web/main.py`); `inherited` (hasil impor skill pack, `core/skill_pack.py`) tak bisa diubah lewat situ — sudah lintas-role sejak asalnya.
+
 Return list dict dengan field: `id`, `skill_name`, `skill_content`, `trigger_pattern`, `decay_score`, `status`.
 
 **`mark_used(skill_id) → None`** *(async)*  

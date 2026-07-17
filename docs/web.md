@@ -525,6 +525,8 @@ membocorkan struktur filesystem di luar workspace). Dipicu dari chip download di
 
 `POST /skills/revert-merge` → batalkan merge skill yang **sudah diterapkan** (I1, `status='applied'`) untuk satu role: loser kembali `active`, winner ke konten/versi sebelum merge. Form: `role`. Redirect `/skills`. Panel "Curation" di `skills.html` menampilkan `curation_log` + tombol Batalkan untuk baris `applied` terbaru. `/metrics` menampilkan badge `auto-tune ON/OFF` (I4, `CONFIG.calibration_auto_apply`).
 
+`POST /skills/set-visibility` → Skill Marketplace lintas-role (TODO.md § Prioritas 6): toggle `visibility` satu skill antara `private` (default, hanya role pemilik) dan `shared` (terlihat semua role — lihat `SkillDecayManager.get_active_skills`, `docs/memory.md`). Form: `skill_id`, `visibility` (`private`|`shared`). `visibility='inherited'` (hasil impor skill pack) TIDAK bisa diubah lewat endpoint ini — query `WHERE ... AND visibility != 'inherited'` membuat UPDATE jadi no-op untuk baris begitu (sudah lintas-role sejak asalnya, bukan toggle sadar user). Redirect `/skills`. Tombol toggle di tabel skill `skills.html`, tersembunyi (diganti label statis) untuk skill `inherited`.
+
 ---
 
 #### `GET /activity`

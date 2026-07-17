@@ -29,6 +29,12 @@ class SkillDecayManager:
         'draft' percobaan (I2): draft yang trigger-nya cocok diberi SATU slot
         percobaan agar bisa membuktikan diri & naik kelas. Draft tak menggusur
         active (di-LIMIT terpisah & ditambahkan di belakang).
+
+        Skill Marketplace lintas-role (TODO.md § Prioritas 6): skill role LAIN
+        dengan `visibility IN ('shared','inherited')` ikut disertakan (di-LIMIT
+        terpisah, di bagian akhir — tak menggusur skill role sendiri yang lebih
+        relevan). `private` (default) TETAP hanya terlihat role pemiliknya,
+        perilaku lama tak berubah untuk skill yang belum di-share sadar.
         """
         active = await self.db.fetchall(
             """SELECT id, skill_name, skill_content, trigger_pattern, decay_score, status
@@ -48,7 +54,16 @@ class SkillDecayManager:
                ORDER BY draft_success_count DESC, id DESC LIMIT 1""",
             (self.tenant_id, self.role, query),
         )
-        return active + trial
+        shared = await self.db.fetchall(
+            """SELECT id, skill_name, skill_content, trigger_pattern, decay_score, status
+               FROM skills
+               WHERE tenant_id=? AND role!=? AND status='active'
+                 AND visibility IN ('shared','inherited')
+                 AND (trigger_pattern IS NULL OR ? LIKE '%' || trigger_pattern || '%')
+               ORDER BY decay_score DESC, use_count DESC LIMIT ?""",
+            (self.tenant_id, self.role, query, self.config.max_shared_skills),
+        )
+        return active + trial + shared
 
     async def mark_used(self, skill_id: int) -> None:
         """Skill dipakai lagi → revive: status kembali active, score naik.

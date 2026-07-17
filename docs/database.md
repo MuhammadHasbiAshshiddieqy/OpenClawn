@@ -99,7 +99,7 @@ Skill yang dipelajari agent beserta metadata decay.
 | `skill_name` | TEXT | Nama unik skill (slug dari task) |
 | `trigger_pattern` | TEXT | Pola query yang memicu skill ini |
 | `skill_content` | TEXT | Konten skill dalam Markdown |
-| `visibility` | TEXT | `private` / `shared` / `inherited` |
+| `visibility` | TEXT | `private` (default, hanya role pemilik) / `shared` (Skill Marketplace lintas-role, TODO.md § Prioritas 6 — terlihat semua role via `SkillDecayManager.get_active_skills`) / `inherited` (hasil impor skill pack, `core/skill_pack.py`, sudah lintas-role sejak asalnya) |
 | `status` | TEXT | `active` / `draft` / `archived` |
 | `confidence` | REAL | Skor confidence dari crystallizer (0–1) |
 | `generator_model` | TEXT | Model yang menghasilkan skill (untuk evaluator gating) |

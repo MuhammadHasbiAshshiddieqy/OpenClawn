@@ -68,6 +68,10 @@ class AppConfig:
     skill_archive_threshold: float = 0.3
     skill_revive_boost: float = 0.5
     max_active_skills: int = 8
+    # Skill Marketplace lintas-role (TODO.md § Prioritas 6): batas skill role LAIN
+    # (visibility shared/inherited) yang ikut disuntik — token-first §1.4, lebih
+    # kecil dari max_active_skills karena skill role sendiri selalu lebih relevan.
+    max_shared_skills: int = 3
     confidence_threshold: int = 4
     # Memori jangka panjang: arsipkan sesi ke L4 setelah melewati ambang turn ini
     # (cukup bermakna untuk dicari lagi lintas sesi, tapi tidak tiap turn).

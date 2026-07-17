@@ -1138,8 +1138,8 @@ async def skills_page(request: Request):
     formula yang sama (base ^ hari sejak dipakai) agar kurva mencerminkan keadaan kini.
     """
     rows = await db.fetchall(
-        """SELECT role, skill_name, status, confidence, generator_model,
-                  use_count, last_used_at, decay_score, created_at,
+        """SELECT id, role, skill_name, status, confidence, generator_model,
+                  use_count, last_used_at, decay_score, created_at, visibility,
                   julianday('now') - julianday(COALESCE(last_used_at, created_at)) AS days_idle
            FROM skills
            ORDER BY status='archived', role, decay_score DESC, skill_name"""
@@ -1224,6 +1224,32 @@ async def skills_apply_merge(request: Request):
             int(curation_id_raw)
         )
         log.info("skill_merge_applied", role=role, **result)
+    return RedirectResponse(url="/skills", status_code=303)
+
+
+@app.post("/skills/set-visibility")
+async def skills_set_visibility(request: Request):
+    """Skill Marketplace lintas-role (TODO.md § Prioritas 6): ubah `visibility`
+    satu skill antara `private` (default, hanya role pemilik) dan `shared`
+    (terlihat semua role, disuntik via `SkillDecayManager.get_active_skills`).
+
+    `inherited` (hasil impor skill pack) TIDAK bisa diubah lewat sini — status
+    asalnya sudah lintas-role, endpoint ini hanya untuk toggle sadar skill
+    LOKAL milik satu role (private↔shared).
+    """
+    form = await request.form()
+    try:
+        skill_id = int(form.get("skill_id") or 0)
+    except (ValueError, TypeError):
+        skill_id = 0
+    visibility = (form.get("visibility") or "").strip()
+    if skill_id and visibility in ("private", "shared"):
+        cursor = await db.execute(
+            "UPDATE skills SET visibility=? WHERE id=? AND visibility != 'inherited'",
+            (visibility, skill_id),
+        )
+        if cursor.rowcount:
+            log.info("skill_visibility_changed", skill_id=skill_id, visibility=visibility)
     return RedirectResponse(url="/skills", status_code=303)
 
 

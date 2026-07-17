@@ -478,6 +478,18 @@ STRINGS: dict[str, dict[str, str]] = {
     "skills.col_skill": {"en": "Skill", "id": "Skill"},
     "skills.col_role": {"en": "Role", "id": "Role"},
     "skills.col_status": {"en": "Status", "id": "Status"},
+    "skills.col_visibility": {"en": "Visibility", "id": "Visibilitas"},
+    "skills.visibility_private": {"en": "Private", "id": "Privat"},
+    "skills.visibility_shared": {"en": "Shared", "id": "Dibagikan"},
+    "skills.visibility_inherited": {"en": "Imported", "id": "Impor"},
+    "skills.visibility_inherited_hint": {
+        "en": "Imported from a skill pack — already cross-role by design, not toggleable here.",
+        "id": "Hasil impor skill pack — sudah lintas-role secara desain, tak bisa diubah di sini.",
+    },
+    "skills.visibility_toggle_hint": {
+        "en": "Click to toggle between private (owner role only) and shared (visible to all roles).",
+        "id": "Klik untuk beralih antara privat (hanya role pemilik) dan dibagikan (terlihat semua role).",
+    },
     "skills.col_decay": {"en": "Decay (projected)", "id": "Decay (terproyeksi)"},
     "skills.col_idle": {"en": "Idle", "id": "Idle"},
     "skills.col_used": {"en": "Used", "id": "Dipakai"},

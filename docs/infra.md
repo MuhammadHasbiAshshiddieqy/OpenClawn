@@ -38,7 +38,8 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `skill_decay_base` | `0.97` | Base exponential decay per hari |
 | `skill_archive_threshold` | `0.3` | Skor di bawah ini → skill diarsipkan |
 | `skill_revive_boost` | `0.5` | Kenaikan skor saat skill dipakai lagi |
-| `max_active_skills` | `8` | Maksimum skill aktif yang di-load per turn |
+| `max_active_skills` | `8` | Maksimum skill aktif yang di-load per turn (milik role sendiri) |
+| `max_shared_skills` | `3` | Skill Marketplace lintas-role (TODO.md § Prioritas 6): maksimum skill role LAIN (`visibility IN ('shared','inherited')`) yang ikut disuntik, terpisah dari `max_active_skills` |
 | `confidence_threshold` | `4` | Batas bawah confidence crystallizer (1–5) |
 | `archive_after_turns` | `6` | Jumlah turn sebelum sesi diarsipkan ke L4 |
 | `session_history_turns` | `20` | Giliran terbaru sesi ini yang dimuat ulang ke history tiap request (batas atas; build() memangkas lagi per budget token) |

@@ -79,6 +79,7 @@
                         <th>{{ t('skills.col_skill') }}</th>
                         <th>{{ t('skills.col_role') }}</th>
                         <th>{{ t('skills.col_status') }}</th>
+                        <th>{{ t('skills.col_visibility') }}</th>
                         <th>{{ t('skills.col_decay') }}</th>
                         <th>{{ t('skills.col_idle') }}</th>
                         <th>{{ t('skills.col_used') }}</th>
@@ -91,6 +92,20 @@
                         <td><strong>{{ s.skill_name }}</strong></td>
                         <td><span class="role-dot role-{{ s.role }}"></span>{{ s.role }}</td>
                         <td><span class="tag status-{{ s.status }}">{{ s.status }}</span></td>
+                        <td>
+                            {% if s.visibility == 'inherited' %}
+                            <span class="tag" title="{{ t('skills.visibility_inherited_hint') }}">{{ t('skills.visibility_inherited') }}</span>
+                            {% else %}
+                            <form method="post" action="/skills/set-visibility" style="margin:0;display:inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="skill_id" value="{{ s.id }}">
+                                <input type="hidden" name="visibility" value="{{ 'private' if s.visibility == 'shared' else 'shared' }}">
+                                <button type="submit" class="btn-ghost" title="{{ t('skills.visibility_toggle_hint') }}">
+                                    {{ t('skills.visibility_shared') if s.visibility == 'shared' else t('skills.visibility_private') }}
+                                </button>
+                            </form>
+                            {% endif %}
+                        </td>
                         <td>
                             <div class="decay-track" title="{{ t('skills.score_title', score=s.projected_score, threshold=threshold) }}">
                                 <div class="decay-threshold" style="left: {{ threshold_pct }}%"></div>

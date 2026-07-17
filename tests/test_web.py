@@ -288,6 +288,69 @@ def test_skills_revert_merge_endpoint(client):
     assert status == "active"
 
 
+def test_skills_set_visibility_toggles_private_to_shared(client):
+    """POST /skills/set-visibility (TODO.md § Prioritas 6) mengubah visibility
+    skill private → shared, dan sebaliknya."""
+    import os
+    import sqlite3
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    conn.execute(
+        """INSERT INTO skills (id, role, skill_name, skill_content, status, visibility)
+           VALUES (1,'pm','share-me','isi','active','private')"""
+    )
+    conn.commit()
+    conn.close()
+
+    resp = client.post("/skills/set-visibility", data={"skill_id": "1", "visibility": "shared"})
+    assert resp.status_code == 200
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    visibility = conn.execute("SELECT visibility FROM skills WHERE id=1").fetchone()[0]
+    conn.close()
+    assert visibility == "shared"
+
+
+def test_skills_set_visibility_cannot_change_inherited(client):
+    """visibility='inherited' (hasil impor skill pack) tak bisa diubah lewat
+    endpoint ini — sudah lintas-role secara desain, bukan toggle sadar user."""
+    import os
+    import sqlite3
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    conn.execute(
+        """INSERT INTO skills (id, role, skill_name, skill_content, status, visibility)
+           VALUES (1,'pm','imported-skill','isi','active','inherited')"""
+    )
+    conn.commit()
+    conn.close()
+
+    resp = client.post("/skills/set-visibility", data={"skill_id": "1", "visibility": "private"})
+    assert resp.status_code == 200
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    visibility = conn.execute("SELECT visibility FROM skills WHERE id=1").fetchone()[0]
+    conn.close()
+    assert visibility == "inherited"  # tak berubah
+
+
+def test_skills_page_shows_visibility_toggle_button(client):
+    """Halaman /skills merender tombol toggle visibility untuk skill non-inherited."""
+    import os
+    import sqlite3
+
+    conn = sqlite3.connect(os.environ["OPENCLAWN_DB"])
+    conn.execute(
+        """INSERT INTO skills (id, role, skill_name, skill_content, status, visibility)
+           VALUES (1,'pm','toggle-me','isi','active','private')"""
+    )
+    conn.commit()
+    conn.close()
+
+    html = client.get("/skills").text
+    assert "/skills/set-visibility" in html
+
+
 def test_metrics_shows_auto_apply_badge(client):
     """/metrics menampilkan status auto-tune (I4)."""
     html = client.get("/metrics").text

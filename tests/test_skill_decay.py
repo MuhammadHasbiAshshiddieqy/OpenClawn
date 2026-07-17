@@ -226,3 +226,99 @@ async def test_default_tenant_id_backward_compatible(db, config):
     skills = await decay.get_active_skills("apapun")
     names = [s["skill_name"] for s in skills]
     assert "skill-lama-tanpa-tenant" in names
+
+
+# ── Skill Marketplace lintas-role (TODO.md § Prioritas 6) ─────────────────────
+
+
+async def test_private_skill_not_visible_to_other_role(db, config):
+    """Perilaku LAMA tak berubah: skill visibility='private' (default) HANYA
+    terlihat oleh role pemiliknya, walau role lain query dengan trigger sama."""
+    await db.execute(
+        "INSERT INTO skills (role, skill_name, skill_content, status, trigger_pattern, visibility) "
+        "VALUES ('pm','rahasia','isi','active','laporan','private')"
+    )
+    decay_qa = SkillDecayManager(role="qa", db=db, config=config)
+    skills = await decay_qa.get_active_skills("buat laporan")
+    names = [s["skill_name"] for s in skills]
+    assert "rahasia" not in names
+
+
+async def test_shared_skill_visible_to_other_role(db, config):
+    """Skill visibility='shared' dari role LAIN ikut disuntik saat trigger cocok."""
+    await db.execute(
+        "INSERT INTO skills (role, skill_name, skill_content, status, trigger_pattern, visibility) "
+        "VALUES ('pm','template-laporan','isi','active','laporan','shared')"
+    )
+    decay_qa = SkillDecayManager(role="qa", db=db, config=config)
+    skills = await decay_qa.get_active_skills("buat laporan")
+    names = [s["skill_name"] for s in skills]
+    assert "template-laporan" in names
+
+
+async def test_inherited_skill_visible_to_other_role(db, config):
+    """visibility='inherited' (hasil impor skill pack, core/skill_pack.py) juga
+    lintas-role — semantik sama seperti 'shared', beda hanya asal-usulnya."""
+    await db.execute(
+        "INSERT INTO skills (role, skill_name, skill_content, status, trigger_pattern, visibility) "
+        "VALUES ('dev','skill-impor','isi','active','deploy','inherited')"
+    )
+    decay_qa = SkillDecayManager(role="qa", db=db, config=config)
+    skills = await decay_qa.get_active_skills("deploy sekarang")
+    names = [s["skill_name"] for s in skills]
+    assert "skill-impor" in names
+
+
+async def test_own_role_skills_not_duplicated_via_shared_query(db, config):
+    """Skill milik role sendiri (walau visibility='shared') tak boleh muncul DUA
+    KALI — sekali dari query 'active' (role sendiri), bukan lagi dari query 'shared'
+    (yang memfilter role!=self)."""
+    await db.execute(
+        "INSERT INTO skills (role, skill_name, skill_content, status, trigger_pattern, visibility) "
+        "VALUES ('pm','sendiri','isi','active','laporan','shared')"
+    )
+    decay_pm = SkillDecayManager(role="pm", db=db, config=config)
+    skills = await decay_pm.get_active_skills("buat laporan")
+    names = [s["skill_name"] for s in skills]
+    assert names.count("sendiri") == 1
+
+
+async def test_shared_skills_capped_at_max_shared_skills(db, config):
+    """Skill lintas-role dibatasi CONFIG.max_shared_skills — token-first §1.4,
+    tak boleh membanjiri context walau banyak skill role lain di-share."""
+    cfg = AppConfig(db_path=":memory:", decay_interval_sec=0, max_shared_skills=2)
+    for i in range(5):
+        await db.execute(
+            "INSERT INTO skills (role, skill_name, skill_content, status, trigger_pattern, visibility) "
+            f"VALUES ('pm','shared-{i}','isi','active','laporan','shared')"
+        )
+    decay_qa = SkillDecayManager(role="qa", db=db, config=cfg)
+    skills = await decay_qa.get_active_skills("buat laporan")
+    shared_names = [s["skill_name"] for s in skills if s["skill_name"].startswith("shared-")]
+    assert len(shared_names) == 2
+
+
+async def test_archived_shared_skill_not_visible(db, config):
+    """Skill shared tapi status archived tak boleh muncul lintas-role — sama
+    aturan filter status='active' yang berlaku untuk skill role sendiri."""
+    await db.execute(
+        "INSERT INTO skills (role, skill_name, skill_content, status, trigger_pattern, visibility) "
+        "VALUES ('pm','shared-arsip','isi','archived','laporan','shared')"
+    )
+    decay_qa = SkillDecayManager(role="qa", db=db, config=config)
+    skills = await decay_qa.get_active_skills("buat laporan")
+    names = [s["skill_name"] for s in skills]
+    assert "shared-arsip" not in names
+
+
+async def test_shared_skill_scoped_to_tenant(db, config):
+    """Isolasi tenant (TODO.md § Prioritas 5) tetap berlaku untuk skill shared —
+    tenant lain TIDAK bisa lihat skill shared tenant ini walau role beda."""
+    await db.execute(
+        "INSERT INTO skills (tenant_id, role, skill_name, skill_content, status, trigger_pattern, visibility) "
+        "VALUES ('tenant-a','pm','shared-a','isi','active','laporan','shared')"
+    )
+    decay_tenant_b = SkillDecayManager(role="qa", db=db, config=config, tenant_id="tenant-b")
+    skills = await decay_tenant_b.get_active_skills("buat laporan")
+    names = [s["skill_name"] for s in skills]
+    assert "shared-a" not in names
