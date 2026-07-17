@@ -20,11 +20,13 @@ Referensi teknis lengkap untuk semua modul dan fungsi dalam OpenCLAWN. Dibaca be
 | Role PM/QA/Dev/Data/Security, handoff contract, soul.toml | [roles.md](roles.md) |
 | Vault, Shield (+**SSRF guard**), ApprovalGate HITL (+proposal queue) | [security.md](security.md) · [tools.md](tools.md) |
 | **Guardrails** (ala NeMo): input/output rails, PII redaction, prompt-leak block | [security.md](security.md) |
-| **Self-host auth** (opt-in login), CSRF, rate limiting — untuk deploy di VPS publik | [security.md](security.md) · [web.md](web.md) · `README.md` § Scope and Production Posture |
+| **Self-host auth** (opt-in login: shared-secret + **OAuth2/OIDC**), CSRF, rate limiting — untuk deploy di VPS publik | [security.md](security.md) · [web.md](web.md) · `README.md` § Scope and Production Posture |
+| **Multi-tenant** (`tenant_id`) + **multi-user RBAC** (admin/member/viewer) | [database.md](database.md) · [security.md](security.md) · [infra.md](infra.md) |
 | Tool file/web/code/**blocker**, Docker sandbox | [tools.md](tools.md) |
-| Endpoint FastAPI, SSE streaming, Web UI, **/settings** | [web.md](web.md) |
+| Endpoint FastAPI, SSE streaming, Web UI, **/settings**, **/admin/users** | [web.md](web.md) |
 | Pilih/override model (Gemini, dll.) | [infra.md](infra.md) · [web.md](web.md) |
 | Schema tabel SQLite, query contoh | [database.md](database.md) |
+| Jalur migrasi SQLite→PostgreSQL (opsional, tak diblok arsitektur) | [postgres-migration.md](postgres-migration.md) |
 | Cara menulis test, daftar test per file | [tests.md](tests.md) |
 | Script seed routing & sensitivity analysis | [scripts.md](scripts.md) |
 

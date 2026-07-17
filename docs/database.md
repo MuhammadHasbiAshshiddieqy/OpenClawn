@@ -547,7 +547,7 @@ Fondasi skema untuk multi-tenant, ditambahkan lewat `migrations/002_multi_tenant
 
 Test regresi migrasi: `tests/test_database.py` (`test_rebuild_adds_tenant_id_to_*`, `test_rebuild_enforces_new_unique_constraint`, `test_rebuild_idempotent_on_second_run`). Test isolasi tenant: `tests/test_chat_sessions.py` dan `tests/test_skill_decay.py` (bagian "Multi-Tenant isolation").
 
-**Jalur ke PostgreSQL:** SQLite tetap default (data sovereignty untuk deployment self-hosted single-organization). Skema `tenant_id` di atas sengaja kompatibel dengan model multi-tenant standar (satu kolom filter, bukan skema-per-tenant atau database-per-tenant) — migrasi ke Postgres untuk deployment yang butuh skala lintas-proses adalah perubahan `DatabaseManager`/driver, BUKAN perubahan skema logis ini.
+**Jalur ke PostgreSQL:** SQLite tetap default (data sovereignty untuk deployment self-hosted single-organization). Skema `tenant_id` di atas sengaja kompatibel dengan model multi-tenant standar (satu kolom filter, bukan skema-per-tenant atau database-per-tenant) — migrasi ke Postgres untuk deployment yang butuh skala lintas-proses adalah perubahan `DatabaseManager`/driver, BUKAN perubahan skema logis ini. Dokumentasi lengkap (translasi dialek SQL, kapan masuk akal, apa yang tidak berubah): [`docs/postgres-migration.md`](postgres-migration.md).
 
 ---
 
