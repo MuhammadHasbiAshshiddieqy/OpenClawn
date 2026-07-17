@@ -154,6 +154,15 @@ def test_security_role_is_read_only():
     }
     leaked = allowed & forbidden
     assert not leaked, f"role security seharusnya read-only, tapi punya: {leaked}"
+    # Wildcard MCP ("mcp__*" atau "mcp__<server>__*") tak bisa dicek terhadap
+    # daftar `forbidden` di atas — tool server pihak ketiga (mis. OpenConnector)
+    # di-discover dinamis, sifatnya (tulis/network) tak diketahui saat ini.
+    # Larang wildcard-nya sendiri, bukan hanya nama tool spesifik.
+    mcp_wildcards = {a for a in allowed if a.startswith("mcp__")}
+    assert not mcp_wildcards, (
+        f"role security seharusnya read-only, tapi punya akses MCP pihak ketiga "
+        f"tak terprediksi: {mcp_wildcards}"
+    )
 
 
 # ── RoleNegotiator integration tests ────────────────────────────────────────

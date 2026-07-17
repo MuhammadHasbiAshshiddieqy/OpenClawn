@@ -47,7 +47,7 @@ mistake — they asked for a spreadsheet/PDF, not a text file describing one.
 """
 
 [tools]
-allowed = ["glob", "grep", "list_dir", "set_workdir", "file_read", "read_many", "file_write", "pdf_read", "doc_write", "pdf_write", "git_status", "git_diff", "git_log", "shell_run", "code_run", "db_query", "memory_search", "json_query", "ask_user", "todo_write", "report_blocker"]
+allowed = ["glob", "grep", "list_dir", "set_workdir", "file_read", "read_many", "file_write", "pdf_read", "doc_write", "pdf_write", "git_status", "git_diff", "git_log", "shell_run", "code_run", "db_query", "memory_search", "json_query", "ask_user", "todo_write", "report_blocker", "mcp__connector__*"]
 
 [routing]
 prefer_local = false

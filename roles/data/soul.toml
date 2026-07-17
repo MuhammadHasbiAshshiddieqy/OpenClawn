@@ -44,7 +44,7 @@ RULES:
 """
 
 [tools]
-allowed = ["glob", "grep", "list_dir", "set_workdir", "file_read", "read_many", "pdf_read", "doc_write", "pdf_write", "db_query", "code_run", "json_query", "memory_search", "web_search", "web_fetch", "ask_user", "todo_write", "report_blocker"]
+allowed = ["glob", "grep", "list_dir", "set_workdir", "file_read", "read_many", "pdf_read", "doc_write", "pdf_write", "db_query", "code_run", "json_query", "memory_search", "web_search", "web_fetch", "ask_user", "todo_write", "report_blocker", "mcp__connector__*"]
 
 [routing]
 prefer_local = false

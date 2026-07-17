@@ -188,17 +188,33 @@ output_type = "PMOutput"
 
 | Role | `prefer_local` | Fokus | Akses tool |
 |---|---|---|---|
-| **pm** | `true` | Breakdown, prioritas, acceptance criteria | baca + tulis file (`file_write`/`doc_write`/`pdf_write`), web_search/fetch (tanpa eksekusi) |
-| **qa** | `false` | Review, test case, edge case | baca + tulis (`file_write`/`doc_write`/`pdf_write`), shell_run/code_run (sandboxed) |
-| **dev** | `false` | Implementasi, fix, refactor | set penuh: baca/tulis/edit/patch (`file_write`/`doc_write`/`pdf_write`), shell_run/code_run, http_request |
-| **data** | `false` | Analisis, eksplorasi, statistik, insight, modeling dasar | baca + db_query (SELECT) + code_run (hitung statistik/modeling di sandbox); **tanpa tulis file** |
-| **security** | `true` | Audit keamanan & privasi (advisory) | **read-only mutlak**: glob/grep/list_dir/file_read/pdf_read/db_query(SELECT)/json_query/memory_search; tanpa tulis/eksekusi/network |
+| **pm** | `true` | Breakdown, prioritas, acceptance criteria | baca + tulis file (`file_write`/`doc_write`/`pdf_write`), web_search/fetch (tanpa eksekusi), `mcp__connector__*` |
+| **qa** | `false` | Review, test case, edge case | baca + tulis (`file_write`/`doc_write`/`pdf_write`), shell_run/code_run (sandboxed), `mcp__connector__*` |
+| **dev** | `false` | Implementasi, fix, refactor | set penuh: baca/tulis/edit/patch (`file_write`/`doc_write`/`pdf_write`), shell_run/code_run, http_request, `mcp__connector__*` |
+| **data** | `false` | Analisis, eksplorasi, statistik, insight, modeling dasar | baca + db_query (SELECT) + code_run (hitung statistik/modeling di sandbox) + `mcp__connector__*`; **tanpa tulis file** |
+| **security** | `true` | Audit keamanan & privasi (advisory) | **read-only mutlak**: glob/grep/list_dir/file_read/pdf_read/db_query(SELECT)/json_query/memory_search; tanpa tulis/eksekusi/network/MCP |
 
 **`prefer_local = true`** (PM, security): cenderung tetap di Ollama untuk query biasa, naik ke cloud hanya jika kata kunci upgrade cocok atau skor tinggi. Untuk **security**, ini juga pilihan privasi — data sensitif lebih baik tidak keluar box bila tidak perlu. QA/Dev/Data tidak prefer local — lebih agresif naik ke cloud untuk tugas berat.
 
 **PM: PRD/dokumen di-reroute ke cloud (fix bug "No answer").** `roles/pm/soul.toml` menggabungkan `upgrade_keywords` (+3, mencakup "PRD"/"dokumen"/"document") DENGAN `multistep_keywords` (+2, keyword sama) — kombinasi ini menembus `Complexity.COMPLEX` (cloud), bukan berhenti di `MODERATE` (`qwen3.5:9b`, masih lokal). Akar masalah: `gemma4:e4b` (tier termurah) bisa merencanakan tool call yang BENAR di dalam `<think>` untuk permintaan dokumen terstruktur, tapi kehabisan giliran reasoning sebelum sempat keluar ke aksi nyata — stream berhenti *natural* (`done: true`), bukan dipotong `max_tokens`. Menaikkan `CONFIG.llm_max_tokens_with_tools` saja terbukti tidak cukup (§ `docs/infra.md`); fix yang bekerja adalah reroute ke model lebih kuat. Diuji di `test_pm_prd_request_routes_to_cloud_not_local_reasoning_model` (`tests/test_router.py`).
 
 **Role `security` read-only by design** (keputusan owner, selaras CLAUDE.md §17): ia *menyarankan* mitigasi, tidak menerapkannya. Bila perlu perubahan, ia menyerahkan ke Dev. Ini ditegakkan oleh test `test_security_role_is_read_only` — menambah tool tulis/eksekusi ke soul security akan menggagalkan test.
+
+**Akses OpenConnector (MCP, third-party — TODO.md § Prioritas 6 follow-up):** `pm`, `qa`,
+`dev`, `data` punya `mcp__connector__*` di `[tools] allowed` — izin wildcard scoped ke
+server MCP bernama `connector` saja (bukan `mcp__*` global), mengikuti pola opt-in
+per-server dari `core/agent_loop.py::_tool_allowed` (lihat `docs/core.md`). Ini LAPIS KEDUA
+dari dua lapis opt-in: server `connector` masih harus didaftarkan lebih dulu lewat `/mcp`
+(discover tool-nya ke `TOOL_REGISTRY`) sebelum wildcard di soul ini punya efek — tanpa
+server terdaftar, `mcp__connector__*` di `allowed` tidak mencocokkan apa pun. Setiap
+pemanggilan tool MCP tetap `requires_approval=True` (§1) terlepas dari izin role.
+
+**`security` SENGAJA DIKECUALIKAN** dari `mcp__connector__*` — bukan alpa. Tool OpenConnector
+di-discover dinamis dari server pihak ketiga; sifatnya (tulis/network, mis. kirim email,
+panggil API eksternal) tak diketahui di muka, dan wildcard tak bisa diperiksa satu-satu
+terhadap prinsip *read-only mutlak* role ini. Ditegakkan `test_security_role_is_read_only`
+(`tests/test_contracts.py`) — bagian kedua dari test itu melarang SEMUA wildcard `mcp__*`
+di `allowed`, bukan hanya nama tool spesifik, justru karena tool MCP tak enumerable di muka.
 
 ---
 

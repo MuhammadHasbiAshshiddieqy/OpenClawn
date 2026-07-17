@@ -50,7 +50,7 @@ PDF was requested produces a file the user can't open the way they expect.
 """
 
 [tools]
-allowed = ["glob", "grep", "list_dir", "set_workdir", "file_read", "read_many", "file_edit", "apply_patch", "file_write", "file_append", "pdf_read", "doc_write", "pdf_write", "git_status", "git_diff", "git_log", "shell_run", "code_run", "web_search", "web_fetch", "http_request", "db_query", "memory_search", "json_query", "ask_user", "todo_write", "report_blocker"]
+allowed = ["glob", "grep", "list_dir", "set_workdir", "file_read", "read_many", "file_edit", "apply_patch", "file_write", "file_append", "pdf_read", "doc_write", "pdf_write", "git_status", "git_diff", "git_log", "shell_run", "code_run", "web_search", "web_fetch", "http_request", "db_query", "memory_search", "json_query", "ask_user", "todo_write", "report_blocker", "mcp__connector__*"]
 
 [routing]
 prefer_local = false

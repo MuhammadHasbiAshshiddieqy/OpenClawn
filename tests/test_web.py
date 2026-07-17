@@ -18,6 +18,11 @@ def client(tmp_path, monkeypatch):
     # Workspace sementara: tulisan apa pun (mis. skills-lock.json dari impor skill)
     # mendarat di tmp, bukan mengotori repo.
     monkeypatch.setenv("OPENCLAWN_WORKSPACE", str(tmp_path))
+    # .env lokal developer bisa berisi OPENCLAWN_CONNECTOR_URL (opt-in entry point
+    # sidebar) — set ke string kosong (bukan delenv) agar test "default" tidak
+    # bocor dari environment nyata: load_dotenv() hanya mengisi key yang BELUM
+    # ada di os.environ, jadi delenv saja akan ditimpa ulang dari .env.
+    monkeypatch.setenv("OPENCLAWN_CONNECTOR_URL", "")
 
     # Import setelah env diset agar CONFIG.from_env() memakai DB sementara.
     import importlib
