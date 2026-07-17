@@ -31,3 +31,29 @@ openclawn.example.com {
         output file /var/log/caddy/openclawn.log
     }
 }
+
+# OpenConnector (opsional, third-party — https://github.com/oomol-lab/open-connector,
+# Apache-2.0 oleh oomol-lab) — dashboard + API gateway 1000+ provider SaaS,
+# dijalankan sebagai container Docker terpisah (docker-compose.yml § connector,
+# profile "connector"). Update = docker compose pull connector, image resmi
+# tidak dimodifikasi/di-vendor ke repo ini.
+#
+# SUBDOMAIN, bukan subpath — Web Console mereka (React/Vite) referensi asset
+# dengan path absolut dari root ("/assets/..."), jadi tak aman di-mount di
+# subpath (mis. openclawn.example.com/connector) tanpa modifikasi build mereka.
+# Ganti "connector.example.com" dengan subdomain Anda sendiri, DNS A/CNAME
+# harus menunjuk ke server yang sama sebelum Caddy bisa terbitkan TLS untuknya.
+connector.example.com {
+    reverse_proxy localhost:3000
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "same-origin"
+    }
+
+    encode gzip
+    log {
+        output file /var/log/caddy/connector.log
+    }
+}

@@ -328,6 +328,60 @@ Adapter: satu tool dari server MCP eksternal → antarmuka `Tool` OpenCLAWN. Kun
 
 ---
 
+## Integrasi OpenConnector (third-party, opsional)
+
+[OpenConnector](https://github.com/oomol-lab/open-connector) (oomol-lab,
+**Apache License 2.0**) adalah auth gateway open-source yang menyambungkan
+1000+ provider SaaS (GitHub, Gmail, Notion, Slack, dst) ke agent AI lewat MCP,
+HTTP/OpenAPI, dan SDK. OpenCLAWN **tidak memvendor/fork kode mereka** —
+diintegrasikan murni sebagai server MCP eksternal lewat `MCPRegistry`/`MCPTool`
+di atas, konsisten §1.6 CLAUDE.md (tool MCP tak dapat jalur istimewa, selalu
+`requires_approval=True`).
+
+Kredit sepenuhnya untuk tim OOMOL/oomol-lab — lisensi Apache-2.0 mengizinkan
+pemakaian bebas (termasuk komersial) selama notice lisensi asli dipertahankan
+(lihat `NOTICE.md`/`LICENSE.txt` di repo mereka; tak ada dependency kode baru
+masuk ke OpenCLAWN, jadi tak ada kewajiban penyertaan notice tambahan di repo
+ini di luar kredit README).
+
+### Menjalankan OpenConnector
+
+```bash
+# Sebagai service Docker terpisah, opt-in via profile (docker-compose.yml § connector)
+docker compose --profile connector up -d connector
+```
+
+Dashboard tersedia di `http://localhost:3000` untuk kelola kredensial/koneksi
+provider (lihat [Caddyfile.example](../Caddyfile.example) untuk expose lewat
+subdomain terpisah, mis. `connector.example.com`, di deployment publik).
+
+### Mendaftarkan sebagai server MCP di OpenCLAWN
+
+Buka halaman `/mcp` (admin-only, TODO.md § Prioritas 5 RBAC) → **Tambah Server**:
+
+| Field | Nilai |
+|---|---|
+| `name` | `connector` (bebas, jadi prefix tool: `mcp__connector__*`) |
+| `transport` | `http` |
+| `url` | `http://connector:3000/mcp` (dalam Docker network yang sama) atau `http://localhost:3000/mcp` (akses langsung ke host) |
+
+Setelah tersambung, aktifkan aksesnya per role via `soul.toml`:
+
+```toml
+[tools]
+allowed = ["mcp__connector__*"]  # semua tool OpenConnector untuk role ini
+# atau lebih spesifik bila OpenConnector expose banyak sub-tool per provider
+```
+
+OpenConnector expose 4 tool MCP tetap (`list_apps`, `search_actions`,
+`get_action_guide`, `execute_action`) — bukan satu tool per provider action,
+jadi katalog 1000+ provider mereka tetap ringkas di sisi OpenCLAWN. Approval
+tetap wajib untuk tiap eksekusi (§1) walau OpenConnector sendiri sudah
+menerapkan kebijakan allow/block-nya sendiri di sisi mereka — dua lapis,
+bukan saling menggantikan.
+
+---
+
 ## `tools/code.py`
 
 ### `CodeRunTool`

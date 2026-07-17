@@ -24,6 +24,38 @@ services:
       retries: 3
       start_period: 10s
 
+  # OpenConnector (opsional) — gateway auth 1000+ provider SaaS (GitHub, Gmail,
+  # Notion, Slack, dst) yang di-expose ke agent lewat MCP standar. Proyek pihak
+  # ketiga terpisah (Node.js/TypeScript), Apache-2.0, oleh oomol-lab:
+  # https://github.com/oomol-lab/open-connector — TIDAK di-vendor/fork ke dalam
+  # kode OpenCLAWN, dijalankan sebagai container independen dari image resmi
+  # agar mudah di-update (`docker compose pull connector`). Daftarkan sebagai
+  # server MCP di /mcp OpenCLAWN (http://connector:3000/mcp dari dalam Docker
+  # network, atau http://localhost:3000/mcp bila diakses host) — lihat
+  # docs/tools.md § Integrasi OpenConnector untuk langkah lengkap.
+  connector:
+    image: ghcr.io/oomol-lab/open-connector:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - connector-data:/app/data
+    environment:
+      OOMOL_CONNECT_DATA_DIR: /app/data
+      # Wajib diisi bila diakses lewat reverse-proxy satu domain (Caddyfile.example
+      # § /connector) agar redirect OAuth callback provider mengarah ke domain
+      # publik yang benar, bukan localhost:3000 internal container.
+      OOMOL_CONNECT_ORIGIN: ${OOMOL_CONNECT_ORIGIN:-}
+      # Opsional: proteksi endpoint admin/dashboard OpenConnector. Kosong = tanpa
+      # token (aman HANYA di localhost/jaringan tepercaya, sama semangat
+      # OPENCLAWN_AUTH_TOKEN kosong = auth OpenCLAWN nonaktif).
+      OOMOL_CONNECT_ADMIN_TOKEN: ${OOMOL_CONNECT_ADMIN_TOKEN:-}
+      OOMOL_CONNECT_ENCRYPTION_KEY: ${OOMOL_CONNECT_ENCRYPTION_KEY:-}
+    restart: unless-stopped
+    profiles: ["connector"]  # opt-in: `docker compose --profile connector up`
+
+volumes:
+  connector-data:
+
   # Sandbox image di-build terpisah — tidak dijalankan sebagai service,
   # hanya dipakai oleh DockerSandbox.run_python() via docker run
   # Build: docker build -t openclawn-sandbox:latest -f Dockerfile.sandbox .

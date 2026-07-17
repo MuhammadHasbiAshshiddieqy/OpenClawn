@@ -604,6 +604,7 @@ Detailed reference for every module, class, and function:
 | `web/` | [docs/web.md](docs/web.md) — FastAPI endpoints, SSE streaming |
 | Database | [docs/database.md](docs/database.md) — full schema + example queries |
 | Tests | [docs/tests.md](docs/tests.md) — test index + patterns |
+| OpenConnector integration | [docs/tools.md](docs/tools.md#integrasi-openconnector-third-party-opsional) — connect 1000+ SaaS providers via MCP |
 
 ---
 
@@ -699,6 +700,28 @@ tracked in [CHANGELOG.md](CHANGELOG.md).
 > and `code_run` run **only** in the Docker sandbox (never on the host); the DB is never
 > served statically; there are no `except: pass` swallows; CI exists. Evaluate it as a
 > single-user framework, not a SaaS.
+
+---
+
+## Third-Party Integrations
+
+**[OpenConnector](https://github.com/oomol-lab/open-connector)** by
+[oomol-lab](https://github.com/oomol-lab), licensed under the
+[Apache License 2.0](https://github.com/oomol-lab/open-connector/blob/main/LICENSE.txt).
+An open-source auth gateway connecting 1,000+ SaaS providers (GitHub, Gmail,
+Notion, Slack, and more) to AI agents via MCP, HTTP/OpenAPI, and SDK.
+
+OpenCLAWN does not vendor or fork OpenConnector's code — it runs as an
+independent Docker service (`docker-compose.yml`, opt-in `connector` profile)
+and is connected purely as an external MCP server through the existing
+`MCPRegistry`/`MCPTool` integration, same as any other MCP tool (always
+`requires_approval=True`, no special-cased trust). See
+[docs/tools.md § Integrasi OpenConnector](docs/tools.md#integrasi-openconnector-third-party-opsional)
+for setup steps and [Caddyfile.example](Caddyfile.example) for exposing its
+dashboard alongside OpenCLAWN in a self-hosted deployment.
+
+Full credit to the OOMOL/oomol-lab team for OpenConnector. Provider names and
+trademarks referenced through it belong to their respective owners.
 
 ---
 
