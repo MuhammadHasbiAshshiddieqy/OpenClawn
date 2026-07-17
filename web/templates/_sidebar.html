@@ -90,6 +90,13 @@
                 {{ t('nav.admin_users') }}
             </a>
             {% endif %}
+            {% if connector_url %}
+            <a href="{{ connector_url }}" class="nav-link" target="_blank" rel="noopener noreferrer" title="{{ t('nav.connector_hint') }}">
+                <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="5.5" y="9" width="5" height="5" rx="1"/><path d="M4.5 7v2h7V7"/></svg>
+                {{ t('nav.connector') }}
+                <svg class="ico" style="width:11px;height:11px;margin-left:auto;opacity:.6" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h7v7M13 3L4 12"/></svg>
+            </a>
+            {% endif %}
         </nav>
     </div>
 

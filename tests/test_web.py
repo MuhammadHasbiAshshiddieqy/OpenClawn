@@ -49,6 +49,46 @@ def test_index_renders(client):
     assert resp.status_code == 200
 
 
+def test_connector_link_absent_by_default(client):
+    """Entry point OpenConnector di sidebar: `OPENCLAWN_CONNECTOR_URL` kosong
+    (default) → link TAK ditampilkan, integrasi ini sepenuhnya opt-in."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert 'href="http://localhost:3000"' not in resp.text
+
+
+@pytest.fixture
+def client_with_connector(tmp_path, monkeypatch):
+    """TestClient dengan OPENCLAWN_CONNECTOR_URL diisi — untuk verifikasi link
+    entry point OpenConnector muncul di sidebar saat integrasi diaktifkan."""
+    db_file = tmp_path / "test.db"
+    monkeypatch.setenv("OPENCLAWN_DB", str(db_file))
+    monkeypatch.setenv("OPENCLAWN_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("OPENCLAWN_CONNECTOR_URL", "http://localhost:3000")
+
+    import importlib
+    import infra.config as config_mod
+
+    importlib.reload(config_mod)
+    import web.main as web_main
+
+    importlib.reload(web_main)
+
+    from fastapi.testclient import TestClient
+
+    with TestClient(web_main.app) as c:
+        yield c
+
+
+def test_connector_link_present_when_configured(client_with_connector):
+    """OPENCLAWN_CONNECTOR_URL diisi → link entry point muncul di sidebar,
+    mengarah ke URL yang dikonfigurasi, buka tab baru (target=_blank)."""
+    resp = client_with_connector.get("/")
+    assert resp.status_code == 200
+    assert 'href="http://localhost:3000"' in resp.text
+    assert 'target="_blank"' in resp.text
+
+
 def test_metrics_prometheus_renders_text_exposition_format(client):
     """TODO.md § Prioritas 6: /metrics/prometheus harus 200 + content-type
     text-exposition Prometheus, walau belum ada data (cardinality nol)."""

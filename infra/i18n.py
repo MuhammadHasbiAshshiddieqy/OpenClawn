@@ -27,6 +27,11 @@ STRINGS: dict[str, dict[str, str]] = {
     "nav.router": {"en": "Router", "id": "Router"},
     "nav.settings": {"en": "Settings", "id": "Pengaturan"},
     "nav.admin_users": {"en": "Users", "id": "Pengguna"},
+    "nav.connector": {"en": "Connectors", "id": "Konektor"},
+    "nav.connector_hint": {
+        "en": "Open OpenConnector dashboard (opens in a new tab)",
+        "id": "Buka dashboard OpenConnector (tab baru)",
+    },
     "nav.workspace": {"en": "Workspace", "id": "Ruang Kerja"},
     "nav.roles": {"en": "Roles", "id": "Peran"},
     "nav.single_agent": {"en": "single-agent", "id": "agen-tunggal"},

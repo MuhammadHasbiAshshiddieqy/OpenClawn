@@ -44,6 +44,13 @@ class AppConfig:
     # tapi restart server akan me-logout semua sesi aktif — operator yang ingin
     # sesi bertahan lintas-restart HARUS mengisi salah satu secret eksplisit).
     session_secret: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    # OpenConnector (opsional, third-party — github.com/oomol-lab/open-connector,
+    # Apache-2.0) — URL dashboard-nya untuk link entry point di sidebar. Kosong
+    # (default) → link TIDAK ditampilkan (integrasi opt-in, konsisten docker-compose.yml
+    # § connector yang juga opt-in via profile). Isi bila container `connector`
+    # dijalankan — localhost:3000 untuk dev, subdomain publik untuk deployment
+    # dengan Caddyfile.example § connector.example.com.
+    connector_url: str = ""
     # Idle timeout (opt-in, TODO.md § Prioritas 1.5): logout otomatis setelah N
     # detik TAK aktif — berbeda dari SESSION_MAX_AGE_SEC (absolute expiry 7 hari
     # sejak login, tetap berlaku sebagai batas atas walau idle timeout aktif).
@@ -226,6 +233,7 @@ class AppConfig:
             oidc_redirect_base=os.environ.get(
                 "OPENCLAWN_OIDC_REDIRECT_BASE", "http://localhost:8000"
             ),
+            connector_url=os.environ.get("OPENCLAWN_CONNECTOR_URL", ""),
             idle_timeout_sec=(
                 int(os.environ["OPENCLAWN_IDLE_TIMEOUT_SEC"])
                 if os.environ.get("OPENCLAWN_IDLE_TIMEOUT_SEC")

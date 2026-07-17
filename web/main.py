@@ -208,6 +208,10 @@ async def _ui_ctx(page: str = "", request: Request | None = None) -> dict:
     `is_admin` (TODO.md § Prioritas 5, RBAC): True bila auth NONAKTIF (semua
     fitur terbuka, perilaku lama) ATAU user sesi ini `access_role='admin'` —
     dipakai `_sidebar.html` menampilkan link "Users" hanya untuk admin.
+
+    `connector_url`: entry point sidebar ke dashboard OpenConnector (third-party,
+    opsional — lihat `docs/tools.md` § Integrasi OpenConnector). Kosong (default)
+    → link tak ditampilkan, konsisten integrasi ini yang sepenuhnya opt-in.
     """
     locale = await SettingsStore(db).get_ui_locale()
     csrf = request.cookies.get(CSRF_COOKIE, "") if request else ""
@@ -220,6 +224,7 @@ async def _ui_ctx(page: str = "", request: Request | None = None) -> dict:
         "csrf_token": csrf,
         "auth_enabled": CONFIG.auth_active,
         "is_admin": is_admin,
+        "connector_url": CONFIG.connector_url,
     }
 
 

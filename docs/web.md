@@ -624,6 +624,18 @@ Admin bisa demote diri sendiri — TIDAK dicegah secara khusus (konsisten "admin
 
 ## `web/templates/`
 
+### `_sidebar.html`
+
+Sidebar bersama, di-`{% include %}` oleh semua halaman lewat context `_ui_ctx()`
+(`web/main.py`). Selain nav link statis (chat/activity/autopilots/mcp/metrics/skills/
+conversations/router/settings), dua link kondisional:
+- **Users** (`/admin/users`) — hanya bila `is_admin and auth_enabled`.
+- **Connectors** — hanya bila `connector_url` terisi (`OPENCLAWN_CONNECTOR_URL`, default
+  kosong = link tak ditampilkan). Entry point ke dashboard
+  [OpenConnector](https://github.com/oomol-lab/open-connector) (third-party, opsional,
+  Apache-2.0 — lihat `docs/tools.md` § Integrasi OpenConnector), link statis sederhana
+  (`target="_blank"`, bukan dynamic health-check-aware) yang membuka tab baru.
+
 ### `index.html`
 
 Template halaman chat. Fitur:
