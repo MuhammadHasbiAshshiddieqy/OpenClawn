@@ -49,6 +49,16 @@ def test_index_renders(client):
     assert resp.status_code == 200
 
 
+def test_metrics_prometheus_renders_text_exposition_format(client):
+    """TODO.md § Prioritas 6: /metrics/prometheus harus 200 + content-type
+    text-exposition Prometheus, walau belum ada data (cardinality nol)."""
+    resp = client.get("/metrics/prometheus")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert "# HELP openclawn_routing_events_total" in resp.text
+    assert "# TYPE openclawn_skills_total gauge" in resp.text
+
+
 def test_settings_renders_with_compaction_control(client):
     """/settings render 200 + memuat kontrol compaction (default off)."""
     resp = client.get("/settings")

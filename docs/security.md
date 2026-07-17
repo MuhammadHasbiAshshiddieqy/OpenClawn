@@ -290,8 +290,10 @@ Token acak (`secrets.token_urlsafe`) disimpan di cookie terpisah (`openclawn_csr
 `httponly=False` agar terbaca Jinja) + disuntik ke tiap form POST.
 
 **`is_public_path(path) → bool`**  
-`/health`, `/login`, `/static/*` selalu bisa diakses tanpa sesi (monitoring, aset
-halaman login itu sendiri, dan login flow).
+`/health`, `/login`, `/login/oidc`, `/auth/callback`, `/metrics/prometheus`,
+`/static/*` selalu bisa diakses tanpa sesi (monitoring, login flow lengkap —
+shared-secret dan OIDC — dan scraper Prometheus yang tak bawa cookie sesi,
+TODO.md § Prioritas 6).
 
 Diintegrasikan di `web/main.py` (`auth_and_csrf_middleware`): cek sesi → redirect
 `/login` (GET) atau 401 JSON (non-GET) bila tak valid; lalu cek CSRF untuk POST

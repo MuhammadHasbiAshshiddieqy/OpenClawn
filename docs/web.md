@@ -421,6 +421,32 @@ Untuk konsumsi programatik (dashboard SIEM eksternal, laporan terjadwal) tanpa p
 
 ---
 
+#### `GET /metrics/prometheus`
+
+**Prometheus text-exposition format** (TODO.md § Prioritas 6) — untuk integrasi
+Grafana/Datadog/scraper Prometheus lain, tanpa perlu SDK `prometheus_client`.
+Detail metric family lengkap: `docs/core.md` § `core/prometheus_metrics.py`.
+
+**PUBLIC** (`security/auth.py::PUBLIC_PATHS`) — tetap 200 tanpa sesi walau auth
+aktif, sama pola `/health`. Alasan: scraper Prometheus tak bawa cookie
+browser; data yang di-expose murni agregat operasional (jumlah, bukan
+detail/PII/kredensial).
+
+```bash
+curl http://localhost:8000/metrics/prometheus
+```
+
+Contoh konfigurasi `prometheus.yml`:
+```yaml
+scrape_configs:
+  - job_name: openclawn
+    static_configs:
+      - targets: ["localhost:8000"]
+    metrics_path: /metrics/prometheus
+```
+
+---
+
 #### `POST /feedback/{event_id}`
 
 **User memberi rating eksplisit 1-5 untuk satu turn (Runtime Evaluation Engine).**

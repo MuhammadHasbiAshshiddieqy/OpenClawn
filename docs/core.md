@@ -719,3 +719,47 @@ CRUD definisi server (tabel `mcp_servers`) + muat tool-nya ke `TOOL_REGISTRY`.
 - **`list_servers` / `set_enabled` / `delete`** *(async)* — kelola server.
 - **`load_all() → dict`** *(async)* — discover & daftarkan tool dari semua server enabled ke `TOOL_REGISTRY` dengan nama `mcp__<server>__<tool>`. **Idempoten** (buang tool MCP lama dulu); **fail-safe per server** (server error di-skip, startup tak jatuh). Dipanggil di lifespan + setelah perubahan via `/mcp`.
 - **`discovered_tools() → list`** *(async)* — daftar tool MCP yang terdaftar (untuk `/mcp`).
+
+---
+
+## `core/prometheus_metrics.py` — Prometheus Metrics (TODO.md § Prioritas 6)
+
+Format text-exposition Prometheus manual (BUKAN library `prometheus_client` —
+CLAUDE.md §8: opsi ringan tanpa dependency baru di atas data yang sudah ada).
+Semua metrik dibangun dari query agregat ke tabel yang SUDAH ADA
+(`routing_events`, `tool_invocations`, `skills`, `approval_log`, `users`,
+`autopilots`) — tak ada tabel/kolom baru. Dipakai `GET /metrics/prometheus`
+(`web/main.py`, PUBLIC — lihat `docs/security.md`).
+
+### Fungsi: `render_prometheus_metrics(db) → str` *(async)*
+
+Render seluruh metric family dalam satu string text-exposition. Query murni
+`SELECT`+`GROUP BY`, tanpa state — aman di-scrape berulang.
+
+**Metric yang di-expose:**
+
+| Metric | Type | Label | Sumber |
+|---|---|---|---|
+| `openclawn_routing_events_total` | counter | `complexity_label`, `role` | `routing_events` |
+| `openclawn_routing_corrections_total` | counter | `complexity_label`, `role` | `routing_events.had_correction` |
+| `openclawn_routing_cost_usd_total` | counter | `role` | `SUM(routing_events.cost_usd)` |
+| `openclawn_tool_invocations_total` | counter | `tool_name`, `outcome` | `tool_invocations` |
+| `openclawn_skills_total` | gauge | `role`, `status` | `skills` |
+| `openclawn_approval_log_total` | gauge | `decision` | `approval_log` |
+| `openclawn_users_total` | gauge | `access_role` | `users` (TODO.md § Prioritas 5, RBAC) |
+| `openclawn_autopilots_total` | gauge | `enabled` | `autopilots` |
+
+**Normalisasi decision legacy:** baris `approval_log.decision` historis
+pra-Human-Approval-Pipeline (TODO.md § Prioritas 2) berformat
+`"pending:{approval_id}"` (approval_id dulu di-encode ke kolom ini sebelum
+kolom `approval_log.approval_id` terpisah ada) dinormalisasi ke `"pending"`
+polos sebelum di-render — tanpa ini, tiap approval_id lama jadi label
+cardinality baru (tak terbatas). Ditemukan saat verifikasi live terhadap
+`data/openclawn.db` nyata yang masih menyimpan baris semacam ini.
+
+**Escaping label:** `_escape_label_value()` meng-escape backslash, kutip
+ganda, dan newline pada nilai label (nama tool/role bisa berisi karakter apa
+pun secara teori) — mencegah nilai label memecah format text-exposition.
+
+**HELP/TYPE selalu di-render** walau cardinality nol (belum ada data untuk
+metric itu) — scraper/dashboard tetap tahu metric ini ada di sistem.

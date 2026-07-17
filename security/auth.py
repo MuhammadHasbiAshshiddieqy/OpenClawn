@@ -41,7 +41,10 @@ SESSION_MAX_AGE_SEC = 7 * 24 * 3600  # 7 hari
 # aset statis untuk merender halaman login itu sendiri, dan login flow itu sendiri).
 # `/login/oidc` (redirect ke provider) dan `/auth/callback` (kembalian provider)
 # TERMASUK — pengguna belum punya sesi sama sekali di titik ini (TODO.md § Prioritas 5).
-PUBLIC_PATHS = {"/health", "/login", "/login/oidc", "/auth/callback"}
+# `/metrics/prometheus` (TODO.md § Prioritas 6) publik sama seperti `/health` —
+# scraper Prometheus tak bawa cookie sesi; datanya murni agregat operasional
+# (jumlah skill/tool-call/user per role), tak ada PII/kredensial.
+PUBLIC_PATHS = {"/health", "/login", "/login/oidc", "/auth/callback", "/metrics/prometheus"}
 PUBLIC_PREFIXES = ("/static/",)
 
 

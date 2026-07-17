@@ -898,6 +898,28 @@ config sistem (`/settings`, `/skills/import`, `/mcp/*`, `/router`,
 
 ---
 
+### `tests/test_prometheus_metrics.py`
+
+Test untuk `core/prometheus_metrics.py` (TODO.md § Prioritas 6) — format
+text-exposition Prometheus murni, tanpa library `prometheus_client`.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_empty_db_produces_valid_output_no_crash` | DB kosong (cardinality nol) tak crash, tetap render HELP/TYPE |
+| `test_routing_events_counted_by_label_and_role` | Agregasi `routing_events` benar per `complexity_label`+`role` |
+| `test_routing_cost_summed_per_role` | `cost_usd` di-SUM (bukan AVG) per role |
+| `test_tool_invocations_counted_by_name_and_outcome` | Agregasi `tool_invocations` per `tool_name`+`outcome` |
+| `test_skills_counted_by_role_and_status` | Agregasi `skills` per `role`+`status` |
+| `test_approval_log_counted_by_decision` | Agregasi `approval_log` per `decision` |
+| `test_approval_log_normalizes_legacy_pending_id_suffix` | Baris historis `"pending:{approval_id}"` (pra-Priority 2) dinormalisasi ke `"pending"` — cegah cardinality tak terbatas. Ditemukan saat verifikasi live terhadap `data/openclawn.db` nyata |
+| `test_users_counted_by_access_role` | Agregasi `users` per `access_role` (TODO.md § Prioritas 5, RBAC) |
+| `test_autopilots_counted_by_enabled_state` | Agregasi `autopilots` per `enabled` (true/false) |
+| `test_output_ends_with_newline_per_exposition_format` | Baris terakhir diakhiri newline sesuai spek text-exposition |
+| `test_label_values_escaped_against_injection` | Nilai label dengan `"`/`\` di-escape, tak memecah format |
+| `test_help_and_type_present_for_every_metric_family` | Setiap metric family selalu punya blok HELP+TYPE walau cardinality nol |
+
+---
+
 ### `tests/test_rate_limit.py`
 
 Test untuk `security/rate_limit.py` (`RateLimiter`) — sliding window in-memory.

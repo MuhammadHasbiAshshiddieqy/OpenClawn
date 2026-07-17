@@ -34,6 +34,7 @@ from core.calibration import CalibrationStore, RoutingCalibrator
 from core.router import Complexity, SmartRouter
 from core.router_config import RouterConfigStore
 from core.tool_audit import ToolAudit
+from core.prometheus_metrics import render_prometheus_metrics
 from core.conversation import (
     ConversationControl,
     ConversationOrchestrator,
@@ -1058,6 +1059,20 @@ async def metrics_roles_json():
     (NULL bila belum ada rating sama sekali untuk role itu).
     """
     return {"roles": await RoutingAuditor(db).role_report()}
+
+
+@app.get("/metrics/prometheus")
+async def metrics_prometheus():
+    """Endpoint Prometheus text-exposition (TODO.md § Prioritas 6) — cukup untuk
+    integrasi Grafana/Datadog tanpa SDK `prometheus_client` (CLAUDE.md §8: opsi
+    ringan di atas data yang sudah ada sebelum dependency berat). PUBLIC
+    (`security/auth.py::PUBLIC_PATHS`) — scraper tak bawa cookie sesi, data
+    murni agregat operasional, tak ada PII/kredensial.
+    """
+    return PlainTextResponse(
+        await render_prometheus_metrics(db),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @app.post("/feedback/{event_id}")

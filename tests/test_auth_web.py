@@ -98,6 +98,13 @@ def test_health_and_login_reachable_without_session(client_auth):
     assert client_auth.get("/login").status_code == 200
 
 
+def test_metrics_prometheus_reachable_without_session(client_auth):
+    """TODO.md § Prioritas 6: scraper Prometheus tak bawa cookie sesi, endpoint
+    ini harus tetap public walau auth aktif — sama pola /health."""
+    resp = client_auth.get("/metrics/prometheus")
+    assert resp.status_code == 200
+
+
 def test_static_reachable_without_session(client_auth):
     resp = client_auth.get("/static/style.css")
     assert resp.status_code == 200
