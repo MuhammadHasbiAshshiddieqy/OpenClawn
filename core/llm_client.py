@@ -1,12 +1,38 @@
-import httpx
+import asyncio
 import json
 import re
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+import httpx
 
 from infra.config import AppConfig
 from infra.logging import log
+
+_STREAM_RETRY_ATTEMPTS = 3
+
+# Client httpx shared di seluruh proses (audit produksi 2026-07-27: sebelumnya
+# tiap panggilan health-check/stream membuat httpx.AsyncClient baru, membuang
+# TCP/TLS handshake + keep-alive tiap turn di bawah traffic konkuren). Timeout
+# tetap per-call lewat parameter `timeout=` di tiap method (get/stream), bukan
+# default client — tiap provider punya kebutuhan timeout berbeda.
+_shared_http_client: httpx.AsyncClient | None = None
+
+
+def get_shared_http_client() -> httpx.AsyncClient:
+    """Client httpx pooled, dibuat lazy dan dipakai ulang lintas request/modul."""
+    global _shared_http_client
+    if _shared_http_client is None or _shared_http_client.is_closed:
+        _shared_http_client = httpx.AsyncClient()
+    return _shared_http_client
+
+
+async def close_shared_http_client() -> None:
+    """Tutup client shared saat shutdown — panggil dari lifespan FastAPI."""
+    global _shared_http_client
+    if _shared_http_client is not None and not _shared_http_client.is_closed:
+        await _shared_http_client.aclose()
+        _shared_http_client = None
 
 
 # ── Plain-text tool call parsers ───────────────────────────────────────────────
@@ -279,19 +305,13 @@ class LLMClient:
     async def _health_check(self, provider: str) -> bool:
         try:
             if provider == "ollama":
-                async with httpx.AsyncClient(timeout=3) as c:
-                    r = await c.get(f"{self.config.ollama_base}/api/tags")
-                    return r.status_code == 200
+                c = get_shared_http_client()
+                r = await c.get(f"{self.config.ollama_base}/api/tags", timeout=3)
+                return r.status_code == 200
             return True  # anthropic/gemini: asumsikan up, retry handle transient
         except httpx.HTTPError:
             return False
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type(httpx.HTTPError),
-        reraise=True,
-    )
     async def _stream_one(
         self,
         provider: str,
@@ -300,7 +320,54 @@ class LLMClient:
         tools: list | None,
         max_tokens: int,
     ) -> AsyncGenerator[LLMChunk, None]:
-        """Retry transient errors dengan exponential backoff."""
+        """Retry transient httpx errors dengan exponential backoff.
+
+        Audit produksi 2026-07-27: sebelumnya ini di-decorate `@retry` tenacity
+        langsung — TIDAK PERNAH benar-benar retry, karena tenacity membungkus
+        *pembuatan* async generator (selalu sukses, lazy), bukan exception yang
+        muncul saat *iterasi* `async for` di pemanggil. httpx.HTTPError transien
+        di tengah stream langsung lolos ke `stream_with_fallback` dan memicu
+        fallback provider, bukan retry di provider yang sama seperti CLAUDE.md §3.
+
+        Retry manual di sini HANYA berlaku sebelum chunk pertama terkirim ke
+        caller — begitu satu chunk sudah di-yield (kemungkinan sudah diteruskan
+        ke browser via SSE), mengulang dari awal akan menduplikasi/mengacak output
+        yang sudah terlihat user, jadi kegagalan setelah itu langsung propagate
+        (ditangani via fallback chain, bukan retry di tempat).
+        """
+        last_error: httpx.HTTPError | None = None
+        for attempt_num in range(_STREAM_RETRY_ATTEMPTS):
+            started = False
+            try:
+                async for chunk in self._stream_one_attempt(
+                    provider, model, messages, tools, max_tokens
+                ):
+                    started = True
+                    yield chunk
+                return
+            except httpx.HTTPError as e:
+                last_error = e
+                if started or attempt_num == _STREAM_RETRY_ATTEMPTS - 1:
+                    raise
+                log.warning(
+                    "llm_stream_retry",
+                    provider=provider,
+                    model=model,
+                    attempt=attempt_num + 1,
+                    error=str(e),
+                )
+                await asyncio.sleep(min(2**attempt_num, 10))
+        if last_error:  # pragma: no cover — unreachable, loop selalu return/raise
+            raise last_error
+
+    async def _stream_one_attempt(
+        self,
+        provider: str,
+        model: str,
+        messages: list,
+        tools: list | None,
+        max_tokens: int,
+    ) -> AsyncGenerator[LLMChunk, None]:
         if provider == "ollama":
             async for c in self._ollama(model, messages, tools, max_tokens):
                 yield c
@@ -322,72 +389,72 @@ class LLMClient:
         }
         if tools:
             payload["tools"] = tools
-        async with httpx.AsyncClient(timeout=120) as client:
-            async with client.stream(
-                "POST", f"{self.config.ollama_base}/api/chat", json=payload
-            ) as resp:
-                resp.raise_for_status()
-                # Streaming teks + akumulasi untuk deteksi plaintext tool call.
-                # Teks DIKIRIM real-time agar browser tidak timeout; buffer
-                # disimpan untuk post-scan tool call di akhir stream.
-                text_buf: list[str] = []
-                native_tool_calls: list[dict] = []
-                usage_data: dict = {}
-                # Splitter memisahkan <think>…</think> inline dari jawaban. Tool call
-                # tidak pernah di dalam <think>, jadi hanya bagian "text" yang masuk
-                # text_buf untuk deteksi plaintext tool call.
-                splitter = ThinkTagSplitter()
+        client = get_shared_http_client()
+        async with client.stream(
+            "POST", f"{self.config.ollama_base}/api/chat", json=payload, timeout=120
+        ) as resp:
+            resp.raise_for_status()
+            # Streaming teks + akumulasi untuk deteksi plaintext tool call.
+            # Teks DIKIRIM real-time agar browser tidak timeout; buffer
+            # disimpan untuk post-scan tool call di akhir stream.
+            text_buf: list[str] = []
+            native_tool_calls: list[dict] = []
+            usage_data: dict = {}
+            # Splitter memisahkan <think>…</think> inline dari jawaban. Tool call
+            # tidak pernah di dalam <think>, jadi hanya bagian "text" yang masuk
+            # text_buf untuk deteksi plaintext tool call.
+            splitter = ThinkTagSplitter()
 
-                async for line in resp.aiter_lines():
-                    if not line.strip():
-                        continue
-                    data = json.loads(line)
-                    msg = data.get("message", {})
-                    # Field thinking terpisah (Ollama API baru / model reasoning).
-                    if msg.get("thinking"):
-                        yield LLMChunk(type="thinking", text=msg["thinking"])
-                    if msg.get("content"):
-                        for kind, piece in splitter.feed(msg["content"]):
-                            if kind == "text":
-                                text_buf.append(piece)
-                            yield LLMChunk(type=kind, text=piece)
-                    for tc in msg.get("tool_calls", []):
-                        native_tool_calls.append(
-                            {
-                                "name": tc["function"]["name"],
-                                "input": tc["function"]["arguments"],
-                            }
-                        )
-                    if data.get("done") and data.get("prompt_eval_count"):
-                        usage_data = {
-                            "input_tokens": data.get("prompt_eval_count", 0),
-                            "output_tokens": data.get("eval_count", 0),
+            async for line in resp.aiter_lines():
+                if not line.strip():
+                    continue
+                data = json.loads(line)
+                msg = data.get("message", {})
+                # Field thinking terpisah (Ollama API baru / model reasoning).
+                if msg.get("thinking"):
+                    yield LLMChunk(type="thinking", text=msg["thinking"])
+                if msg.get("content"):
+                    for kind, piece in splitter.feed(msg["content"]):
+                        if kind == "text":
+                            text_buf.append(piece)
+                        yield LLMChunk(type=kind, text=piece)
+                for tc in msg.get("tool_calls", []):
+                    native_tool_calls.append(
+                        {
+                            "name": tc["function"]["name"],
+                            "input": tc["function"]["arguments"],
                         }
-
-                # Flush sisa buffer splitter (mis. teks tanpa tag penutup di akhir).
-                for kind, piece in splitter.flush():
-                    if kind == "text":
-                        text_buf.append(piece)
-                    yield LLMChunk(type=kind, text=piece)
-
-                # Post-processing: deteksi tool call plain-text di akumulasi teks.
-                # Tool call dari model GGUF (Gemma, Qwen, dsb.) muncul sebagai
-                # token teks di content. Kita scan di akhir stream — teks mentah
-                # (termasuk token <|tool_call|>) sudah terlanjur dikirim ke user,
-                # tapi tool akan tetap tereksekusi dan hasilnya muncul berikutnya.
-                raw_text = "".join(text_buf)
-                _, parsed_calls = LLMClient.parse_plaintext_tool_calls(raw_text)
-
-                all_calls = native_tool_calls + parsed_calls
-                for tc in all_calls:
-                    yield LLMChunk(
-                        type="tool_call",
-                        tool_name=tc["name"],
-                        tool_input=tc.get("input", {}),
                     )
+                if data.get("done") and data.get("prompt_eval_count"):
+                    usage_data = {
+                        "input_tokens": data.get("prompt_eval_count", 0),
+                        "output_tokens": data.get("eval_count", 0),
+                    }
 
-                if usage_data:
-                    yield LLMChunk(type="usage", usage=usage_data)
+            # Flush sisa buffer splitter (mis. teks tanpa tag penutup di akhir).
+            for kind, piece in splitter.flush():
+                if kind == "text":
+                    text_buf.append(piece)
+                yield LLMChunk(type=kind, text=piece)
+
+            # Post-processing: deteksi tool call plain-text di akumulasi teks.
+            # Tool call dari model GGUF (Gemma, Qwen, dsb.) muncul sebagai
+            # token teks di content. Kita scan di akhir stream — teks mentah
+            # (termasuk token <|tool_call|>) sudah terlanjur dikirim ke user,
+            # tapi tool akan tetap tereksekusi dan hasilnya muncul berikutnya.
+            raw_text = "".join(text_buf)
+            _, parsed_calls = LLMClient.parse_plaintext_tool_calls(raw_text)
+
+            all_calls = native_tool_calls + parsed_calls
+            for tc in all_calls:
+                yield LLMChunk(
+                    type="tool_call",
+                    tool_name=tc["name"],
+                    tool_input=tc.get("input", {}),
+                )
+
+            if usage_data:
+                yield LLMChunk(type="usage", usage=usage_data)
 
     async def _claude(
         self, model: str, messages: list, tools: list | None, max_tokens: int
@@ -415,35 +482,36 @@ class LLMClient:
         if tools:
             payload["tools"] = tools
 
-        async with httpx.AsyncClient(timeout=180) as client:
-            async with client.stream(
-                "POST",
-                f"{self.config.anthropic_base}/v1/messages",
-                headers=headers,
-                json=payload,
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = json.loads(line[5:].strip())
-                    etype = data.get("type", "")
-                    if etype == "content_block_start":
-                        block = data.get("content_block", {})
-                        if block.get("type") == "tool_use":
-                            yield LLMChunk(
-                                type="tool_call", tool_name=block.get("name", ""), tool_input={}
-                            )
-                    elif etype == "content_block_delta":
-                        delta = data.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            yield LLMChunk(type="text", text=delta["text"])
-                        elif delta.get("type") == "thinking_delta":
-                            # Extended thinking Anthropic → blok reasoning terpisah.
-                            yield LLMChunk(type="thinking", text=delta.get("thinking", ""))
-                    elif etype == "message_delta":
-                        if data.get("usage"):
-                            yield LLMChunk(type="usage", usage=data["usage"])
+        client = get_shared_http_client()
+        async with client.stream(
+            "POST",
+            f"{self.config.anthropic_base}/v1/messages",
+            headers=headers,
+            json=payload,
+            timeout=180,
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data = json.loads(line[5:].strip())
+                etype = data.get("type", "")
+                if etype == "content_block_start":
+                    block = data.get("content_block", {})
+                    if block.get("type") == "tool_use":
+                        yield LLMChunk(
+                            type="tool_call", tool_name=block.get("name", ""), tool_input={}
+                        )
+                elif etype == "content_block_delta":
+                    delta = data.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        yield LLMChunk(type="text", text=delta["text"])
+                    elif delta.get("type") == "thinking_delta":
+                        # Extended thinking Anthropic → blok reasoning terpisah.
+                        yield LLMChunk(type="thinking", text=delta.get("thinking", ""))
+                elif etype == "message_delta":
+                    if data.get("usage"):
+                        yield LLMChunk(type="usage", usage=data["usage"])
 
     async def _gemini(
         self, model: str, messages: list, tools: list | None, max_tokens: int
@@ -498,32 +566,32 @@ class LLMClient:
         url = f"{self.config.gemini_base}/v1beta/models/{model}:streamGenerateContent?alt=sse"
         headers = {"content-type": "application/json", "x-goog-api-key": api_key}
 
-        async with httpx.AsyncClient(timeout=180) as client:
-            async with client.stream("POST", url, headers=headers, json=payload) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = json.loads(line[5:].strip())
-                    for cand in data.get("candidates", []):
-                        for part in cand.get("content", {}).get("parts", []):
-                            if part.get("functionCall"):
-                                fc = part["functionCall"]
-                                yield LLMChunk(
-                                    type="tool_call",
-                                    tool_name=fc.get("name", ""),
-                                    tool_input=fc.get("args", {}),
-                                )
-                            elif part.get("text"):
-                                # parts dengan thought=true adalah reasoning Gemini.
-                                kind = "thinking" if part.get("thought") else "text"
-                                yield LLMChunk(type=kind, text=part["text"])
-                    usage = data.get("usageMetadata")
-                    if usage:
-                        yield LLMChunk(
-                            type="usage",
-                            usage={
-                                "input_tokens": usage.get("promptTokenCount", 0),
-                                "output_tokens": usage.get("candidatesTokenCount", 0),
-                            },
-                        )
+        client = get_shared_http_client()
+        async with client.stream("POST", url, headers=headers, json=payload, timeout=180) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data = json.loads(line[5:].strip())
+                for cand in data.get("candidates", []):
+                    for part in cand.get("content", {}).get("parts", []):
+                        if part.get("functionCall"):
+                            fc = part["functionCall"]
+                            yield LLMChunk(
+                                type="tool_call",
+                                tool_name=fc.get("name", ""),
+                                tool_input=fc.get("args", {}),
+                            )
+                        elif part.get("text"):
+                            # parts dengan thought=true adalah reasoning Gemini.
+                            kind = "thinking" if part.get("thought") else "text"
+                            yield LLMChunk(type=kind, text=part["text"])
+                usage = data.get("usageMetadata")
+                if usage:
+                    yield LLMChunk(
+                        type="usage",
+                        usage={
+                            "input_tokens": usage.get("promptTokenCount", 0),
+                            "output_tokens": usage.get("candidatesTokenCount", 0),
+                        },
+                    )

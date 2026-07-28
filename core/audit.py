@@ -60,9 +60,10 @@ class RoutingAuditor:
                 dim_query_tokens, dim_has_tech_kw, dim_needs_multistep,
                 dim_history_len, dim_role, dim_has_urgency,
                 dim_needs_stream, dim_is_continuation, dim_soul_upgrade_hit,
+                dim_has_code_signal, dim_query_script, dim_language_bumped,
                 complexity_score, complexity_label,
                 model_chosen, provider, routing_reason
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 session_id,
@@ -78,6 +79,11 @@ class RoutingAuditor:
                 d["needs_stream"],
                 d["is_continuation"],
                 d["soul_upgrade_hit"],
+                # Audit produksi 2026-07-27: 3 dimensi multilingual routing di
+                # router.py sebelumnya di-drop diam-diam di sini (lihat _ADDED_COLUMNS).
+                d.get("has_code_signal"),
+                d.get("query_script"),
+                d.get("language_bumped"),
                 route.complexity_score,
                 route.complexity.value,
                 route.model,

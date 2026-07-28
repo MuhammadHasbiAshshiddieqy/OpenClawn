@@ -114,6 +114,9 @@ CREATE TABLE IF NOT EXISTS routing_events (
     dim_history_len INTEGER, dim_role TEXT, dim_has_urgency INTEGER,
     dim_needs_stream INTEGER, dim_is_continuation INTEGER,
     dim_soul_upgrade_hit INTEGER,          -- [v0.3] keyword dari soul.toml cocok?
+    dim_has_code_signal INTEGER,           -- [multilingual routing, audit 2026-07-27] sinyal kode/URL lintas-bahasa
+    dim_query_script TEXT,                 -- [multilingual routing] script Unicode dominan query (latin/cjk/arabic/dst.)
+    dim_language_bumped INTEGER,           -- [multilingual routing] threshold digeser krn script di luar tier lokal
     complexity_score INTEGER, complexity_label TEXT,
     model_chosen TEXT, provider TEXT, routing_reason TEXT,
     fallback_used INTEGER DEFAULT 0,        -- [v0.3] apakah fallback chain terpakai?

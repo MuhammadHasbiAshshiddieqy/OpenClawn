@@ -106,6 +106,11 @@ async def test_gemini_parses_sse_stream(gemini_client, monkeypatch):
     """_gemini mem-parse SSE Google AI Studio jadi LLMChunk text + usage."""
     import core.llm_client as llm_mod
 
+    # llm_client kini pakai httpx.AsyncClient shared/pooled (audit 2026-07-27),
+    # bukan dibuat baru tiap call — reset cache-nya supaya patch AsyncClient di
+    # bawah benar-benar dipakai, bukan instance fake dari test lain yang nyangkut.
+    monkeypatch.setattr(llm_mod, "_shared_http_client", None)
+
     sse_lines = [
         'data: {"candidates":[{"content":{"parts":[{"text":"Hai"}]}}]}',
         'data: {"candidates":[{"content":{"parts":[{"text":" dunia"}]}}],'
@@ -163,6 +168,11 @@ async def test_gemini_sends_tools_as_function_declarations(gemini_client, monkey
     dikonversi dari schema internal Anthropic-style (input_schema -> parameters)."""
     import core.llm_client as llm_mod
 
+    # llm_client kini pakai httpx.AsyncClient shared/pooled (audit 2026-07-27),
+    # bukan dibuat baru tiap call — reset cache-nya supaya patch AsyncClient di
+    # bawah benar-benar dipakai, bukan instance fake dari test lain yang nyangkut.
+    monkeypatch.setattr(llm_mod, "_shared_http_client", None)
+
     captured_payload = {}
 
     class FakeResp:
@@ -189,7 +199,7 @@ async def test_gemini_sends_tools_as_function_declarations(gemini_client, monkey
         async def __aexit__(self, *a):
             return False
 
-        def stream(self, method, url, headers=None, json=None):
+        def stream(self, method, url, headers=None, json=None, **kwargs):
             captured_payload.update(json)
             return FakeStreamCtx()
 
@@ -223,6 +233,11 @@ async def test_gemini_parses_function_call_response(gemini_client, monkeypatch):
     """Response Gemini berisi functionCall -> LLMChunk(type='tool_call', ...)
     dengan tool_input terisi dari 'args' (bukan tool_input={} kosong)."""
     import core.llm_client as llm_mod
+
+    # llm_client kini pakai httpx.AsyncClient shared/pooled (audit 2026-07-27),
+    # bukan dibuat baru tiap call — reset cache-nya supaya patch AsyncClient di
+    # bawah benar-benar dipakai, bukan instance fake dari test lain yang nyangkut.
+    monkeypatch.setattr(llm_mod, "_shared_http_client", None)
 
     sse_lines = [
         'data: {"candidates":[{"content":{"parts":[{"functionCall":'

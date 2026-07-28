@@ -50,6 +50,43 @@ def test_evaluator_at_least_as_strong_as_generator():
     assert EVALUATOR_FOR["gemma4:12b"][0] == "anthropic"
 
 
+def test_evaluator_map_covers_router_roster():
+    """Audit produksi 2026-07-27: EVALUATOR_FOR sebelumnya drift dari
+    router.SmartRouter.MODELS (roster berubah ke deepseek-r1/qwen3.5/gemini
+    tanpa peta ini diupdate) — solusi CRITICAL-tier (gemini-2.5-pro) diam-diam
+    dievaluasi Claude Haiku via DEFAULT_EVALUATOR, melanggar invarian evaluator
+    >= generator. Import langsung dari router.py supaya tes ini gagal lagi
+    kalau roster berubah tanpa EVALUATOR_FOR ikut diupdate."""
+    from core.router import SmartRouter
+
+    for model, _provider, _cost in SmartRouter.MODELS.values():
+        assert model in EVALUATOR_FOR, f"{model} tak ada di EVALUATOR_FOR (roster drift)"
+    # gemini-2.5-flash (COMPLEX) dievaluasi gemini-2.5-pro — satu tingkat di atas
+    # dalam family yang sama, bukan diam-diam turun ke Claude Haiku.
+    assert EVALUATOR_FOR["gemini-2.5-flash"] == ("gemini", "gemini-2.5-pro")
+    # gemini-2.5-pro (CRITICAL, tier tertinggi) dievaluasi Claude Sonnet — model
+    # terkuat lintas-provider yang tersedia, bukan DEFAULT_EVALUATOR (Haiku).
+    assert EVALUATOR_FOR["gemini-2.5-pro"] == ("anthropic", "claude-sonnet-4-6")
+
+
+@pytest.mark.asyncio
+async def test_unverified_generator_forces_draft_even_high_confidence(db):
+    """Model generator di luar EVALUATOR_FOR (roster berubah / override /router
+    pilih model baru) berarti kekuatan evaluator relatif TAK diketahui — harus
+    fail-safe ke draft, BUKAN diam-diam 'active' via DEFAULT_EVALUATOR yang
+    mungkin lebih lemah dari generator sungguhan."""
+    llm = _mock_llm(confidence=5, critical_gaps=False)
+    c = ConfidenceCrystallizer(role="pm", llm=llm, db=db)
+
+    result = await c.crystallize(
+        task="model baru belum terdaftar",
+        solution="solusi bagus tapi generatornya tak dikenal",
+        history=[],
+        generator_model="some-future-model-not-in-map",
+    )
+    assert result["status"] == "draft"
+
+
 @pytest.mark.asyncio
 async def test_high_confidence_crystallizes_as_active(db):
     """Confidence >= 4 dan tidak ada critical gaps → status active."""

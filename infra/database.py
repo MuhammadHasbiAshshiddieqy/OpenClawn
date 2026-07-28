@@ -34,6 +34,14 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("actor_is_agent", "INTEGER DEFAULT 1"),
         # Multi-Tenant (TODO.md § Prioritas 5) — lihat komentar approval_log.
         ("tenant_id", "TEXT DEFAULT 'default'"),
+        # Multilingual routing (TODO.md Prioritas 7, audit produksi 2026-07-27):
+        # SmartRouter._dimensions()/decide() sudah lama menghasilkan 3 dimensi ini
+        # (fitur multilingual routing, commit 40847e8/8c22767) tapi log_decision()
+        # tak pernah menyimpannya — auditor tak bisa lihat KENAPA suatu query
+        # dinaikkan tier lewat sinyal kode/bahasa, bukan keyword biasa.
+        ("dim_has_code_signal", "INTEGER"),
+        ("dim_query_script", "TEXT"),
+        ("dim_language_bumped", "INTEGER"),
     ],
     "approval_log": [
         # Human Approval Pipeline (TODO.md § Prioritas 2): approval_id SEBELUMNYA

@@ -229,12 +229,15 @@ class SmartRouter:
         return Complexity.CRITICAL
 
     def _explain(self, c: Complexity, soul_hit: bool) -> str:
+        # Label mengikuti model_map AKTIF (bisa di-override lewat /router), bukan
+        # nama hardcoded — sebelumnya drift dari MODELS asli dan menyesatkan audit trail.
+        model, _, _ = self.model_map.get(c, self.MODELS[c])
         base = {
-            Complexity.TRIVIAL: "Greeting/singkat → Gemma4 e2b",
-            Complexity.SIMPLE: "Sederhana → Gemma4 e4b",
-            Complexity.MODERATE: "Menengah → Gemma4 12b",
-            Complexity.COMPLEX: "Kompleks → Claude Haiku",
-            Complexity.CRITICAL: "Kritis → Claude Sonnet",
+            Complexity.TRIVIAL: f"Greeting/singkat → {model}",
+            Complexity.SIMPLE: f"Sederhana → {model}",
+            Complexity.MODERATE: f"Menengah → {model}",
+            Complexity.COMPLEX: f"Kompleks → {model}",
+            Complexity.CRITICAL: f"Kritis → {model}",
         }[c]
         if soul_hit:
             base += " (dipicu soul upgrade_keyword)"

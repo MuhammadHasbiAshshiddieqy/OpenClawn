@@ -128,6 +128,11 @@ async def test_ollama_inline_think_split(client, monkeypatch):
     """Ollama: <think> inline di content → chunk thinking, sisanya text."""
     import core.llm_client as m
 
+    # llm_client kini pakai httpx.AsyncClient shared/pooled (audit 2026-07-27),
+    # bukan dibuat baru tiap call — reset cache-nya supaya patch AsyncClient di
+    # bawah benar-benar dipakai, bukan instance fake dari test lain yang nyangkut.
+    monkeypatch.setattr(m, "_shared_http_client", None)
+
     lines = [
         '{"message":{"content":"<think>nalar dulu"}}',
         '{"message":{"content":"</think>jawaban"}}',
@@ -144,6 +149,11 @@ async def test_ollama_inline_think_split(client, monkeypatch):
 async def test_ollama_thinking_field(client, monkeypatch):
     """Ollama: field message.thinking terpisah → chunk thinking."""
     import core.llm_client as m
+
+    # llm_client kini pakai httpx.AsyncClient shared/pooled (audit 2026-07-27),
+    # bukan dibuat baru tiap call — reset cache-nya supaya patch AsyncClient di
+    # bawah benar-benar dipakai, bukan instance fake dari test lain yang nyangkut.
+    monkeypatch.setattr(m, "_shared_http_client", None)
 
     lines = [
         '{"message":{"thinking":"mikir","content":""}}',
@@ -162,6 +172,11 @@ async def test_anthropic_thinking_delta(client, monkeypatch):
     """Anthropic: thinking_delta → chunk thinking; text_delta → text."""
     import core.llm_client as m
 
+    # llm_client kini pakai httpx.AsyncClient shared/pooled (audit 2026-07-27),
+    # bukan dibuat baru tiap call — reset cache-nya supaya patch AsyncClient di
+    # bawah benar-benar dipakai, bukan instance fake dari test lain yang nyangkut.
+    monkeypatch.setattr(m, "_shared_http_client", None)
+
     lines = [
         'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"langkah 1"}}',
         'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"jawab"}}',
@@ -177,6 +192,11 @@ async def test_anthropic_thinking_delta(client, monkeypatch):
 async def test_gemini_thought_part(client, monkeypatch):
     """Gemini: part.thought=true → chunk thinking; selain itu text."""
     import core.llm_client as m
+
+    # llm_client kini pakai httpx.AsyncClient shared/pooled (audit 2026-07-27),
+    # bukan dibuat baru tiap call — reset cache-nya supaya patch AsyncClient di
+    # bawah benar-benar dipakai, bukan instance fake dari test lain yang nyangkut.
+    monkeypatch.setattr(m, "_shared_http_client", None)
 
     lines = [
         'data: {"candidates":[{"content":{"parts":[{"text":"nalar","thought":true}]}}]}',

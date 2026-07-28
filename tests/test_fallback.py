@@ -1,6 +1,9 @@
-import pytest
 from unittest.mock import AsyncMock
-from core.llm_client import LLMClient, LLMChunk, ProviderUnavailable
+
+import httpx
+import pytest
+
+from core.llm_client import LLMChunk, LLMClient, ProviderUnavailable
 from infra.config import AppConfig
 
 
@@ -106,3 +109,47 @@ async def test_primary_success_no_fallback(client):
         pass
 
     assert calls == ["ollama"]  # hanya primary, fallback tidak dipanggil
+
+
+@pytest.mark.asyncio
+async def test_stream_one_retries_transient_error_before_first_chunk(client, monkeypatch):
+    """Audit produksi 2026-07-27: retry di _stream_one HARUS benar-benar terjadi
+    untuk httpx.HTTPError yang muncul sebelum chunk pertama (regresi dari
+    @retry tenacity yang tak pernah retry generator sungguhan)."""
+    monkeypatch.setattr("core.llm_client.asyncio.sleep", AsyncMock())
+    attempts: list[int] = []
+
+    async def flaky(provider, model, messages, tools, max_tokens):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise httpx.ConnectError("transient")
+        yield LLMChunk(type="text", text="recovered")
+
+    client._stream_one_attempt = flaky
+
+    chunks = [c async for c in client._stream_one("ollama", "gemma4:e4b", [], None, 100)]
+
+    assert len(attempts) == 3, "harus retry sampai berhasil, bukan langsung menyerah"
+    assert chunks == [LLMChunk(type="text", text="recovered")]
+
+
+@pytest.mark.asyncio
+async def test_stream_one_no_retry_after_first_chunk_sent(client, monkeypatch):
+    """Kegagalan SETELAH chunk pertama terkirim tidak boleh di-retry (akan
+    menduplikasi output yang sudah terlanjur dikirim ke user) — harus propagate
+    langsung supaya stream_with_fallback yang menangani (pindah provider)."""
+    monkeypatch.setattr("core.llm_client.asyncio.sleep", AsyncMock())
+    attempts: list[int] = []
+
+    async def fails_midstream(provider, model, messages, tools, max_tokens):
+        attempts.append(1)
+        yield LLMChunk(type="text", text="partial")
+        raise httpx.ReadTimeout("dropped mid-stream")
+
+    client._stream_one_attempt = fails_midstream
+
+    with pytest.raises(httpx.ReadTimeout):
+        async for _ in client._stream_one("ollama", "gemma4:e4b", [], None, 100):
+            pass
+
+    assert len(attempts) == 1, "tidak boleh retry setelah sebagian stream terkirim"

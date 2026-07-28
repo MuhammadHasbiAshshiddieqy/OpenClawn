@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import AsyncGenerator, AsyncIterator
 from urllib.parse import quote
 
-import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import (
     FileResponse,
@@ -25,6 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from core.activity import ActivityTimeline
 from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
+from core.llm_client import close_shared_http_client, get_shared_http_client
 from core.autopilot import AutopilotScheduler, AutopilotStore
 from core.skill_pack import SkillPack
 from core.mcp_registry import MCPRegistry
@@ -238,9 +238,9 @@ async def lifespan(app: FastAPI):
     # diberi tahu lewat log agar tak salah asumsi semua provider siap.
     ollama_ok = False
     try:
-        async with httpx.AsyncClient(timeout=2) as c:
-            r = await c.get(f"{CONFIG.ollama_base}/api/tags")
-            ollama_ok = r.status_code == 200
+        c = get_shared_http_client()
+        r = await c.get(f"{CONFIG.ollama_base}/api/tags", timeout=2)
+        ollama_ok = r.status_code == 200
     except Exception:  # noqa: BLE001 — hanya info startup, bukan kegagalan
         pass
     log.info(
@@ -286,6 +286,7 @@ async def lifespan(app: FastAPI):
     autopilot_scheduler.start()
     yield
     await autopilot_scheduler.stop()
+    await close_shared_http_client()
     await db.close()
 
 
@@ -631,9 +632,9 @@ async def health():
 
     ollama_ok = False
     try:
-        async with httpx.AsyncClient(timeout=2) as c:
-            r = await c.get(f"{CONFIG.ollama_base}/api/tags")
-            ollama_ok = r.status_code == 200
+        c = get_shared_http_client()
+        r = await c.get(f"{CONFIG.ollama_base}/api/tags", timeout=2)
+        ollama_ok = r.status_code == 200
     except Exception:  # noqa: BLE001 — Ollama down bukan kegagalan health, hanya info
         pass
 

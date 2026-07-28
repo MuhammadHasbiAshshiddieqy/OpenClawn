@@ -61,7 +61,26 @@ class MCPRegistry:
         return {"ok": True, "name": name}
 
     async def list_servers(self) -> list[dict]:
-        return await self.db.fetchall("SELECT * FROM mcp_servers ORDER BY id DESC")
+        """Daftar server MCP untuk UI/admin.
+
+        Audit produksi 2026-07-27: `env` (env var subprocess MCP stdio, bisa berisi
+        API key/token server itu) disimpan plaintext JSON di DB — belum ada infra
+        enkripsi-at-rest untuk secret PER-BARIS seperti ini (beda dari Vault §1.2
+        yang env-var-backed, satu key statis per deploy). Menambahnya butuh
+        dependency kripto baru → keputusan owner (CLAUDE.md §8), bukan inisiatif
+        sepihak. Mitigasi yang bisa dilakukan sekarang tanpa dependency baru:
+        read-path publik ini TIDAK PERNAH mengembalikan nilai mentah, hanya
+        `has_env` (server ini punya env var atau tidak) — mencegah kebocoran lewat
+        UI/API kalau suatu saat form `/mcp/add` menambahkan field env.
+        """
+        rows = await self.db.fetchall("SELECT * FROM mcp_servers ORDER BY id DESC")
+        for row in rows:
+            try:
+                row["has_env"] = bool(json.loads(row.get("env") or "{}"))
+            except (json.JSONDecodeError, TypeError):
+                row["has_env"] = False
+            row.pop("env", None)
+        return rows
 
     async def set_enabled(self, server_id: int, enabled: bool) -> None:
         await self.db.execute(

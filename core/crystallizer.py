@@ -8,10 +8,19 @@ CONFIDENCE_THRESHOLD = 4
 
 # Audit #4: evaluator harus minimal setara generator.
 # Solusi Sonnet TIDAK BOLEH dinilai 7B — ini yang membuat inovasi ini valid.
+# Peta ini HARUS disinkronkan manual tiap kali router.SmartRouter.MODELS berubah —
+# tak ada cara otomatis membandingkan "kekuatan" model lintas provider. Kalau
+# generator_model tak dikenal di sini (roster router berubah, atau /router
+# override tier ke model baru), _resolve_evaluator() menandai unverified alih-alih
+# diam-diam memakai DEFAULT_EVALUATOR seolah pasti aman.
 EVALUATOR_FOR: dict[str, tuple[str, str]] = {
     "gemma4:e2b": ("ollama", "gemma4:e4b"),
     "gemma4:e4b": ("ollama", "gemma4:12b"),
     "gemma4:12b": ("anthropic", "claude-haiku-4-5-20251001"),
+    "deepseek-r1:latest": ("anthropic", "claude-haiku-4-5-20251001"),
+    "qwen3.5:9b": ("anthropic", "claude-haiku-4-5-20251001"),
+    "gemini-2.5-flash": ("gemini", "gemini-2.5-pro"),
+    "gemini-2.5-pro": ("anthropic", "claude-sonnet-4-6"),
     "claude-haiku-4-5-20251001": ("anthropic", "claude-haiku-4-5-20251001"),
     "claude-sonnet-4-6": ("anthropic", "claude-sonnet-4-6"),
 }
@@ -37,13 +46,15 @@ class ConfidenceCrystallizer:
         self, task: str, solution: str, history: list, generator_model: str
     ) -> dict:
         # Audit #4: pilih evaluator minimal setara generator
-        eval_provider, eval_model = EVALUATOR_FOR.get(generator_model, DEFAULT_EVALUATOR)
+        eval_provider, eval_model, verified = self._resolve_evaluator(generator_model)
         evaluation = await self._self_evaluate(task, solution, eval_provider, eval_model)
 
         status = (
             "active"
             if (
-                evaluation["confidence"] >= CONFIDENCE_THRESHOLD and not evaluation["critical_gaps"]
+                verified
+                and evaluation["confidence"] >= CONFIDENCE_THRESHOLD
+                and not evaluation["critical_gaps"]
             )
             else "draft"
         )
@@ -106,7 +117,11 @@ class ConfidenceCrystallizer:
         if not row:
             return {"skill_id": skill_id, "action": "noop"}
         gen_model = row["generator_model"] or "gemma4:e4b"
-        eval_provider, eval_model = EVALUATOR_FOR.get(gen_model, DEFAULT_EVALUATOR)
+        eval_provider, eval_model, verified = self._resolve_evaluator(gen_model)
+        if not verified:
+            # Fail-safe (sama pola dgn confidence rendah): jangan tulis ulang skill
+            # pakai evaluator yang kekuatannya relatif terhadap generator tak diketahui.
+            return {"skill_id": skill_id, "action": "skipped", "confidence": 0}
 
         prompt = (
             f"Sebuah skill agent ternyata MENYESATKAN saat dipakai (turn-nya dikoreksi user).\n\n"
@@ -138,6 +153,19 @@ class ConfidenceCrystallizer:
             (ev["new_content"], skill_id),
         )
         return {"skill_id": skill_id, "action": "refined", "confidence": ev["confidence"]}
+
+    def _resolve_evaluator(self, generator_model: str) -> tuple[str, str, bool]:
+        """Audit #4: cari evaluator minimal setara generator. Model di luar
+        EVALUATOR_FOR berarti kekuatan relatifnya TAK diketahui (roster router
+        berubah, atau override /router pilih model baru) — fail-safe ke
+        DEFAULT_EVALUATOR tapi tandai unverified, supaya caller tak pernah
+        menandai hasil 'active'/'refined' dari evaluator yang tak terjamin."""
+        if generator_model in EVALUATOR_FOR:
+            provider, model = EVALUATOR_FOR[generator_model]
+            return provider, model, True
+        log.warning("crystallizer_unverified_evaluator", generator_model=generator_model)
+        provider, model = DEFAULT_EVALUATOR
+        return provider, model, False
 
     def _parse_refine(self, raw: str) -> dict:
         try:
