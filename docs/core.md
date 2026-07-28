@@ -715,10 +715,13 @@ Tool yang ditemukan: `server`, `name`, `description`, `input_schema`.
 CRUD definisi server (tabel `mcp_servers`) + muat tool-nya ke `TOOL_REGISTRY`.
 
 ### Kelas: `MCPRegistry`
-- **`add_server(name, transport, command, url, env) → dict`** *(async)* — validasi sesuai transport (stdio butuh command, http butuh url).
-- **`list_servers` / `set_enabled` / `delete`** *(async)* — kelola server.
-- **`load_all() → dict`** *(async)* — discover & daftarkan tool dari semua server enabled ke `TOOL_REGISTRY` dengan nama `mcp__<server>__<tool>`. **Idempoten** (buang tool MCP lama dulu); **fail-safe per server** (server error di-skip, startup tak jatuh). Dipanggil di lifespan + setelah perubahan via `/mcp`.
+- **`add_server(name, transport, command, url, env) → dict`** *(async)* — validasi sesuai transport (stdio butuh command, http butuh url). `env` non-kosong dienkripsi-at-rest (`security/vault.py::encrypt_secret`, CLAUDE.md §7 Pengecualian #4) sebelum disimpan — bukan lagi plaintext JSON. Tanpa `OPENCLAWN_ENCRYPTION_KEY` ter-set, memanggil ini dengan `env` non-kosong mengembalikan `{"error": ...}` (fail loud, bukan diam-diam plaintext); tanpa `env` sama sekali tetap jalan normal tanpa key.
+- **`list_servers` / `set_enabled` / `delete`** *(async)* — kelola server. `list_servers()` tidak pernah mengembalikan nilai `env` (mentah maupun ciphertext) — hanya `has_env: bool`.
+- **`load_all() → dict`** *(async)* — discover & daftarkan tool dari semua server enabled ke `TOOL_REGISTRY` dengan nama `mcp__<server>__<tool>`. **Idempoten** (buang tool MCP lama dulu); **fail-safe per server** (server error di-skip, startup tak jatuh). Dipanggil di lifespan + setelah perubahan via `/mcp`. `_config_from_row()` mendekripsi `env` untuk dipakai konek ke server sungguhan — dengan fallback ke parse plaintext bila baris LAMA pra-enkripsi (backward-compat, lihat `_decrypt_env_json`).
 - **`discovered_tools() → list`** *(async)* — daftar tool MCP yang terdaftar (untuk `/mcp`).
+
+### Fungsi modul: `_decrypt_env_json(raw) → dict`
+Dekripsi kolom `env`; kalau `raw` bukan ciphertext valid (`InvalidToken`/`ValueError` — key belum diset, atau baris lama pra-enkripsi) fallback coba parse sebagai JSON plaintext apa adanya. JSON rusak/kosong → `{}`. Tak pernah raise ke caller.
 
 ---
 

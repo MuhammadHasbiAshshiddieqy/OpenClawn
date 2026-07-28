@@ -13,11 +13,31 @@ Extractable: bergantung DatabaseManager + MCPClient + TOOL_REGISTRY.
 
 import json
 
+from cryptography.fernet import InvalidToken
+
 from core.mcp_client import MCPClient, MCPServerConfig
 from infra.database import DatabaseManager
 from infra.logging import log
+from security.vault import decrypt_secret, encrypt_secret
 from tools import TOOL_REGISTRY
 from tools.mcp_tool import MCP_PREFIX, MCPTool
+
+
+def _decrypt_env_json(raw: str | None) -> dict:
+    """Dekripsi kolom `mcp_servers.env`, dengan fallback ke baris LAMA yang masih
+    plaintext JSON (pra-enkripsi, audit 2026-07-28) — lihat security/vault.py.
+    Fail-safe: key salah/tak diset/JSON rusak → {} (server tetap dimuat tanpa
+    env, bukan crash)."""
+    if not raw:
+        return {}
+    try:
+        raw = decrypt_secret(raw)
+    except (InvalidToken, ValueError):
+        pass  # bukan ciphertext valid (baris lama) atau key belum diset — coba apa adanya
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
 
 
 class MCPRegistry:
@@ -44,6 +64,15 @@ class MCPRegistry:
             return {"error": "transport stdio butuh command"}
         if transport == "http" and not url.strip():
             return {"error": "transport http butuh url"}
+        env_value = json.dumps({})
+        if env:
+            # Audit 2026-07-28: env var subprocess MCP bisa berisi API key/token —
+            # enkripsi-at-rest (CLAUDE.md §1.2), bukan plaintext JSON. Dict kosong
+            # tak perlu dienkripsi (tak ada rahasia buat disembunyikan).
+            try:
+                env_value = encrypt_secret(json.dumps(env))
+            except ValueError as e:
+                return {"error": str(e)}
         try:
             await self.db.execute(
                 """INSERT INTO mcp_servers (name, transport, command, url, env, enabled)
@@ -53,7 +82,7 @@ class MCPRegistry:
                     transport,
                     json.dumps(command or []),
                     url.strip(),
-                    json.dumps(env or {}),
+                    env_value,
                 ),
             )
         except Exception as e:  # noqa: BLE001 — kemungkinan UNIQUE(name)
@@ -63,22 +92,16 @@ class MCPRegistry:
     async def list_servers(self) -> list[dict]:
         """Daftar server MCP untuk UI/admin.
 
-        Audit produksi 2026-07-27: `env` (env var subprocess MCP stdio, bisa berisi
-        API key/token server itu) disimpan plaintext JSON di DB — belum ada infra
-        enkripsi-at-rest untuk secret PER-BARIS seperti ini (beda dari Vault §1.2
-        yang env-var-backed, satu key statis per deploy). Menambahnya butuh
-        dependency kripto baru → keputusan owner (CLAUDE.md §8), bukan inisiatif
-        sepihak. Mitigasi yang bisa dilakukan sekarang tanpa dependency baru:
-        read-path publik ini TIDAK PERNAH mengembalikan nilai mentah, hanya
-        `has_env` (server ini punya env var atau tidak) — mencegah kebocoran lewat
-        UI/API kalau suatu saat form `/mcp/add` menambahkan field env.
+        `env` (env var subprocess MCP stdio, bisa berisi API key/token server
+        itu) dienkripsi-at-rest di DB (security/vault.py, CLAUDE.md §1.2/§7
+        Pengecualian sadar #4) — tapi read-path publik ini TETAP TIDAK PERNAH
+        mengembalikan nilai mentah (walau sudah terenkripsi), hanya `has_env`
+        (server ini punya env var atau tidak) — defense-in-depth, mencegah
+        ciphertext ikut ke UI/API tanpa perlu.
         """
         rows = await self.db.fetchall("SELECT * FROM mcp_servers ORDER BY id DESC")
         for row in rows:
-            try:
-                row["has_env"] = bool(json.loads(row.get("env") or "{}"))
-            except (json.JSONDecodeError, TypeError):
-                row["has_env"] = False
+            row["has_env"] = bool(_decrypt_env_json(row.get("env")))
             row.pop("env", None)
         return rows
 
@@ -97,16 +120,12 @@ class MCPRegistry:
             command = json.loads(row.get("command") or "[]")
         except (json.JSONDecodeError, TypeError):
             command = []
-        try:
-            env = json.loads(row.get("env") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            env = {}
         return MCPServerConfig(
             name=row["name"],
             transport=row["transport"],
             command=command,
             url=row.get("url") or "",
-            env=env,
+            env=_decrypt_env_json(row.get("env")),
         )
 
     @staticmethod

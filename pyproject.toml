@@ -40,6 +40,13 @@ dependencies = [
     # (risiko bug keamanan lebih tinggi ketimbang library teraudit). OIDC adalah
     # protokol terbuka (seperti MCP), bukan SDK vendor-LLM — tak melanggar §1.6.
     "authlib>=1.7",
+    # Enkripsi-at-rest untuk credential per-baris yang tak bisa lewat Vault
+    # env-var-backed (mis. mcp_servers.env — audit produksi 2026-07-28,
+    # CLAUDE.md §1.2 "credential tidak pernah masuk tabel DB"). Disetujui owner
+    # eksplisit (§7 Pengecualian sadar #4). `cryptography` (Fernet) dipilih atas
+    # implementasi AES manual sendiri — library teraudit, bukan reinvent primitif
+    # kripto sendiri (risiko bug keamanan jauh lebih tinggi).
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]

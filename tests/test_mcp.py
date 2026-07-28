@@ -1,6 +1,7 @@
 """Test MCP: client (SDK di-mock), wrapper Tool approval-gated, SSRF remote,
 registry CRUD + load/register, izin wildcard di soul. Tanpa server MCP nyata."""
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -141,6 +142,65 @@ async def test_load_failsafe_on_bad_server(db):
     await reg.add_server("broken", "stdio", command=["nonexistent-binary-xyz"])
     summary = await reg.load_all()
     assert summary["tools"] == 0  # tak ada tool, tapi tak crash
+
+
+async def test_env_encrypted_at_rest(db):
+    """Audit produksi 2026-07-28: mcp_servers.env dienkripsi, tak plaintext di DB."""
+    with patch.dict("os.environ", {"OPENCLAWN_ENCRYPTION_KEY": "kunci-uji-panjang"}):
+        reg = MCPRegistry(db)
+        res = await reg.add_server(
+            "gh", "stdio", command=["x"], env={"GITHUB_TOKEN": "ghp_rahasia123456"}
+        )
+        assert res["ok"] is True
+
+        row = await db.fetchone("SELECT env FROM mcp_servers WHERE name='gh'")
+        assert "ghp_rahasia123456" not in row["env"]  # bukan plaintext di kolom DB
+
+        # list_servers() tetap tak pernah mengembalikan nilai mentah (terenkripsi
+        # ATAU plaintext) — hanya has_env.
+        listed = await reg.list_servers()
+        assert "env" not in listed[0]
+        assert listed[0]["has_env"] is True
+
+        # tapi _config_from_row (dipakai load_all utk konek ke server sungguhan)
+        # berhasil mendekripsi kembali nilai aslinya.
+        cfg = reg._config_from_row(await db.fetchone("SELECT * FROM mcp_servers WHERE name='gh'"))
+        assert cfg.env == {"GITHUB_TOKEN": "ghp_rahasia123456"}
+
+
+async def test_add_server_without_key_fails_when_env_given(db):
+    """Tanpa OPENCLAWN_ENCRYPTION_KEY, add_server dengan env harus gagal loud —
+    bukan diam-diam simpan plaintext (CLAUDE.md §1.2)."""
+    with patch.dict("os.environ", {}, clear=True):
+        reg = MCPRegistry(db)
+        res = await reg.add_server("gh", "stdio", command=["x"], env={"TOKEN": "x"})
+        assert "error" in res
+        assert await reg.list_servers() == []  # tak ada baris tertulis
+
+
+async def test_add_server_without_env_needs_no_key(db):
+    """Server tanpa env sama sekali tetap jalan tanpa OPENCLAWN_ENCRYPTION_KEY."""
+    with patch.dict("os.environ", {}, clear=True):
+        reg = MCPRegistry(db)
+        res = await reg.add_server("fs", "stdio", command=["x"])
+        assert res["ok"] is True
+        assert (await reg.list_servers())[0]["has_env"] is False
+
+
+async def test_legacy_plaintext_env_still_readable(db):
+    """Baris LAMA pra-enkripsi (env plaintext JSON, dari sebelum fitur ini ada)
+    harus tetap terbaca — fallback dekripsi ke parse plaintext (backward-compat)."""
+    await db.execute(
+        """INSERT INTO mcp_servers (name, transport, command, url, env, enabled)
+           VALUES (?,?,?,?,?,1)""",
+        ("legacy", "stdio", json.dumps(["x"]), "", json.dumps({"OLD_TOKEN": "abc"})),
+    )
+    reg = MCPRegistry(db)
+    with patch.dict("os.environ", {"OPENCLAWN_ENCRYPTION_KEY": "kunci-uji"}):
+        cfg = reg._config_from_row(
+            await db.fetchone("SELECT * FROM mcp_servers WHERE name='legacy'")
+        )
+    assert cfg.env == {"OLD_TOKEN": "abc"}
 
 
 async def test_load_idempotent_clears_old(db):

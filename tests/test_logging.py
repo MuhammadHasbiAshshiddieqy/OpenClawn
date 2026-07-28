@@ -76,6 +76,38 @@ def test_scrub_fail_soft_on_bad_input():
     assert out["event"] == "x"
 
 
+def test_scrub_recurses_into_nested_dict():
+    """Audit produksi 2026-07-28: secret di dalam dict bersarang (mis. `headers`
+    berisi Authorization) sebelumnya lolos sama sekali karena scrub hanya
+    memeriksa field top-level."""
+    out = scrub_secrets(
+        None,
+        "info",
+        {"event": "http_call", "headers": {"Authorization": "Bearer x", "api_key": "rahasia"}},
+    )
+    assert out["headers"]["Authorization"] == "[REDACTED]"
+    assert out["headers"]["api_key"] == "[REDACTED]"
+
+
+def test_scrub_recurses_into_list_of_dicts():
+    """Secret di dalam list of dict (mis. daftar tool call/request) juga di-redact."""
+    out = scrub_secrets(
+        None,
+        "info",
+        {"event": "batch", "calls": [{"token": "rahasia1"}, {"note": "sk-abcdEFGH1234567890xy"}]},
+    )
+    assert out["calls"][0]["token"] == "[REDACTED]"
+    assert "[REDACTED]" in out["calls"][1]["note"]
+
+
+def test_scrub_nested_leaves_normal_values_untouched():
+    """Nested dict tanpa secret tidak dirusak (tak ada false-positive)."""
+    out = scrub_secrets(
+        None, "info", {"event": "routing", "meta": {"role": "pm", "n": 3, "tags": ["a", "b"]}}
+    )
+    assert out["meta"] == {"role": "pm", "n": 3, "tags": ["a", "b"]}
+
+
 def test_setup_logging_scrubs_in_pipeline(capsys):
     """End-to-end: secret di field sensitif tak muncul di output JSON."""
     setup_logging()

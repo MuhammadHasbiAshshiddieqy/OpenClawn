@@ -7,7 +7,7 @@ from unittest.mock import patch
 from infra.config import AppConfig
 from infra.database import DatabaseManager
 from security.shield import Shield
-from security.vault import Vault
+from security.vault import Vault, decrypt_secret, encrypt_secret
 from security.approval import ApprovalGate
 
 
@@ -89,6 +89,35 @@ async def test_vault_missing_credential_raises():
     vault = Vault()
     with pytest.raises(ValueError, match="tidak ditemukan"):
         await vault.get("CREDENTIAL_YANG_TIDAK_ADA_XYZ")
+
+
+# ── Enkripsi-at-rest (audit produksi 2026-07-28, CLAUDE.md §7 Pengecualian #4) ─
+
+
+def test_encrypt_decrypt_roundtrip():
+    """encrypt_secret/decrypt_secret harus roundtrip dengan OPENCLAWN_ENCRYPTION_KEY."""
+    with patch.dict("os.environ", {"OPENCLAWN_ENCRYPTION_KEY": "kunci-uji-panjang-acak"}):
+        ciphertext = encrypt_secret('{"TOKEN": "rahasia"}')
+        assert "rahasia" not in ciphertext  # bukan plaintext
+        assert decrypt_secret(ciphertext) == '{"TOKEN": "rahasia"}'
+
+
+def test_encrypt_without_key_raises():
+    """Tanpa OPENCLAWN_ENCRYPTION_KEY, encrypt harus fail loud, bukan diam-diam plaintext."""
+    with patch.dict("os.environ", {}, clear=True):
+        with pytest.raises(ValueError, match="OPENCLAWN_ENCRYPTION_KEY"):
+            encrypt_secret("apa saja")
+
+
+def test_decrypt_wrong_key_raises():
+    """Ciphertext yang didekripsi dengan key berbeda harus raise, bukan mengembalikan sampah."""
+    from cryptography.fernet import InvalidToken
+
+    with patch.dict("os.environ", {"OPENCLAWN_ENCRYPTION_KEY": "key-a"}):
+        ciphertext = encrypt_secret("rahasia")
+    with patch.dict("os.environ", {"OPENCLAWN_ENCRYPTION_KEY": "key-b"}):
+        with pytest.raises(InvalidToken):
+            decrypt_secret(ciphertext)
 
 
 # ── ApprovalGate (HITL interaktif) ────────────────────────────────────────────

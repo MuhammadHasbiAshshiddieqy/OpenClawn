@@ -27,6 +27,31 @@ api_key = await self.vault.get("ANTHROPIC_API_KEY")
 headers = {"x-api-key": api_key, ...}
 ```
 
+### Enkripsi-at-rest: `encrypt_secret` / `decrypt_secret`
+
+Beda dari `Vault` (env-var-backed, satu key statis per nama per deploy): untuk
+credential PER-BARIS yang tak dikenal saat deploy — user isi lewat API/UI, mis.
+`mcp_servers.env` (env var subprocess server MCP eksternal). Menutup gap
+CLAUDE.md §1.2 "credential tidak pernah masuk tabel DB" (audit produksi
+2026-07-28, `CLAUDE.md §7` Pengecualian sadar #4 — dependency `cryptography`).
+
+**`encrypt_secret(plaintext: str) → str`**
+Enkripsi (Fernet, AES128-CBC + HMAC) menggunakan key yang diturunkan (SHA-256 →
+base64 url-safe) dari env var `OPENCLAWN_ENCRYPTION_KEY`. Raises `ValueError`
+bila env var itu belum diset — **fail loud**, tidak pernah diam-diam simpan
+plaintext.
+
+**`decrypt_secret(ciphertext: str) → str`**
+Dekripsi hasil `encrypt_secret`. Raises `ValueError` (key tak diset) atau
+`cryptography.fernet.InvalidToken` (key salah, atau input bukan ciphertext
+valid — mis. baris lama pra-enkripsi yang masih plaintext JSON). Caller yang
+perlu kompatibel dengan baris lama harus menangkap keduanya dan fallback
+sendiri ke parse plaintext (lihat `core/mcp_registry.py::_decrypt_env_json`).
+
+> **Env var:** `OPENCLAWN_ENCRYPTION_KEY` — wajib diisi HANYA bila ada server
+> MCP dengan `env` non-kosong; kosong + tanpa env tetap jalan tanpa error.
+> Generate: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`.
+
 ---
 
 ## `security/shield.py`

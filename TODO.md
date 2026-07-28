@@ -60,10 +60,11 @@ tuntas. Tidak ada item "Prioritas 1–6" yang menggantung.
 Audit kode langsung (bukan re-baca dokumentasi) menemukan 2 blocker baru
 yang **belum pernah masuk TODO manapun** — regresi laten dari ekspansi
 router multi-provider yang tidak diikuti update ke modul lain. Status per
-2026-07-27 (sesi lanjutan, sama hari): 2 blocker + 3 should-fix **sudah
-diperbaiki dan terverifikasi hijau** (801 test lulus, `ruff check`/`ruff
-format --check` bersih via Docker `python:3.12-slim` + `uv sync --frozen`,
-lihat §"Verifikasi CI sungguhan" di bawah), 1 nice-to-have masih terbuka.
+2026-07-27/28 (sesi lanjutan): **semua item — 2 blocker + 3 should-fix + 1
+nice-to-have — sudah diperbaiki dan terverifikasi hijau** (804 test lulus,
+`ruff check`/`ruff format --check` bersih via Docker `python:3.12-slim` +
+`uv sync --frozen`, plus CI GitHub Actions sungguhan hijau untuk commit
+`13ac46f`; lihat §"Verifikasi CI sungguhan" di bawah).
 
 ### 🔴 Blocker
 - [x] **`core/crystallizer.py` — `EVALUATOR_FOR` tidak sinkron dengan
@@ -96,13 +97,12 @@ lihat §"Verifikasi CI sungguhan" di bawah), 1 nice-to-have masih terbuka.
 
 ### 🟡 Should-fix
 - [x] `core/mcp_registry.py:56` — `mcp_servers.env` plaintext di SQLite.
-  **Sebagian dimitigasi** tanpa dependency baru (enkripsi-at-rest sungguhan
-  butuh keputusan dependency kripto → §8, belum diambil): `list_servers()`
-  sekarang TIDAK PERNAH mengembalikan nilai `env` mentah ke caller (UI/API) —
-  hanya `has_env` (boolean). Mencegah kebocoran lewat read-path publik kalau
-  form `/mcp/add` suatu saat menambahkan field env. Kolom DB itu sendiri
-  masih plaintext (write-path) — encryption-at-rest sungguhan tetap item
-  terbuka, lihat §4 poin 6.
+  **Fully DIPERBAIKI** (2 tahap): sesi 2026-07-27 lebih dulu mitigasi
+  read-path (`list_servers()` tak pernah mengembalikan `env` mentah, hanya
+  `has_env`) tanpa dependency baru. Sesi 2026-07-28: owner menyetujui
+  dependency `cryptography` (CLAUDE.md §7 Pengecualian #4) → write-path
+  sekarang genuinely dienkripsi-at-rest via `security/vault.py::encrypt_secret`,
+  bukan plaintext lagi. Detail lengkap di §4 poin 5.
 - [x] `core/llm_client.py` — `httpx.AsyncClient` baru per call. **DIPERBAIKI**:
   `get_shared_http_client()`/`close_shared_http_client()` — client httpx
   pooled satu proses, timeout tetap per-call. Dipakai di `_health_check`,
@@ -118,9 +118,22 @@ lihat §"Verifikasi CI sungguhan" di bawah), 1 nice-to-have masih terbuka.
   menyimpan ketiganya.
 
 ### 🟢 Nice-to-have
-- [ ] `infra/logging.py` — pattern-matching secret-scrubber solid sebagai
-  defense-in-depth tapi tidak exhaustive; token format tak dikenal di field
-  bernama netral tetap lolos ter-log.
+- [x] `infra/logging.py` — pattern-matching secret-scrubber solid sebagai
+  defense-in-depth tapi tidak exhaustive. **Sebagian diperbaiki (2026-07-28)**:
+  gap yang lebih serius ternyata bukan "format token tak dikenal", tapi
+  scrub SAMA SEKALI tidak rekursif — field bersarang seperti
+  `headers={"Authorization": "Bearer ..."}` atau list of dict lolos utuh
+  karena key-hint & pattern cuma dicek di top-level `event_dict`, dan
+  value-nya dict/list (bukan str) sebelumnya tak disentuh. `_scrub_container()`
+  baru rekursif ke dict/list/tuple bersarang. Sisi "format token tak dikenal
+  di field netral" tetap sebagaimana adanya (fundamental limitation
+  pattern-matching, bukan sesuatu yang bisa "diperbaiki" tanpa
+  allow-list/deny-list yang jauh lebih ketat). Test regresi:
+  `test_scrub_recurses_into_nested_dict`,
+  `test_scrub_recurses_into_list_of_dicts`,
+  `test_scrub_nested_leaves_normal_values_untouched` (`tests/test_logging.py`).
+  Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: 804 passed,
+  ruff check/format bersih.
 
 ### ✅ Verifikasi CI sungguhan (2026-07-27, sesi lanjutan)
 
@@ -179,6 +192,15 @@ resolve authlib, lalu exit berbeda tergantung apakah `--frozen` di versi itu
 strict atau lenient terhadap staleness ini). Kalau CI ternyata hijau, berarti
 aman diabaikan; kalau merah, `uv.lock` perlu di-regenerate & commit ulang.
 
+**✅ Diverifikasi 2026-07-28**: `gh run list --branch main` — commit ini
+(`13ac46f`) lulus CI GitHub Actions sungguhan, status `success` (52s). Jadi
+`uv` versi CI saat ini memang lenient terhadap staleness `authlib` (sama
+seperti diamati lokal), CI genuinely hijau, bukan cuma asumsi. `uv.lock`
+tetap stale relatif `pyproject.toml` (belum di-regenerate — keputusan
+owner, §4 poin 6 lama), tapi ini terbukti TIDAK memblokir CI sekarang.
+Item ini closed untuk saat ini; regenerate lockfile tetap opsional/nice-to-have
+kalau owner mau kerapian, bukan lagi item mendesak.
+
 ---
 
 ## 3. Validasi arah development vs tren 2026
@@ -211,21 +233,37 @@ OpenCLAWN saat ini murni tertutup di dalam prosesnya sendiri.
 2. ~~Perbaiki retry `_stream_one`~~ — **selesai**, lihat §2.
 3. ~~Shared/pooled `httpx.AsyncClient`~~ — **selesai**, lihat §2.
 4. ~~Sinkronkan kolom audit dengan dimensi router~~ — **selesai**, lihat §2.
-5. **[belum, perlu keputusan owner]** Encryption-at-rest sungguhan untuk
-   `mcp_servers.env` (bukan cuma masking read-path yang sudah dikerjakan) —
-   butuh dependency kripto baru (mis. `cryptography`), CLAUDE.md §8 eksplisit
-   minta persetujuan owner sebelum menambah dependency. Jangan dikerjakan
-   sepihak.
+5. ~~Encryption-at-rest sungguhan untuk `mcp_servers.env`~~ — **selesai
+   (2026-07-28), disetujui owner eksplisit**. `security/vault.py::encrypt_secret`/
+   `decrypt_secret` (Fernet, dependency `cryptography` baru — CLAUDE.md §7
+   Pengecualian sadar #4). `add_server()` mengenkripsi `env` non-kosong
+   sebelum INSERT; tanpa `OPENCLAWN_ENCRYPTION_KEY` ter-set dan `env` diisi →
+   `{"error": ...}` (fail loud, bukan diam-diam plaintext); tanpa `env` sama
+   sekali tetap jalan tanpa key. `_config_from_row()`/`_decrypt_env_json()`
+   mendekripsi untuk dipakai konek ke server sungguhan, dengan fallback ke
+   parse plaintext untuk baris LAMA pra-enkripsi (backward-compat, tak
+   perlu migrasi data manual). `list_servers()` tetap seperti sebelumnya —
+   tak pernah mengembalikan `env` mentah maupun ciphertext, hanya `has_env`.
+   Test baru: `test_encrypt_decrypt_roundtrip`, `test_encrypt_without_key_raises`,
+   `test_decrypt_wrong_key_raises` (`tests/test_security.py`);
+   `test_env_encrypted_at_rest`, `test_add_server_without_key_fails_when_env_given`,
+   `test_add_server_without_env_needs_no_key`, `test_legacy_plaintext_env_still_readable`
+   (`tests/test_mcp.py`). Docs diupdate (`docs/security.md`, `docs/core.md`,
+   `.env.example`, `CLAUDE.md §7`). Diverifikasi via Docker `python:3.12-slim`
+   + `uv sync --frozen` (lockfile kali ini SENGAJA diregenerate & disimpan,
+   bukan direvert — penambahan dependency nyata, bukan drift; sekaligus
+   menutup staleness `authlib` lama sebagai bonus): **811 passed**, ruff
+   check/format bersih.
 6. ~~Konfirmasi CI hijau di environment 3.12 asli~~ — **selesai**, lihat
    §"Verifikasi CI sungguhan" di §2 (801 passed via Docker `python:3.12-slim`
    + `uv sync --frozen`).
-7. **[eksplorasi tren]** Evaluasi kebutuhan nyata A2A/ACP interop — HANYA
-   jika ada kebutuhan pilot konkret untuk agent OpenCLAWN dipanggil dari
-   atau memanggil agent di platform lain. Jangan bangun spekulatif.
-8. **[eksplorasi tren]** Evaluasi credential rotation / scoping JIT untuk
-   API key yang dipegang agent (MCP eksternal) — relevan kalau target
-   deployment bergeser ke multi-tenant SaaS sungguhan, bukan self-host
-   single-org.
+7. **[eksplorasi tren, tidak dikerjakan — dikonfirmasi owner]** Interop
+   A2A/ACP — tidak ada kebutuhan pilot konkret saat ini. Biarkan sebagai
+   catatan tren, jangan dibangun spekulatif.
+8. **[eksplorasi tren, tidak dikerjakan — dikonfirmasi owner]** Credential
+   rotation/JIT scoping untuk API key MCP eksternal — tidak ada kebutuhan
+   nyata saat ini (bukan target SaaS multi-tenant). Biarkan sebagai catatan
+   tren.
 
 ---
 

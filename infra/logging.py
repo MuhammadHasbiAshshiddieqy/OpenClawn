@@ -27,17 +27,41 @@ def _scrub_value(value: str) -> str:
     return value
 
 
+def _scrub_container(value):
+    """Rekursif ke dict/list/tuple — audit produksi 2026-07-28: sebelumnya hanya
+    string di TOP-LEVEL event_dict yang di-scrub; sebuah field seperti
+    `headers={"Authorization": "Bearer ..."}` lolos utuh karena key hint & pola
+    secret cuma dicek satu tingkat, dan value-nya dict (bukan str) jadi tak
+    disentuh sama sekali."""
+    if isinstance(value, dict):
+        return {
+            k: (
+                _REDACTED
+                if any(h in str(k).lower() for h in _SECRET_KEY_HINTS)
+                else _scrub_container(v)
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return type(value)(_scrub_container(v) for v in value)
+    if isinstance(value, str):
+        return _scrub_value(value)
+    return value
+
+
 def scrub_secrets(logger, method_name, event_dict: dict) -> dict:
     """structlog processor: redact secret di key sensitif & nilai berpola secret.
 
-    Fail-soft: error apa pun saat scrub tidak boleh menjatuhkan logging.
+    Rekursif ke dict/list bersarang (lihat `_scrub_container`), bukan cuma
+    field top-level. Fail-soft: error apa pun saat scrub tidak boleh
+    menjatuhkan logging.
     """
     try:
         for key, val in list(event_dict.items()):
             if any(hint in key.lower() for hint in _SECRET_KEY_HINTS):
                 event_dict[key] = _REDACTED
-            elif isinstance(val, str):
-                event_dict[key] = _scrub_value(val)
+            else:
+                event_dict[key] = _scrub_container(val)
     except Exception:  # noqa: BLE001 — logging tak boleh gagal karena scrub
         pass
     return event_dict
