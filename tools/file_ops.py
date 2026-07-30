@@ -25,8 +25,12 @@ class FileReadTool(Tool):
         except WorkspaceViolation as e:
             return {"error": str(e)}
         try:
+            # Baca dibatasi MAX_READ+1 char, BUKAN seluruh file dulu (audit produksi
+            # 2026-07-30: file multi-GB di workspace sebelumnya dimuat penuh ke
+            # memori sebelum dipotong). +1 char cukup untuk deteksi truncated
+            # tanpa perlu tahu ukuran file sebenarnya.
             async with aiofiles.open(safe) as f:
-                content = await f.read()
+                content = await f.read(MAX_READ + 1)
             truncated = len(content) > MAX_READ
             return {"content": content[:MAX_READ], "truncated": truncated}
         except FileNotFoundError:
@@ -78,8 +82,10 @@ class ReadManyTool(Tool):
                 files.append(entry)
                 continue
             try:
+                # Sama seperti FileReadTool: batasi bacaan per file, jangan muat
+                # seluruh file dulu.
                 async with aiofiles.open(safe) as f:
-                    content = await f.read()
+                    content = await f.read(PER_FILE_BUDGET + 1)
                 entry["content"] = content[:PER_FILE_BUDGET]
                 entry["truncated"] = len(content) > PER_FILE_BUDGET
             except FileNotFoundError:

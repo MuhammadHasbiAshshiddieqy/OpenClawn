@@ -488,19 +488,38 @@ passed**, ruff check/format bersih, `uv.lock` tak tersentuh.
   tak disalahartikan sebagai gap baru oleh audit berikutnya — sama kelas
   dengan false-positif `tenant_id` di §5 yang sempat salah diperbaiki lalu
   di-revert.
-- **Resource exhaustion**: `tools/web.py` (`web_fetch`/`http_request`,
-  `requires_approval=False`) dan `tools/file_ops.py` (`file_read`/`read_many`)
-  membaca SELURUH body/file ke memori SEBELUM dipotong ke batas — tak ada
-  cek `Content-Length`/`stat()` size sebelum baca. URL/file multi-GB bisa
-  menghabiskan memori proses. Should-fix, belum diperbaiki (butuh desain
-  streaming-with-cap yang konsisten lintas tool, bukan tambal satu-satu).
-- **`tools/search.py::GrepTool` — ReDoS, should-fix.** `re.compile(pattern)`
-  dari argumen LLM dijalankan tanpa timeout ke semua file workspace,
-  `requires_approval=False`. Pattern catastrophic-backtracking (mis.
-  `(a+)+b`) terhadap file besar/minified bisa macetkan proses. Python `re`
-  stdlib tak punya timeout native — butuh dependency `regex` (mendukung
-  timeout) atau wrapper subprocess+timeout; belum diperbaiki (dependency
-  baru → keputusan owner, CLAUDE.md §8).
+- [x] **Resource exhaustion — DIPERBAIKI (2026-07-30), tanpa dependency
+  baru.** `tools/web.py` (`web_fetch`/`http_request`) dan `tools/file_ops.py`
+  (`file_read`/`read_many`) sebelumnya membaca SELURUH body/file ke memori
+  SEBELUM dipotong ke batas. Diperbaiki: `web.py::_stream_capped()` pakai
+  `client.stream()` + `aiter_text()`, berhenti membaca begitu batas
+  tercapai (bukan menunggu body selesai); `file_ops.py` pakai
+  `f.read(MAX_READ+1)`/`f.read(PER_FILE_BUDGET+1)` (bounded read, aiofiles
+  tak perlu memuat seluruh file untuk read dengan size argument). Test
+  regresi baru: `test_web_fetch_truncates_without_buffering_everything`,
+  `test_file_read_truncates_large_file` (diperkuat), `test_read_many_truncates_per_file_budget`
+  (`tests/test_tools.py`) — 2 test lama (`test_web_fetch_success`,
+  `test_web_fetch_http_error`) disesuaikan mock-nya dari `client.get()` ke
+  `client.stream()`.
+- **`tools/search.py::GrepTool` — ReDoS, should-fix, BELUM diperbaiki.**
+  `re.compile(pattern)` dari argumen LLM dijalankan tanpa timeout ke semua
+  file workspace, `requires_approval=False`. Pattern catastrophic-backtracking
+  (mis. `(a+)+b`) terhadap file besar/minified bisa macetkan proses. Python
+  `re` stdlib tak punya timeout native, dan `asyncio.wait_for` tak bisa
+  membatalkan regex CPU-bound yang sedang jalan (butuh thread/process pool
+  sungguhan untuk benar-benar diinterupsi) — perbaikan robust butuh
+  dependency `regex` (mendukung timeout) atau wrapper subprocess+timeout;
+  keputusan dependency baru → owner (CLAUDE.md §8).
+- **`GET /workspace/download` — temuan tambahan, masih should-fix.**
+  Selain tanpa cek kepemilikan (§6), ternyata SELALU resolve ke
+  `CONFIG.workspace_root` GLOBAL (`web/main.py`), BUKAN
+  `CURRENT_WORKSPACE_ROOT` per-sesi (`infra/workspace.py`,
+  fitur "adaptive per-session working directory" yang sudah ada). Untuk
+  sesi yang memilih folder kerja kustom (`set_workdir`/field UI), endpoint
+  ini kemungkinan salah folder, bukan cuma kurang isolasi. Bentuk fix yang
+  benar butuh keputusan: endpoint perlu tahu `session_id` mana yang minta
+  (parameter baru) DAN resolve ke workspace sesi itu (via
+  `SessionWorkspaceStore`) — perubahan desain endpoint, bukan tambal kecil.
 
 ---
 

@@ -51,6 +51,31 @@ def _ssrf_guard(url: str) -> str | None:
     return None
 
 
+async def _stream_capped(
+    client: httpx.AsyncClient, method: str, url: str, max_chars: int, **kwargs
+) -> tuple[int, str, bool]:
+    """Stream response, berhenti begitu `max_chars` tercapai — TIDAK menunggu
+    seluruh body masuk memori dulu.
+
+    Audit produksi 2026-07-30: sebelumnya `resp.text[:MAX_BODY]` memotong
+    SETELAH seluruh body sudah dibaca via `client.get()`/`client.request()` —
+    host yang mengirim body multi-GB (termasuk yang attacker-controlled,
+    web_fetch tidak butuh approval) tetap membebani memori proses penuh
+    sebelum dipotong. Berhenti membaca lebih awal via `client.stream()` +
+    `aiter_text()` menutup ini tanpa dependency baru."""
+    async with client.stream(method, url, **kwargs) as resp:
+        parts: list[str] = []
+        total = 0
+        async for chunk in resp.aiter_text():
+            parts.append(chunk)
+            total += len(chunk)
+            if total > max_chars:
+                break
+        text = "".join(parts)
+        truncated = len(text) > max_chars
+        return resp.status_code, text[:max_chars], truncated
+
+
 class WebFetchTool(Tool):
     name = "web_fetch"
     requires_approval = False
@@ -67,14 +92,10 @@ class WebFetchTool(Tool):
             return {"error": blocked}
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                resp = await client.get(url)
                 # Truncation seragam via tool_max_output (token-first §1.4), bukan
                 # angka hardcoded. Jaring akhir di AgentLoop tetap berlaku.
-                return {
-                    "status": resp.status_code,
-                    "content": resp.text[:MAX_BODY],
-                    "truncated": len(resp.text) > MAX_BODY,
-                }
+                status, content, truncated = await _stream_capped(client, "GET", url, MAX_BODY)
+                return {"status": status, "content": content, "truncated": truncated}
         except httpx.HTTPError as e:
             return {"error": str(e)}
 
@@ -198,13 +219,10 @@ class HttpRequestTool(Tool):
                         kwargs["json"] = body
                     else:
                         kwargs["content"] = str(body)
-                resp = await client.request(method, url, **kwargs)
-            text = resp.text[:MAX_BODY]
-            return {
-                "status": resp.status_code,
-                "body": text,
-                "truncated": len(resp.text) > MAX_BODY,
-            }
+                status, text, truncated = await _stream_capped(
+                    client, method, url, MAX_BODY, **kwargs
+                )
+            return {"status": status, "body": text, "truncated": truncated}
         except httpx.HTTPError as e:
             return {"error": str(e)}
 

@@ -127,14 +127,20 @@ async def test_file_read_no_path():
 
 @pytest.mark.asyncio
 async def test_file_read_truncates_large_file(tmp_path, monkeypatch):
-    """file_read harus truncate konten > 10000 karakter."""
+    """file_read harus truncate konten > 10000 karakter.
+
+    Audit produksi 2026-07-30: sekarang dibaca dengan `f.read(MAX_READ+1)`
+    (bounded), bukan `f.read()` penuh dulu — pastikan boundary tetap tepat."""
+    from tools.file_ops import MAX_READ
+
     _set_workspace(monkeypatch, tmp_path)
     f = tmp_path / "big.txt"
-    f.write_text("x" * 20000)
+    f.write_text("x" * (MAX_READ + 5000))
 
     tool = FileReadTool()
     result = await tool.execute({"path": "big.txt"}, vault=None)
-    assert len(result["content"]) <= 10000
+    assert len(result["content"]) == MAX_READ
+    assert result["truncated"] is True
 
 
 # ── FileWriteTool ─────────────────────────────────────────────────────────────
@@ -161,19 +167,38 @@ async def test_file_write_no_path():
 # ── WebFetchTool ──────────────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_web_fetch_success():
-    """web_fetch berhasil → mengembalikan status dan konten."""
-    tool = WebFetchTool()
+def _fake_stream_client(text_chunks: list[str], status_code: int = 200):
+    """Client httpx palsu untuk `client.stream(...)` (audit produksi 2026-07-30:
+    web_fetch/http_request kini streaming-with-cap via aiter_text(), bukan
+    lagi client.get()/client.request() sekaligus)."""
 
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.text = "page content"
+    class FakeResp:
+        def __init__(self):
+            self.status_code = status_code
+
+        async def aiter_text(self):
+            for chunk in text_chunks:
+                yield chunk
+
+    class FakeStreamCtx:
+        async def __aenter__(self):
+            return FakeResp()
+
+        async def __aexit__(self, *a):
+            return False
 
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.stream = MagicMock(return_value=FakeStreamCtx())
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_success():
+    """web_fetch berhasil → mengembalikan status dan konten."""
+    tool = WebFetchTool()
+    mock_client = _fake_stream_client(["page content"])
 
     # _ssrf_guard di-bypass (return None = aman) agar test tak melakukan DNS nyata.
     with (
@@ -204,7 +229,7 @@ async def test_web_fetch_http_error():
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.get = AsyncMock(side_effect=httpx.HTTPError("connection error"))
+    mock_client.stream = MagicMock(side_effect=httpx.HTTPError("connection error"))
 
     with (
         patch("tools.web.httpx.AsyncClient", return_value=mock_client),
@@ -213,6 +238,29 @@ async def test_web_fetch_http_error():
         result = await tool.execute({"url": "https://bad-url.example"}, vault=None)
 
     assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_truncates_without_buffering_everything():
+    """Audit produksi 2026-07-30: content dipotong ke MAX_BODY, `truncated=True`
+    bila body lebih panjang — via streaming (aiter_text), bukan resp.text
+    penuh dulu baru dipotong."""
+    from tools.web import MAX_BODY
+
+    tool = WebFetchTool()
+    long_text = "x" * (MAX_BODY + 500)
+    # Kirim sebagai beberapa chunk kecil, meniru streaming sungguhan.
+    chunks = [long_text[i : i + 100] for i in range(0, len(long_text), 100)]
+    mock_client = _fake_stream_client(chunks)
+
+    with (
+        patch("tools.web.httpx.AsyncClient", return_value=mock_client),
+        patch("tools.web._ssrf_guard", return_value=None),
+    ):
+        result = await tool.execute({"url": "http://example.com"}, vault=None)
+
+    assert result["truncated"] is True
+    assert len(result["content"]) == MAX_BODY
 
 
 # ── SSRF guard (web_fetch + http_request) ─────────────────────────────────────
@@ -757,6 +805,21 @@ async def test_read_many_caps_batch_size(tmp_path, monkeypatch):
     result = await ReadManyTool().execute({"paths": paths}, vault=None)
     assert result["count"] == MAX_FILES_PER_BATCH
     assert result["skipped"] == 5
+
+
+@pytest.mark.asyncio
+async def test_read_many_truncates_per_file_budget(tmp_path, monkeypatch):
+    """Audit produksi 2026-07-30: tiap file dibaca dibatasi PER_FILE_BUDGET+1
+    (bounded), bukan seluruh file dulu — boundary truncation tetap tepat."""
+    from tools.file_ops import ReadManyTool, PER_FILE_BUDGET
+
+    _patch_workspace(monkeypatch, tmp_path, "tools.file_ops")
+    (tmp_path / "big.txt").write_text("y" * (PER_FILE_BUDGET + 500))
+
+    result = await ReadManyTool().execute({"paths": ["big.txt"]}, vault=None)
+    entry = result["files"][0]
+    assert len(entry["content"]) == PER_FILE_BUDGET
+    assert entry["truncated"] is True
 
 
 # ── doc_write (docx/pptx/xlsx/md) ────────────────────────────────────────────
