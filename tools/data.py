@@ -86,19 +86,41 @@ class MemorySearchTool(Tool):
             return {"error": "memory_search butuh koneksi database"}
         query = (input_data.get("query") or "").strip()
         table = (input_data.get("table") or "skills").strip().lower()
+        # Audit produksi 2026-07-30: `_role` diinjeksi SISTEM oleh agent_loop.py
+        # (lihat allowlist injeksi konteks di sana) — BUKAN dari argumen LLM,
+        # model tak boleh mengarang role sendiri. SEBELUMNYA query di sini tak
+        # difilter role sama sekali (requires_approval=False pula), jadi satu
+        # role bisa baca memori/skill privat role lain tanpa approval — melanggar
+        # isolasi yang sama dijaga skill visibility (private/shared/inherited).
+        role = input_data.get("_role")
         if not query:
             return {"error": "query wajib diisi"}
         if table not in _MEM_TABLES:
             return {"error": f"table harus salah satu dari {sorted(_MEM_TABLES)}"}
+        if not role:
+            # Fail-closed: konteks role tak tersedia → jangan buka semua data,
+            # tolak alih-alih diam-diam mengembalikan lintas-role.
+            return {"error": "konteks role tidak tersedia — pencarian ditolak"}
 
         # Kolom teks yang dicari per tabel (sesuai schema 001_initial.sql).
         col = {"memory_l1": "value", "memory_l2": "fact", "skills": "skill_content"}[table]
         like = f"%{query}%"
         try:
-            rows = await db.fetchall(
-                f"SELECT * FROM {table} WHERE {col} LIKE ? LIMIT ?",  # noqa: S608 — table dari allowlist
-                (like, MAX_ROWS),
-            )
+            if table == "skills":
+                # Skill Marketplace (TODO.md § Prioritas 6): skill role SENDIRI
+                # (visibility apa pun) + skill role LAIN hanya bila shared/inherited
+                # — sama pola SkillDecayManager.get_active_skills, bukan lagi
+                # SELECT * tanpa filter yang menembus 'private' begitu saja.
+                rows = await db.fetchall(
+                    f"SELECT * FROM {table} WHERE {col} LIKE ? "  # noqa: S608 — table dari allowlist
+                    "AND (role=? OR visibility IN ('shared','inherited')) LIMIT ?",
+                    (like, role, MAX_ROWS),
+                )
+            else:
+                rows = await db.fetchall(
+                    f"SELECT * FROM {table} WHERE {col} LIKE ? AND role=? LIMIT ?",  # noqa: S608
+                    (like, role, MAX_ROWS),
+                )
         except Exception as e:
             return {"error": f"Pencarian gagal: {e}"}
         return {"table": table, "results": rows, "count": len(rows)}

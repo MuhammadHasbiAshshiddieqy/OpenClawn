@@ -54,6 +54,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # Kode query BELUM di-filter per-tenant untuk tabel ini (lihat komentar
         # migrations/002_multi_tenant.sql untuk scope wiring saat ini).
         ("tenant_id", "TEXT DEFAULT 'default'"),
+        # Audit produksi 2026-07-29: sudah di CREATE TABLE untuk DB baru — baris
+        # ini menambal DB LAMA (dibuat sebelum kolom ini ada).
+        ("owner_user_id", "TEXT"),
     ],
     "tool_invocations": [
         # Audit log format actor_is_agent (TODO.md § Prioritas 2) — sama seperti
@@ -70,6 +73,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # benar-benar filter per-tenant (bukan cuma kolom pasif seperti tabel
         # multi-tenant lain di atas). Lihat migrations/002_multi_tenant.sql.
         ("tenant_id", "TEXT DEFAULT 'default'"),
+        # Audit produksi 2026-07-29: sudah di CREATE TABLE untuk DB baru — baris
+        # ini menambal DB LAMA (dibuat sebelum kolom ini ada).
+        ("owner_user_id", "TEXT"),
     ],
 }
 

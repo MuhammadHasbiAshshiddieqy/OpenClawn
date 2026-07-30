@@ -15,6 +15,22 @@ MAX_PDF_CHARS = CONFIG.tool_max_output
 # Format dokumen yang didukung doc_write → ekstensi file.
 DOC_FORMATS = {"docx", "pptx", "xlsx", "md"}
 
+# Audit produksi 2026-07-30: karakter yang memicu Excel menafsirkan isi cell
+# sebagai formula saat file dibuka (CSV/XLSX formula injection, OWASP) — bukan
+# hanya CSV, XLSX pun rentan karena Excel men-sniff isi cell string yang
+# diawali karakter ini sebagai formula terlepas dari tipe cell di XML.
+_FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _escape_formula_cell(value):
+    """Cegah formula injection: string yang diawali karakter pemicu formula
+    diberi prefix `'` (konvensi Excel sendiri untuk "paksa teks literal").
+    Nilai non-string (angka, bool, None, dsb.) diteruskan apa adanya — tak
+    boleh dipaksa jadi teks (merusak tipe cell numerik)."""
+    if isinstance(value, str) and value.startswith(_FORMULA_TRIGGER_CHARS):
+        return "'" + value
+    return value
+
 
 class PdfReadTool(Tool):
     name = "pdf_read"
@@ -193,11 +209,11 @@ class DocWriteTool(Tool):
         ws = wb.active
         ws.title = str(content.get("sheet", "Sheet1"))[:31]
         if content.get("headers"):
-            ws.append([str(h) for h in content["headers"]])
+            ws.append([_escape_formula_cell(h) for h in content["headers"]])
         for row in content.get("rows", []):
             if not isinstance(row, list):
                 raise TypeError("setiap rows harus list sel")
-            ws.append(row)
+            ws.append([_escape_formula_cell(cell) for cell in row])
         wb.save(str(safe))
 
     def schema(self) -> dict:

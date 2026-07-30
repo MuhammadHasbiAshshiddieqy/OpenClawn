@@ -832,6 +832,39 @@ async def test_doc_write_xlsx_rows(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_doc_write_xlsx_escapes_formula_injection(tmp_path, monkeypatch):
+    """Audit produksi 2026-07-30: cell string yang diawali =/+/-/@ (bisa dari
+    konten LLM/web yang tak dipercaya) harus diberi prefix `'` agar Excel
+    tak menafsirkannya sebagai formula saat file dibuka (CSV/XLSX formula
+    injection, OWASP) — angka tetap angka, tak ikut diubah jadi teks."""
+    from tools.document import DocWriteTool
+    from openpyxl import load_workbook
+
+    _patch_workspace(monkeypatch, tmp_path, "tools.document")
+    content = {
+        "headers": ["Nama", "Catatan"],
+        "rows": [
+            ["A", "=cmd|'/c calc'!A1"],
+            ["B", "+1+1"],
+            ["C", "-2+3"],
+            ["D", "@SUM(1,1)"],
+            ["E", 42],  # angka biasa tak boleh disentuh
+        ],
+    }
+    result = await DocWriteTool().execute(
+        {"path": "data.xlsx", "format": "xlsx", "content": content}, vault=None
+    )
+    assert result.get("ok") is True
+    wb = load_workbook(str(tmp_path / "data.xlsx"))
+    rows = list(wb.active.iter_rows(values_only=True))
+    assert rows[1][1] == "'=cmd|'/c calc'!A1"
+    assert rows[2][1] == "'+1+1"
+    assert rows[3][1] == "'-2+3"
+    assert rows[4][1] == "'@SUM(1,1)"
+    assert rows[5][1] == 42  # tetap int, tak dipaksa jadi string
+
+
+@pytest.mark.asyncio
 async def test_doc_write_pptx_slides(tmp_path, monkeypatch):
     """pptx dari {title, slides} → presentasi dengan slide judul + konten."""
     from tools.document import DocWriteTool

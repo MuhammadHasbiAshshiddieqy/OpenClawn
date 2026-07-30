@@ -185,6 +185,58 @@ async def test_soft_delete_cannot_cross_tenant(db):
     assert [s["session_id"] for s in sessions_b] == ["s-victim"]
 
 
+# ── Ownership per-user (audit produksi 2026-07-29) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_active_filters_by_owner(db):
+    """Sesi milik user lain tak muncul saat difilter owner_user_id."""
+    store = ChatSessionStore(db)
+    await store.ensure_created("s-alice", "pm", owner_user_id="1")
+    await store.ensure_created("s-bob", "pm", owner_user_id="2")
+
+    alice_sessions = await store.list_active(owner_user_id="1")
+    assert [s["session_id"] for s in alice_sessions] == ["s-alice"]
+
+
+@pytest.mark.asyncio
+async def test_list_active_owner_filter_includes_ownerless_sessions(db):
+    """Sesi TANPA owner tercatat (dibuat sebelum fitur ini / auth nonaktif) tetap
+    terlihat semua user — graceful, bukan menghilang tiba-tiba dari sidebar."""
+    store = ChatSessionStore(db)
+    await store.ensure_created("s-legacy", "pm")  # owner_user_id=None
+    await store.ensure_created("s-bob", "pm", owner_user_id="2")
+
+    alice_sessions = await store.list_active(owner_user_id="1")
+    assert [s["session_id"] for s in alice_sessions] == ["s-legacy"]
+
+
+@pytest.mark.asyncio
+async def test_list_active_no_owner_filter_sees_everything(db):
+    """owner_user_id=None (admin/auth nonaktif) → tanpa filter kepemilikan sama sekali."""
+    store = ChatSessionStore(db)
+    await store.ensure_created("s-alice", "pm", owner_user_id="1")
+    await store.ensure_created("s-bob", "pm", owner_user_id="2")
+
+    everyone = await store.list_active()
+    assert {s["session_id"] for s in everyone} == {"s-alice", "s-bob"}
+
+
+@pytest.mark.asyncio
+async def test_get_owner_returns_recorded_owner(db):
+    store = ChatSessionStore(db)
+    await store.ensure_created("s1", "pm", owner_user_id="42")
+    assert await store.get_owner("s1") == "42"
+
+
+@pytest.mark.asyncio
+async def test_get_owner_none_for_unknown_or_ownerless_session(db):
+    store = ChatSessionStore(db)
+    await store.ensure_created("s1", "pm")  # tanpa owner
+    assert await store.get_owner("s1") is None
+    assert await store.get_owner("does-not-exist") is None
+
+
 @pytest.mark.asyncio
 async def test_list_active_respects_limit(db):
     store = ChatSessionStore(db)

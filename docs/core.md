@@ -259,6 +259,18 @@ Memisahkan reasoning inline `<think>...</think>` dari teks jawaban secara **stre
 
 Di-raise ketika semua provider dalam fallback chain gagal.
 
+### Fungsi modul: `get_shared_http_client()` / `close_shared_http_client()`
+
+Client `httpx.AsyncClient` **pooled satu proses** (audit produksi 2026-07-27:
+sebelumnya tiap panggilan health-check/stream membuat client baru, membuang
+TCP/TLS handshake + keep-alive tiap turn di bawah traffic konkuren).
+`get_shared_http_client()` membuat lazy sekali lalu dipakai ulang lintas
+request/modul (timeout tetap per-call lewat parameter `timeout=`, bukan
+default client — tiap provider punya kebutuhan timeout berbeda).
+`close_shared_http_client()` dipanggil dari `lifespan` FastAPI (`web/main.py`)
+saat shutdown. Juga dipakai untuk 2 health-check Ollama di `web/main.py`
+(startup + `/health`), bukan hanya `LLMClient` internal.
+
 ### Kelas: `LLMClient`
 
 **`__init__(vault, config)`**  
@@ -273,8 +285,16 @@ Satu-satunya method publik. Coba `(provider, model)` utama, jika gagal turun ke 
 **`_health_check(provider) → bool`** *(async, private)*  
 Ping health endpoint sebelum call. Ollama: `GET /api/tags`. Anthropic: asumsikan up (retry handle transient).
 
-**`_stream_one(provider, model, messages, tools, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private, dengan `@retry`)*  
-Retry dengan exponential backoff (tenacity). Dispatch ke `_ollama()` atau `_claude()`.
+**`_stream_one(provider, model, messages, tools, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
+Retry manual dengan exponential backoff (audit produksi 2026-07-27: `@retry`
+tenacity TIDAK bisa membungkus async generator sungguhan — hanya retry
+exception saat *pembuatan* generator yang lazy, tak pernah gagal, bukan saat
+*iterasi*; refactor jadi loop manual di sini). Retry HANYA berlaku sebelum
+chunk pertama ter-`yield` ke caller — kegagalan `httpx.HTTPError` setelah itu
+langsung propagate (tak di-retry, supaya tak menduplikasi output yang sudah
+terlanjur dikirim ke browser via SSE), ditangani `stream_with_fallback` lewat
+pindah provider. Memanggil `_stream_one_attempt()` (dispatch murni, tanpa
+retry) ke `_ollama()`/`_claude()`/`_gemini()`.
 
 **`_ollama(model, messages, tools, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
 Streaming request ke `POST /api/chat` Ollama. Parse NDJSON response.

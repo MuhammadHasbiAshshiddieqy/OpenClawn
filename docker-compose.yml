@@ -23,6 +23,16 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    # Audit produksi 2026-07-29: sebelumnya tanpa batas resource — satu container
+    # nakal/bocor memori bisa menghabiskan seluruh host. Server FastAPI ini sendiri
+    # ringan (LLM inference terjadi di Ollama/cloud API, bukan di proses ini);
+    # naikkan bila banyak sesi konkuren. Dihormati `docker compose` (V2) tanpa
+    # perlu Swarm mode.
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
 
   # OpenConnector (opsional) — gateway auth 1000+ provider SaaS (GitHub, Gmail,
   # Notion, Slack, dst) yang di-expose ke agent lewat MCP standar. Proyek pihak

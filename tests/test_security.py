@@ -263,3 +263,79 @@ async def test_pending_list_scoped_by_session(db, fast_config):
     for p in gate.pending_list():
         gate.resolve(p["approval_id"], False)
     await asyncio.gather(t1, t2)
+
+
+# ── Ownership per-user (audit produksi 2026-07-29) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pending_list_owner_filter_excludes_other_users(db, fast_config):
+    """pending_list(owner_user_id=...) tak boleh mengembalikan approval milik
+    user lain — SEBELUMNYA GET /approvals tanpa session_id bocor approval SEMUA
+    user (approval hijack lintas-user)."""
+    gate = ApprovalGate(db, fast_config)
+
+    t_alice = asyncio.create_task(
+        gate.request("s1", "code_run", {"code": "alice"}, owner_user_id="1")
+    )
+    t_bob = asyncio.create_task(gate.request("s2", "code_run", {"code": "bob"}, owner_user_id="2"))
+    await asyncio.sleep(0.05)
+
+    alice_view = gate.pending_list(owner_user_id="1")
+    assert [p["tool_input"]["code"] for p in alice_view] == ["alice"]
+
+    for p in gate.pending_list():
+        gate.resolve(p["approval_id"], False)
+    await asyncio.gather(t_alice, t_bob)
+
+
+@pytest.mark.asyncio
+async def test_pending_list_owner_filter_includes_ownerless(db, fast_config):
+    """Approval TANPA owner tercatat (auth nonaktif saat dibuat) tetap terlihat
+    semua user — graceful, konsisten pola chat_sessions."""
+    gate = ApprovalGate(db, fast_config)
+
+    t = asyncio.create_task(gate.request("s1", "code_run", {"code": "x"}))  # owner_user_id=None
+    await asyncio.sleep(0.05)
+
+    assert len(gate.pending_list(owner_user_id="1")) == 1
+
+    for p in gate.pending_list():
+        gate.resolve(p["approval_id"], False)
+    await asyncio.gather(t)
+
+
+@pytest.mark.asyncio
+async def test_find_pending_returns_owner(db, fast_config):
+    """find_pending dipakai web/main.py cek kepemilikan SEBELUM resolve()."""
+    gate = ApprovalGate(db, fast_config)
+
+    t = asyncio.create_task(gate.request("s1", "code_run", {"code": "x"}, owner_user_id="42"))
+    await asyncio.sleep(0.05)
+
+    approval_id = gate.pending_list()[0]["approval_id"]
+    pending = gate.find_pending(approval_id)
+    assert pending is not None
+    assert pending.owner_user_id == "42"
+
+    gate.resolve(approval_id, False)
+    await t
+
+
+def test_find_pending_unknown_id_returns_none(db, fast_config):
+    gate = ApprovalGate(db, fast_config)
+    assert gate.find_pending("does-not-exist") is None
+
+
+@pytest.mark.asyncio
+async def test_owner_user_id_persisted_to_approval_log(db, fast_config):
+    """owner_user_id tersimpan ke DB, bukan cuma di memori — query-able untuk audit."""
+    gate = ApprovalGate(db, fast_config)
+
+    t = asyncio.create_task(gate.request("s_owner", "code_run", {"code": "x"}, owner_user_id="7"))
+    await asyncio.sleep(0.05)
+    gate.resolve(gate.pending_list()[0]["approval_id"], True)
+    await t
+
+    row = await db.fetchone("SELECT owner_user_id FROM approval_log WHERE session_id='s_owner'")
+    assert row["owner_user_id"] == "7"

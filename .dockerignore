@@ -1,0 +1,59 @@
+# Audit produksi 2026-07-29: Dockerfile.role pakai `COPY . .` tanpa .dockerignore
+# sebelumnya — .env (credential) dan data/ (SQLite DB, bisa berisi data user)
+# ikut ter-bake ke image layer kalau ada saat build. Cermin .gitignore + tambahan
+# khusus build context (bukan git-tracking).
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Database (runtime data) — JANGAN pernah masuk image
+data/
+
+# Skill pack lockfile (state lokal)
+skills-lock.json
+
+# Credential — JANGAN PERNAH masuk image
+.env
+.env.*
+!.env.example
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# pytest / coverage / ruff
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Docs & non-runtime files (tak dibutuhkan di image produksi)
+docs/
+README.md
+CHANGELOG.md
+CLAUDE.md
+TODO.md
+*.md
+flow/

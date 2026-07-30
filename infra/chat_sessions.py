@@ -50,16 +50,23 @@ class ChatSessionStore:
         # jalan tanpa perubahan (default 'default', konsisten dengan skema).
         self.tenant_id = tenant_id
 
-    async def ensure_created(self, session_id: str, role: str) -> None:
+    async def ensure_created(
+        self, session_id: str, role: str, owner_user_id: str | None = None
+    ) -> None:
         """Daftarkan sesi baru bila belum ada — idempoten (INSERT OR IGNORE).
 
         Dipanggil di awal `/chat/stream` SEBELUM turn jalan, agar sesi muncul di
         sidebar bahkan jika turn pertama gagal/timeout (user tetap lihat sesi
         "kosong" alih-alih hilang total).
-        """
+
+        `owner_user_id` (audit produksi 2026-07-29): identitas user pembuat
+        sesi — dipakai `list_active`/`get_owner` untuk isolasi per-user
+        (beda dari `tenant_id` yang mengisolasi per-TIM). None bila auth
+        nonaktif (tak ada konsep user)."""
         await self.db.execute(
-            "INSERT OR IGNORE INTO chat_sessions (session_id, role, tenant_id) VALUES (?, ?, ?)",
-            (session_id, role, self.tenant_id),
+            "INSERT OR IGNORE INTO chat_sessions (session_id, role, tenant_id, owner_user_id) "
+            "VALUES (?, ?, ?, ?)",
+            (session_id, role, self.tenant_id, owner_user_id),
         )
 
     async def touch(self, session_id: str) -> None:
@@ -84,17 +91,39 @@ class ChatSessionStore:
         )
         return bool(row and row["title"])
 
-    async def list_active(self, limit: int = 200) -> list[dict]:
+    async def list_active(self, limit: int = 200, owner_user_id: str | None = None) -> list[dict]:
         """Sesi belum dihapus MILIK TENANT INI, terbaru dulu — mentah untuk sidebar
         mengelompokkan sendiri (per-waktu DAN per-role, § user request keduanya).
-        Isolasi tenant: sesi tenant lain tak pernah muncul di sidebar ini."""
-        rows = await self.db.fetchall(
-            """SELECT session_id, role, title, created_at, updated_at
-               FROM chat_sessions WHERE deleted_at IS NULL AND tenant_id=?
-               ORDER BY updated_at DESC LIMIT ?""",
-            (self.tenant_id, limit),
-        )
+        Isolasi tenant: sesi tenant lain tak pernah muncul di sidebar ini.
+
+        `owner_user_id` (audit produksi 2026-07-29): bila diisi, HANYA sesi
+        milik user ini ATAU sesi tanpa owner tercatat (`NULL` — dibuat sebelum
+        fitur ini ada, atau saat auth nonaktif) yang dikembalikan. None
+        (default, dipakai admin/auth nonaktif) = tanpa filter kepemilikan."""
+        if owner_user_id is None:
+            rows = await self.db.fetchall(
+                """SELECT session_id, role, title, created_at, updated_at
+                   FROM chat_sessions WHERE deleted_at IS NULL AND tenant_id=?
+                   ORDER BY updated_at DESC LIMIT ?""",
+                (self.tenant_id, limit),
+            )
+        else:
+            rows = await self.db.fetchall(
+                """SELECT session_id, role, title, created_at, updated_at
+                   FROM chat_sessions WHERE deleted_at IS NULL AND tenant_id=?
+                   AND (owner_user_id IS NULL OR owner_user_id=?)
+                   ORDER BY updated_at DESC LIMIT ?""",
+                (self.tenant_id, owner_user_id, limit),
+            )
         return [dict(r) for r in rows]
+
+    async def get_owner(self, session_id: str) -> str | None:
+        """`owner_user_id` sesi ini, atau None bila sesi tak ada / tak punya owner
+        tercatat — dipakai web/main.py cek kepemilikan sebelum GET turns/DELETE."""
+        row = await self.db.fetchone(
+            "SELECT owner_user_id FROM chat_sessions WHERE session_id=?", (session_id,)
+        )
+        return row["owner_user_id"] if row else None
 
     async def soft_delete(self, session_id: str) -> None:
         """Hapus dari sidebar (soft — metadata tetap ada untuk audit trail lama),

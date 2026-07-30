@@ -16,6 +16,14 @@ class PendingApproval:
     session_id: str
     tool_name: str
     tool_input: dict
+    # Audit produksi 2026-07-29: SEBELUMNYA tak ada kepemilikan sama sekali —
+    # user manapun yang login (termasuk role rendah) bisa lihat & approve/reject
+    # approval milik user lain via GET /approvals (tanpa session_id) + POST
+    # /approve (approval_id apa pun, tanpa cek kepemilikan). None = tak ada
+    # owner tercatat (auth nonaktif, atau caller tak menyertakan) — tetap
+    # terlihat semua (graceful, bukan fail-closed total untuk kasus ini),
+    # enforcement ownership sungguhan ada di web/main.py (lapisan endpoint).
+    owner_user_id: str | None = None
     future: asyncio.Future = field(default_factory=lambda: asyncio.get_event_loop().create_future())
 
 
@@ -41,17 +49,24 @@ class ApprovalGate:
         tool_name: str,
         tool_input: dict,
         approval_id: str | None = None,
+        owner_user_id: str | None = None,
     ) -> bool:
         """`approval_id` opsional — caller (AgentLoop) bisa pre-generate & emit ke UI
         SEBELUM memanggil ini, agar user tahu ID-nya sementara request() masih menunggu
         (§ chat approval UI). Default None → generate seperti sebelumnya (tak ada
-        perubahan perilaku untuk caller lama)."""
+        perubahan perilaku untuk caller lama).
+
+        `owner_user_id` (audit produksi 2026-07-29): identitas user yang memicu
+        approval ini, dipakai web/main.py untuk menggerbangi GET /approvals dan
+        POST /approve agar user lain tak bisa lihat/putuskan approval ini.
+        None (default) bila auth nonaktif atau caller tak menyertakan."""
         approval_id = approval_id or uuid.uuid4().hex
         pending = PendingApproval(
             approval_id=approval_id,
             session_id=session_id,
             tool_name=tool_name,
             tool_input=tool_input,
+            owner_user_id=owner_user_id,
         )
         self._pending[approval_id] = pending
 
@@ -61,9 +76,10 @@ class ApprovalGate:
         # TODO.md Prioritas 2) — GET /approval/{approval_id} bisa melacak satu
         # approval lintas status pending→approved/rejected/timeout.
         await self.db.execute(
-            """INSERT INTO approval_log (session_id, tool_name, tool_input, decision, approval_id)
-               VALUES (?,?,?,?,?)""",
-            (session_id, tool_name, json.dumps(tool_input), "pending", approval_id),
+            """INSERT INTO approval_log
+               (session_id, tool_name, tool_input, decision, approval_id, owner_user_id)
+               VALUES (?,?,?,?,?,?)""",
+            (session_id, tool_name, json.dumps(tool_input), "pending", approval_id, owner_user_id),
         )
 
         try:
@@ -132,6 +148,11 @@ class ApprovalGate:
         """
         Dipanggil dari Web UI saat user klik approve/reject.
         Return True jika approval_id valid dan berhasil di-resolve.
+
+        Cek kepemilikan TIDAK dilakukan di sini secara sengaja — dilakukan
+        caller (web/main.py, via `find_pending`) SEBELUM memanggil ini, sama
+        pola dengan `_require_role` yang digerbangi di lapisan endpoint,
+        bukan di service layer. `resolve()` tetap mekanisme murni.
         """
         pending = self._pending.get(approval_id)
         if pending and not pending.future.done():
@@ -139,8 +160,21 @@ class ApprovalGate:
             return True
         return False
 
-    def pending_list(self, session_id: str | None = None) -> list[dict]:
-        """Daftar approval yang masih menunggu — untuk ditampilkan di Web UI."""
+    def find_pending(self, approval_id: str) -> PendingApproval | None:
+        """Cari satu pending approval by ID — dipakai web/main.py untuk cek
+        kepemilikan (`owner_user_id`) SEBELUM memanggil `resolve()`."""
+        return self._pending.get(approval_id)
+
+    def pending_list(
+        self, session_id: str | None = None, owner_user_id: str | None = None
+    ) -> list[dict]:
+        """Daftar approval yang masih menunggu — untuk ditampilkan di Web UI.
+
+        `owner_user_id` (audit produksi 2026-07-29): bila diisi, hanya
+        kembalikan approval milik user ini ATAU approval tanpa owner tercatat
+        (`None` — dibuat saat auth nonaktif, tetap terlihat semua secara
+        graceful). None (default, dipakai admin/auth nonaktif) = tanpa filter
+        kepemilikan sama sekali."""
         return [
             {
                 "approval_id": p.approval_id,
@@ -149,5 +183,8 @@ class ApprovalGate:
                 "tool_input": p.tool_input,
             }
             for p in self._pending.values()
-            if session_id is None or p.session_id == session_id
+            if (session_id is None or p.session_id == session_id)
+            and (
+                owner_user_id is None or p.owner_user_id is None or p.owner_user_id == owner_user_id
+            )
         ]

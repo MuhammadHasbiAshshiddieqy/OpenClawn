@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 import os
 import uuid
@@ -361,7 +362,9 @@ async def auth_and_csrf_middleware(request: Request, call_next):
                 form_csrf = form.get("csrf_token")
             except Exception:  # noqa: BLE001 — body bukan form (mis. JSON) → tolak
                 pass
-            if not cookie_csrf or not form_csrf or form_csrf != cookie_csrf:
+            # hmac.compare_digest (bukan `!=`) — audit produksi 2026-07-29,
+            # konsisten dengan verify_login_token yang sudah timing-safe.
+            if not cookie_csrf or not form_csrf or not hmac.compare_digest(form_csrf, cookie_csrf):
                 return JSONResponse({"ok": False, "error": "csrf_failed"}, status_code=403)
 
     # Rate limit endpoint LLM per sesi otentikasi (bukan per app session_id, agar
@@ -434,6 +437,43 @@ def _require_role(request: Request, minimum: str) -> None:
     user = getattr(request.state, "user", None)
     if user is None or not role_at_least(user.access_role, minimum):
         raise StarletteHTTPException(status_code=403, detail="insufficient_role")
+
+
+_UNAUTHENTICATED_OWNER = "__unauthenticated__"  # tak pernah cocok owner_user_id manapun
+
+
+def _session_owner_filter(request: Request) -> str | None:
+    """Audit produksi 2026-07-29: chat_sessions & pending approvals SEBELUMNYA
+    tak punya isolasi per-user sama sekali (hanya per-tenant) — user manapun
+    yang login (termasuk role rendah) bisa baca/hapus chat user lain, atau
+    lihat/putuskan approval milik user lain (melumpuhkan gate HITL §1).
+
+    Return None → tanpa filter kepemilikan (admin, atau auth nonaktif — tak
+    ada konsep user, perilaku lama utuh). Return str(user.id) → filter ke
+    resource milik user ini saja (member/viewer). Auth aktif tapi user None
+    (sesi tak dikenal, harusnya tak sampai sini) → sentinel yang tak pernah
+    cocok dengan owner_user_id manapun, fail-safe ke "hanya lihat yang tanpa
+    owner tercatat" (bukan diam-diam lihat semua)."""
+    if not CONFIG.auth_active:
+        return None
+    user = getattr(request.state, "user", None)
+    if user is None:
+        return _UNAUTHENTICATED_OWNER
+    if role_at_least(user.access_role, "admin"):
+        return None
+    return str(user.id)
+
+
+def _can_access_owned_resource(request: Request, owner_user_id: str | None) -> bool:
+    """True bila request ini boleh akses satu resource (sesi chat/approval)
+    dengan `owner_user_id` tertentu — dipakai endpoint by-ID (turns, delete,
+    approve) yang tak bisa cukup dengan filter list SQL biasa."""
+    filt = _session_owner_filter(request)
+    if filt is None:
+        return True  # admin atau auth nonaktif
+    if owner_user_id is None:
+        return True  # resource tanpa owner tercatat — graceful, tetap terlihat
+    return filt == owner_user_id
 
 
 def _issue_session_cookies(resp: RedirectResponse, user_id: int) -> None:
@@ -669,10 +709,18 @@ async def chat_stream(request: Request):
     # default, harus dipilih sadar tiap pengiriman. "true"/"1" dari checkbox HTML.
     trust_mode = (form.get("trust_mode") or "").strip().lower() in ("true", "1", "on")
 
+    # Audit produksi 2026-07-29: identitas user pembuat sesi ini, dicatat ke
+    # chat_sessions.owner_user_id + AgentConfig.user_id (kolom ini sudah ada
+    # sejak awal untuk audit trail, tapi tak pernah diisi dari sini) — dipakai
+    # menggerbangi akses chat/approval per-user (lihat _session_owner_filter).
+    _current_user = getattr(request.state, "user", None)
+    owner_user_id = str(_current_user.id) if _current_user else None
+
     agent = AgentLoop(
         AgentConfig(
             role=role,
             session_id=session_id,
+            user_id=owner_user_id or "default",
             workspace_override=workdir,
             trust_mode=trust_mode,
         ),
@@ -689,7 +737,7 @@ async def chat_stream(request: Request):
         # Sidebar riwayat chat (§ user report): daftarkan sesi SEBELUM turn jalan,
         # agar muncul di sidebar walau turn pertama gagal/timeout (idempoten —
         # INSERT OR IGNORE, tak menimpa title/waktu sesi yang sudah ada).
-        await ChatSessionStore(db).ensure_created(session_id, role)
+        await ChatSessionStore(db).ensure_created(session_id, role, owner_user_id=owner_user_id)
         # Protokol SSE bernama: frontend membedakan `token` (isi jawaban) dari
         # `status` (proses berjalan: routing/thinking/tool/fallback) agar user
         # tahu agent sedang apa. `error`/`done` menandai akhir stream.
@@ -763,7 +811,7 @@ def _time_bucket(updated_at: str, now: datetime) -> str:
 
 
 @app.get("/chat-sessions")
-async def list_chat_sessions():
+async def list_chat_sessions(request: Request):
     """Daftar riwayat chat untuk sidebar (§ user report: chat selalu ke-reset,
     tak ada cara membuka chat baru/lanjutkan/hapus riwayat).
 
@@ -771,8 +819,12 @@ async def list_chat_sessions():
     terbaru dulu dari `list_active`) DAN role (dikembalikan mentah per item;
     frontend yang merender sub-grouping, lebih fleksibel untuk UI daripada
     nested grouping di sini).
+
+    Audit produksi 2026-07-29: HANYA sesi milik user ini (atau tanpa owner
+    tercatat) yang dikembalikan — SEBELUMNYA seluruh tenant terlihat oleh
+    siapa pun yang login. Admin (atau auth nonaktif) tetap lihat semua.
     """
-    sessions = await ChatSessionStore(db).list_active()
+    sessions = await ChatSessionStore(db).list_active(owner_user_id=_session_owner_filter(request))
     now = datetime.now(UTC)
     for s in sessions:
         s["bucket"] = _time_bucket(s["updated_at"], now)
@@ -784,19 +836,33 @@ async def list_chat_sessions():
 
 
 @app.get("/chat-sessions/{session_id}/turns")
-async def get_chat_session_turns(session_id: str):
+async def get_chat_session_turns(request: Request, session_id: str):
     """Transkrip penuh satu sesi — dipakai UI untuk "lanjutkan" chat dari riwayat
-    (render ulang bubble user/assistant sebelum menerima pesan baru)."""
+    (render ulang bubble user/assistant sebelum menerima pesan baru).
+
+    Audit produksi 2026-07-29: cek kepemilikan SEBELUM mengembalikan transkrip
+    — SEBELUMNYA user manapun bisa baca transkrip sesi siapa pun (IDOR).
+    """
+    owner = await ChatSessionStore(db).get_owner(session_id)
+    if not _can_access_owned_resource(request, owner):
+        raise StarletteHTTPException(status_code=403, detail="forbidden")
     turns = await MemoryManager(role="", session_id=session_id, db=db).load_turns(limit=500)
     return {"session_id": session_id, "turns": turns}
 
 
 @app.delete("/chat-sessions/{session_id}")
-async def delete_chat_session(session_id: str):
+async def delete_chat_session(request: Request, session_id: str):
     """Hapus riwayat chat (§ user request). Soft-delete metadata sidebar, tapi
     transkrip (`session_turns`) & folder aktif (`session_workspace`) dihapus
     FISIK — user minta "hapus", isi percakapan harus benar hilang, bukan cuma
-    disembunyikan (lihat `ChatSessionStore.soft_delete`)."""
+    disembunyikan (lihat `ChatSessionStore.soft_delete`).
+
+    Audit produksi 2026-07-29: cek kepemilikan SEBELUM menghapus — SEBELUMNYA
+    user manapun bisa hapus riwayat chat siapa pun (IDOR).
+    """
+    owner = await ChatSessionStore(db).get_owner(session_id)
+    if not _can_access_owned_resource(request, owner):
+        raise StarletteHTTPException(status_code=403, detail="forbidden")
     await ChatSessionStore(db).soft_delete(session_id)
     return {"ok": True}
 
@@ -979,9 +1045,16 @@ async def converse_stop(request: Request):
 
 
 @app.get("/approvals")
-async def approvals(session_id: str | None = None):
-    """Daftar approval yang menunggu keputusan — dipakai Web UI untuk polling HITL."""
-    return {"pending": approval_gate.pending_list(session_id)}
+async def approvals(request: Request, session_id: str | None = None):
+    """Daftar approval yang menunggu keputusan — dipakai Web UI untuk polling HITL.
+
+    Audit produksi 2026-07-29: HANYA approval milik user ini (atau tanpa owner
+    tercatat) yang dikembalikan — SEBELUMNYA memanggil ini tanpa `session_id`
+    mengembalikan approval SEMUA user, termasuk tool_input mentah (path/
+    command/code) milik user lain. Admin (atau auth nonaktif) tetap lihat semua.
+    """
+    owner_filter = _session_owner_filter(request)
+    return {"pending": approval_gate.pending_list(session_id, owner_user_id=owner_filter)}
 
 
 @app.get("/workdir/check")
@@ -1003,12 +1076,21 @@ async def workdir_check(path: str = ""):
 
 @app.post("/approve")
 async def approve(request: Request):
-    """User menekan approve/reject di Web UI → resolve Future approval."""
+    """User menekan approve/reject di Web UI → resolve Future approval.
+
+    Audit produksi 2026-07-29: cek kepemilikan SEBELUM resolve — SEBELUMNYA
+    approval_id APA PUN bisa di-approve/reject user manapun (hijack lintas-user,
+    melumpuhkan gate HITL §1)."""
     form = await request.form()
     approval_id = (form.get("approval_id") or "").strip()
     decision = (form.get("decision") or "").strip().lower()
     if not approval_id or decision not in ("approve", "reject"):
         return {"ok": False, "error": "approval_id dan decision (approve|reject) wajib"}
+
+    pending = approval_gate.find_pending(approval_id)
+    owner = pending.owner_user_id if pending else None
+    if not _can_access_owned_resource(request, owner):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
     resolved = approval_gate.resolve(approval_id, decision == "approve")
     return {"ok": resolved, "approval_id": approval_id, "decision": decision}
@@ -1113,6 +1195,10 @@ async def calibration_apply(request: Request):
     Loop tertutup #1: ini satu-satunya jalur yang mengubah perilaku router dari data.
     Tetap dipicu manusia (bukan auto-apply, §8). delta dibatasi {-1,0,+1} per klik.
     """
+    # Audit produksi 2026-07-29: mengubah offset router adalah system config
+    # (sama semangat /router), sebelumnya tak digate sama sekali — role apa pun
+    # yang login bisa geser perilaku router untuk semua user.
+    _require_role(request, "admin")
     form = await request.form()
     try:
         delta = int(form.get("delta") or 0)
@@ -1130,6 +1216,7 @@ async def calibration_apply(request: Request):
 @app.post("/calibration/revert")
 async def calibration_revert(request: Request):
     """Batalkan kalibrasi aktif terakhir, kembalikan offset ke state sebelumnya."""
+    _require_role(request, "admin")
     result = await CalibrationStore(db).revert()
     log.info("calibration_reverted", **result)
     return RedirectResponse(url="/metrics", status_code=303)
@@ -1243,6 +1330,10 @@ async def skills_set_visibility(request: Request):
     asalnya sudah lintas-role, endpoint ini hanya untuk toggle sadar skill
     LOKAL milik satu role (private↔shared).
     """
+    # Audit produksi 2026-07-29: expose skill ke SEMUA role adalah perubahan
+    # cross-role, sebelumnya tak digate — role apa pun bisa membuat skill privat
+    # milik role lain terlihat lintas-role.
+    _require_role(request, "admin")
     form = await request.form()
     try:
         skill_id = int(form.get("skill_id") or 0)
@@ -1426,6 +1517,10 @@ async def autopilots_page(request: Request):
 @app.post("/autopilots")
 async def autopilots_create(request: Request):
     """Buat autopilot baru. interval_unit (menit/jam/hari) → detik."""
+    # Audit produksi 2026-07-29: membuat tugas terjadwal otomatis adalah system
+    # config (konsisten /autopilots/delete yang sudah digate), sebelumnya tak
+    # digate sama sekali.
+    _require_role(request, "admin")
     form = await request.form()
     name = (form.get("name") or "").strip()
     role = (form.get("role") or "").strip()
@@ -1448,6 +1543,7 @@ async def autopilots_create(request: Request):
 @app.post("/autopilots/toggle")
 async def autopilots_toggle(request: Request):
     """Aktif/jeda autopilot."""
+    _require_role(request, "admin")
     form = await request.form()
     try:
         ap_id = int(form.get("autopilot_id") or 0)

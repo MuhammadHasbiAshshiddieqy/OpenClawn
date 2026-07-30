@@ -100,17 +100,26 @@ function renderMarkdown(raw) {
 }
 
 // Label status manusiawi dari event backend.
+//
+// Audit produksi 2026-07-29: `detail` bisa berisi preview parameter tool
+// mentah (mis. path/command/code dari _format_tool_params di agent_loop.py,
+// atau nama tool dari server MCP eksternal yang tak terpercaya) — SEBELUMNYA
+// disuntik langsung ke innerHTML tanpa escape untuk kasus 'tool'/'tool_trusted'/
+// 'approval'/'routing'/'fallback'/'loop_stopped' (hanya 'question' yang aman).
+// `detail` di sini SELALU teks label, tak pernah butuh HTML mentah — escape
+// dulu sebelum disisipkan ke template mana pun.
 function statusLabel(text, detail) {
+    const safeDetail = escapeHtml(detail || '');
     switch (text) {
-        case 'routing':      return '<span class="status-tag route">' + T.statusRoute + '</span> ' + fillT(T.statusRouting, detail);
+        case 'routing':      return '<span class="status-tag route">' + T.statusRoute + '</span> ' + fillT(T.statusRouting, safeDetail);
         case 'thinking':     return '<span class="status-tag think">' + T.statusThink + '</span> ' + T.statusThinking;
-        case 'tool':         return '<span class="status-tag tool">' + T.statusTool + '</span> ' + detail;
-        case 'tool_trusted': return '<span class="status-tag trusted">' + T.statusTrusted + '</span> ' + detail;
-        case 'approval':     return '<span class="status-tag approval">' + T.statusApproval + '</span> ' + detail;
-        case 'question':     return '<span class="status-tag ask">' + T.statusAsk + '</span> ' + escapeHtml(detail);
-        case 'fallback':     return '<span class="status-tag fall">' + T.statusFall + '</span> ' + fillT(T.statusFallbackTo, detail);
-        case 'loop_stopped': return '<span class="status-tag stop">' + T.statusStop + '</span> ' + fillT(T.statusLoopStopped, detail);
-        default:             return '<span class="status-tag">' + T.statusInfo + '</span> ' + (detail ? text + ' ' + detail : text);
+        case 'tool':         return '<span class="status-tag tool">' + T.statusTool + '</span> ' + safeDetail;
+        case 'tool_trusted': return '<span class="status-tag trusted">' + T.statusTrusted + '</span> ' + safeDetail;
+        case 'approval':     return '<span class="status-tag approval">' + T.statusApproval + '</span> ' + safeDetail;
+        case 'question':     return '<span class="status-tag ask">' + T.statusAsk + '</span> ' + safeDetail;
+        case 'fallback':     return '<span class="status-tag fall">' + T.statusFall + '</span> ' + fillT(T.statusFallbackTo, safeDetail);
+        case 'loop_stopped': return '<span class="status-tag stop">' + T.statusStop + '</span> ' + fillT(T.statusLoopStopped, safeDetail);
+        default:             return '<span class="status-tag">' + T.statusInfo + '</span> ' + (detail ? escapeHtml(text) + ' ' + safeDetail : escapeHtml(text));
     }
 }
 

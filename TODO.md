@@ -267,6 +267,243 @@ OpenCLAWN saat ini murni tertutup di dalam prosesnya sendiri.
 
 ---
 
+## 5. Audit susulan ops/tests/docs (2026-07-29)
+
+Audit paralel dari 2026-07-27 (§2) sempat menjalankan 4 sub-audit sekaligus;
+satu (ops/tests/docs) terputus sebelum selesai (interrupted oleh permintaan
+user berikutnya) dan hasilnya tak pernah tertangkap. Dijalankan ulang penuh
+hari ini sebagai kelanjutan, bukan pengulangan — semua temuan di bawah
+DIVERIFIKASI manual sebelum ditindaklanjuti (satu temuan awal ternyata false
+positive, lihat poin 3).
+
+**Diperbaiki:**
+1. **`.env.example` tidak lengkap** — 7 env var yang genuinely dipakai kode
+   produksi (`GEMINI_BASE`, `OPENCLAWN_WORKSPACE`, `OPENCLAWN_SESSION_SECRET`,
+   `OPENCLAWN_OIDC_ISSUER/CLIENT_ID/CLIENT_SECRET/REDIRECT_BASE`) sama sekali
+   tak terdokumentasi — operator deploy baru tak akan tahu knob ini ada tanpa
+   baca source. Ditambahkan, dicross-check lengkap terhadap SEMUA
+   `os.environ.get(...)` di codebase (bukan cuma daftar dari audit awal).
+2. **Tak ada `.dockerignore`** — `Dockerfile.role` pakai `COPY . .` mentah;
+   `.env` (credential) dan `data/` (SQLite DB) bisa ikut ter-bake ke image
+   layer kalau ada saat build. Dibuat, DIVERIFIKASI via `docker build` +
+   `docker run` sungguhan: `.env`/`docs/`/`README.md` tak lagi ada di image,
+   file yang dibutuhkan runtime (`core/`, `migrations/`) tetap ada, `import
+   web.main` tetap sukses.
+3. **`docker-compose.yml` tanpa resource limit** — satu container
+   nakal/bocor memori bisa habiskan seluruh host. Ditambahkan
+   `deploy.resources.limits` (2 CPU / 2GB, dihormati `docker compose` V2
+   tanpa perlu Swarm — diverifikasi via `docker compose config`).
+4. **`docs/core.md` stale** — `_stream_one` masih didokumentasikan
+   "dengan `@retry`" (deskripsi lama, sebelum fix minggu ini) dan
+   `get_shared_http_client`/`close_shared_http_client` (fix minggu ini juga)
+   sama sekali tak disebut. Diupdate.
+
+**Ditemukan tapi SENGAJA TIDAK diperbaiki (butuh keputusan/tak bisa
+diverifikasi dari sini):**
+- **`Dockerfile.role` jalan sebagai root** (tak ada `USER` seperti
+  `Dockerfile.sandbox` yang sudah `USER nobody`). Diuji coba tambah `USER
+  nobody` tapi TIDAK diterapkan — bind-mount `./data:/app/data` di
+  `docker-compose.yml` berarti permission bergantung UID pemilik direktori
+  host, yang bisa beda hasil antara Docker Desktop macOS (di mana ini
+  diuji, dan kebetulan tetap bisa nulis) vs VPS Linux sungguhan (kemungkinan
+  besar TIDAK bisa nulis bila direktori auto-dibuat root:root oleh Docker
+  daemon saat container start pertama kali) — tak bisa diverifikasi
+  sungguhan dari sandbox ini. Menerapkan buta berisiko mematahkan
+  `data/openclawn.db` di deployment self-host yang sudah jalan. Butuh
+  salah satu: entrypoint script yang `chown` lalu drop privilege
+  (pola `gosu`/`su-exec`), atau instruksi operator eksplisit
+  (`chown -R 65534:65534 ./data` sebelum `docker compose up` pertama kali),
+  didesain & diuji di environment Linux nyata, bukan diasumsikan dari sini.
+
+**False positive yang dikoreksi sendiri:** audit awal mengklaim `tenant_id`
+hilang dari `CREATE TABLE routing_events`/`approval_log` di
+`migrations/001_initial.sql` (analog bug `dim_has_code_signal` yang
+diperbaiki minggu ini). Sebelum menerapkan fix, dicek `migrations/002_multi_tenant.sql`
+(file yang sama sekali belum dibaca audit awal) — ternyata ini KEPUTUSAN
+ARSITEKTUR YANG DIDOKUMENTASIKAN EKSPLISIT: kolom ini SENGAJA hanya lewat
+`_ADDED_COLUMNS` untuk kedua tabel ini, bukan statis di `CREATE TABLE`. Beda
+dari `dim_has_code_signal` (yang benar-benar bug): tak ada satu pun kode yang
+mereferensikan `tenant_id` secara eksplisit di INSERT/SELECT untuk
+`routing_events`/`approval_log`, jadi kolom yang hilang di DB fresh-test
+tak pernah memicu `sqlite3.OperationalError` — genuinely harmless, bukan
+cuma "belum ketahuan". Fix sempat diterapkan lalu di-revert setelah
+verifikasi ini (lihat `git diff migrations/001_initial.sql` — kosong,
+tak ada perubahan bersih ke file ini sesi ini).
+
+Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **811
+passed**, ruff check/format bersih, `uv.lock` tak tersentuh (tak ada
+dependency baru di putaran ini).
+
+---
+
+## 6. Audit lapisan web/ — keamanan (2026-07-29)
+
+Area yang belum pernah di-audit khusus minggu ini (security/sandbox,
+reliability/LLM, 4 inovasi inti, dan ops/docs sudah — lihat §2 dan §5).
+Semua temuan di bawah DIVERIFIKASI langsung baca kode (bukan cuma laporan
+sub-agent) sebelum ditindaklanjuti.
+
+**Diperbaiki (bug jelas, tak ambigu):**
+1. **XSS via preview parameter tool** (`web/static/chat.js::statusLabel`) —
+   `detail` (bisa berisi path/command/code mentah dari
+   `agent_loop.py::_format_tool_params`, atau nama tool dari server MCP
+   eksternal yang tak terpercaya) disuntik ke `innerHTML` TANPA escape untuk
+   kasus `tool`/`tool_trusted`/`approval`/`routing`/`fallback`/`loop_stopped`
+   (hanya `question` yang sudah aman). Diperbaiki: escape universal via
+   `escapeHtml()` sebelum dipakai di semua cabang.
+2. **5 endpoint system-config tanpa RBAC gate**: `/calibration/apply`,
+   `/calibration/revert`, `/skills/set-visibility`, `/autopilots` (create),
+   `/autopilots/toggle` — role apa pun yang login (termasuk `viewer`) bisa
+   menggeser offset router, expose skill privat lintas-role, atau
+   membuat/toggle autopilot, padahal endpoint sejenis (`/router`,
+   `/autopilots/delete`) sudah admin-gated. Ditambahkan `_require_role(request,
+   "admin")` konsisten pola yang sudah ada. 5 test regresi baru
+   (`test_member_forbidden_from_*`, `tests/test_rbac_web.py`) — no-op saat
+   auth nonaktif (default), jadi tak mengubah perilaku deployment tanpa auth.
+3. **CSRF compare bukan timing-safe** (`web/main.py`) — `form_csrf !=
+   cookie_csrf` diganti `hmac.compare_digest(...)`, konsisten
+   `verify_login_token` yang sudah timing-safe.
+
+Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **816
+passed** (811 + 5 baru), ruff check/format bersih, `uv.lock` tak tersentuh.
+
+**Ditemukan, BUKTI KUAT, butuh keputusan produk (bukan cuma bug fix) —
+owner dikonfirmasi via percakapan, 2 dari 3 SUDAH DIPERBAIKI:**
+
+Tiga hal berikut berakar dari SATU gap arsitektur yang sama: `session_id`
+(chat) dan `approval_id` sama sekali tak terikat ke user yang login —
+hanya ke `tenant_id` (default sama untuk semua user single-tenant). RBAC
+(admin/member/viewer) sejauh ini HANYA menggerbangi endpoint config sistem;
+tak pernah menambahkan isolasi data PER-USER untuk resource yang di-scope
+per-session.
+
+- [x] **Approval hijack lintas-user** — **DIPERBAIKI (2026-07-29/30, owner
+  eksplisit konfirmasi ini harus privat per-user, bukan shared team resource)**.
+  `PendingApproval.owner_user_id` (`security/approval.py`) + kolom
+  `approval_log.owner_user_id` baru (dual-listed CREATE TABLE + `_ADDED_COLUMNS`,
+  menghindari kelas bug yang sama dengan `dim_has_code_signal` minggu lalu).
+  `ApprovalGate.request()` menerima `owner_user_id`; `pending_list()` filter
+  berdasarkan owner (None = admin/auth nonaktif = tanpa filter; approval TANPA
+  owner tercatat tetap terlihat semua — graceful, bukan menghilang tiba-tiba).
+  `find_pending()` baru untuk cek kepemilikan di endpoint SEBELUM `resolve()`.
+  `web/main.py`: `_session_owner_filter()`/`_can_access_owned_resource()`
+  helper dipakai `GET /approvals` (filter list) & `POST /approve` (403 bila
+  bukan pemilik & bukan admin). `core/agent_loop.py` meneruskan
+  `self.cfg.user_id` (field yang sudah ada tapi tak pernah diisi dari
+  `web/main.py` — sekarang diisi dari `request.state.user`) sebagai
+  `owner_user_id` ke `approval.request()`.
+- [x] **Chat history lintas-user (IDOR)** — **DIPERBAIKI**, pola sama.
+  `chat_sessions.owner_user_id` baru (dual-listed). `ChatSessionStore.ensure_created()`
+  menerima owner; `list_active(owner_user_id=...)` filter (sesi tanpa owner
+  tercatat tetap terlihat semua, graceful); `get_owner()` baru untuk cek
+  kepemilikan. `GET /chat-sessions` (filter list), `GET
+  /chat-sessions/{id}/turns` & `DELETE /chat-sessions/{id}` (403 via
+  `_can_access_owned_resource`) semua digerbangi. Admin (atau auth nonaktif)
+  tetap lihat/akses semua — oversight tak hilang.
+  15 test regresi baru: `tests/test_security.py` (5, ApprovalGate-level),
+  `tests/test_chat_sessions.py` (5, ChatSessionStore-level),
+  `tests/test_rbac_web.py` (8, end-to-end 2-user: member ditolak akses data
+  user lain, member tetap akses data sendiri, admin tetap lihat/putuskan
+  semua). Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`:
+  **833 passed**, ruff check/format bersih, `uv.lock` tak tersentuh.
+- [ ] **`GET /workspace/download`** — tak ada cek kepemilikan sesi; user
+  manapun bisa unduh file APA PUN di `workspace_root` bersama (dibatasi path
+  traversal via `resolve_in_workspace`, tapi tidak dibatasi per-sesi). BELUM
+  diperbaiki — di luar cakupan pertanyaan yang dikonfirmasi owner (spesifik
+  "chat history & pending approvals"), dan bentuk fix-nya beda (endpoint ini
+  tak punya `session_id` sama sekali di request saat ini, jadi tak ada
+  owner untuk dicocokkan tanpa desain ulang parameter endpoint lebih dulu).
+  Nice-to-have, bukan blocker seperti 2 item di atas (bukan gate HITL/privasi
+  chat, "cuma" file yang sudah ditulis agent ke workspace bersama).
+
+**Sudah solid (diverifikasi, tak perlu tindakan):** path traversal guard
+(`resolve_in_workspace`) dipakai konsisten di `/workspace/download`;
+404/500 handler tak bocorkan stack trace/path; SSE frame selalu JSON-encoded
+(tak ada frame-injection); rate limiting jalan pre-work di middleware; tak
+ada CORS middleware (DELETE/PUT tak cross-site-forgeable); `/login`
+open-redirect di `next=` sudah di-guard.
+
+**Ditemukan, should-fix, tapi butuh verifikasi lingkungan Linux nyata:**
+- Cookie sesi/CSRF/OIDC state tak pernah set `secure=True` — interceptable
+  di deployment HTTP/misconfigured. TIDAK diterapkan buta: harus kondisional
+  (hanya saat request benar-benar HTTPS), dan kalau di belakang reverse proxy
+  (Caddy, per `Caddyfile.example`) perlu proxy-header middleware
+  (`X-Forwarded-Proto`) yang belum diverifikasi terpasang — salah terap bisa
+  mematahkan login di balik reverse proxy yang app-nya sendiri menerima
+  HTTP plain dari Caddy. Sama kelas risiko dengan item `Dockerfile.role`
+  non-root di §5 — butuh diuji di topology deployment nyata.
+
+---
+
+## 7. Audit memory/, roles/, tools/ (2026-07-30)
+
+Tiga area yang belum di-audit langsung minggu ini (security/sandbox, LLM
+reliability, 4 inovasi inti, ops/docs, web/ sudah — lihat §2, §5, §6).
+
+**Diperbaiki:**
+1. **`tools/data.py::MemorySearchTool` — cross-role data leak, BLOCKER.**
+   `requires_approval=False` DAN query `SELECT * FROM {table} WHERE {col}
+   LIKE ?` sama sekali tak difilter `role` — role apa pun (pm/qa/dev/data)
+   bisa baca `memory_l1`/`memory_l2`/`skills` milik role LAIN tanpa approval,
+   termasuk skill `visibility='private'` (melanggar isolasi yang sama dijaga
+   `SkillDecayManager.get_active_skills`, TODO.md § Prioritas 6). Diperbaiki:
+   `core/agent_loop.py` menambahkan `memory_search` ke allowlist tool yang
+   diberi konteks `_role` sistem (pola sudah ada untuk
+   `todo_write`/`report_blocker`/`set_workdir`, BUKAN dari argumen LLM).
+   `MemorySearchTool` sekarang fail-closed tanpa `_role`, filter ketat
+   `role=?` untuk memory_l1/l2, dan `(role=? OR visibility IN
+   ('shared','inherited'))` untuk skills — sama pola persis
+   `get_active_skills`. 5 test regresi baru (`tests/test_tools_batch2.py`).
+2. **`tools/document.py::_write_xlsx` — formula injection, should-fix.**
+   Cell string dari konten LLM/web (bisa tak dipercaya) ditulis mentah;
+   Excel men-sniff cell yang diawali `=`/`+`/`-`/`@` sebagai formula saat
+   file dibuka, terlepas dari tipe cell di XML (CSV/XLSX formula injection,
+   OWASP) — bukan cuma risiko CSV. Diperbaiki: `_escape_formula_cell()`
+   prefix `'` untuk string yang diawali karakter pemicu; nilai non-string
+   (angka, bool) tak disentuh. Test regresi:
+   `test_doc_write_xlsx_escapes_formula_injection` (`tests/test_tools.py`).
+
+Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **838
+passed**, ruff check/format bersih, `uv.lock` tak tersentuh.
+
+**Ditemukan, BELUM diperbaiki (butuh desain lebih lanjut, bukan quick-fix):**
+- **`tools/data.py::DbQueryTool` — tak dibatasi tabel, should-fix.** Hanya
+  blokir *keyword* tulis/DDL, bukan *tabel* — `SELECT * FROM users` atau
+  `mcp_servers` (env terenkripsi, tapi tetap) tetap diizinkan; deskripsi
+  schema di tool ("Tabel: memory_l1, memory_l2, skills, routing_events,
+  role_handoffs, approval_log") aspirasional, bukan ditegakkan. Mitigasi
+  SAAT INI: `requires_approval=True` (manusia me-review SQL sebelum jalan) —
+  primary defense, bukan tanpa gate sama sekali (beda dari `memory_search`
+  yang sudah diperbaiki di atas). TIDAK diperbaiki sepihak: allowlist tabel
+  yang robust butuh SQL parser sungguhan (regex gampang di-bypass — CTE,
+  subquery ke `pragma_table_info`/`sqlite_master`, dsb — allowlist regex
+  yang bisa di-bypass LEBIH BERBAHAYA dari tanpa allowlist sama sekali,
+  karena memberi rasa aman palsu). Butuh keputusan: dependency SQL parser
+  baru (CLAUDE.md §8) atau desain ulang ke view-based access control.
+- **`memory/layers.py::MemoryManager` tak filter `tenant_id`** — BUKAN bug
+  baru, konsisten dengan scope yang SUDAH didokumentasikan eksplisit
+  (`migrations/002_multi_tenant.sql`: hanya `ChatSessionStore`/`SkillDecayManager`
+  wired penuh per-tenant sebagai bukti konsep; tabel lain dapat kolomnya
+  tapi query BELUM difilter, "follow-up terpisah"). Dicatat di sini supaya
+  tak disalahartikan sebagai gap baru oleh audit berikutnya — sama kelas
+  dengan false-positif `tenant_id` di §5 yang sempat salah diperbaiki lalu
+  di-revert.
+- **Resource exhaustion**: `tools/web.py` (`web_fetch`/`http_request`,
+  `requires_approval=False`) dan `tools/file_ops.py` (`file_read`/`read_many`)
+  membaca SELURUH body/file ke memori SEBELUM dipotong ke batas — tak ada
+  cek `Content-Length`/`stat()` size sebelum baca. URL/file multi-GB bisa
+  menghabiskan memori proses. Should-fix, belum diperbaiki (butuh desain
+  streaming-with-cap yang konsisten lintas tool, bukan tambal satu-satu).
+- **`tools/search.py::GrepTool` — ReDoS, should-fix.** `re.compile(pattern)`
+  dari argumen LLM dijalankan tanpa timeout ke semua file workspace,
+  `requires_approval=False`. Pattern catastrophic-backtracking (mis.
+  `(a+)+b`) terhadap file besar/minified bisa macetkan proses. Python `re`
+  stdlib tak punya timeout native — butuh dependency `regex` (mendukung
+  timeout) atau wrapper subprocess+timeout; belum diperbaiki (dependency
+  baru → keputusan owner, CLAUDE.md §8).
+
+---
+
 ## Sumber riset tren (dicari 2026-07-27)
 
 - [The best AI agent frameworks in 2026](https://www.langchain.com/resources/ai-agent-frameworks)

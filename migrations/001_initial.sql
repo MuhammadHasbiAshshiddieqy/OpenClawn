@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     role TEXT NOT NULL,
     title TEXT,
     tenant_id TEXT DEFAULT 'default',  -- [Multi-Tenant, TODO.md § Prioritas 5] wired penuh — lihat ChatSessionStore
+    owner_user_id TEXT,                -- [Audit produksi 2026-07-29] user yang membuat sesi ini — GET /chat-sessions* & DELETE digerbangi ini agar user lain (di tenant sama) tak bisa baca/hapus chat orang lain. NULL = tak tercatat (auth nonaktif, atau sesi dibuat sebelum fitur ini) — tetap terlihat semua secara graceful.
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP
@@ -150,6 +151,7 @@ CREATE TABLE IF NOT EXISTS approval_log (
     tool_name TEXT NOT NULL, tool_input TEXT,
     decision TEXT,                          -- pending | approved | rejected | timeout | auto:trust_mode | proposal:pending
     approval_id TEXT,                       -- [Human Approval Pipeline] kolom eksplisit — SEBELUMNYA hanya tersirat sebagai substring "pending:{id}" di decision, hilang setelah resolve. Query-able via GET /approval/{approval_id}
+    owner_user_id TEXT,                     -- [Audit produksi 2026-07-29] user yang memicu approval ini — GET /approvals & POST /approve digerbangi ini agar user lain tak bisa lihat/putuskan approval milik orang lain. NULL = tak tercatat (auth nonaktif).
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

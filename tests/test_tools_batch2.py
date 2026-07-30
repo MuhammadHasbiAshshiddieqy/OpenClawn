@@ -149,16 +149,72 @@ async def test_memory_search_finds_skill(db):
         ("dev", "deploy", "cara deploy ke produksi"),
     )
     res = await MemorySearchTool().execute(
-        {"query": "deploy", "table": "skills"}, vault=None, db=db
+        {"query": "deploy", "table": "skills", "_role": "dev"}, vault=None, db=db
     )
     assert res["count"] == 1
 
 
 async def test_memory_search_rejects_bad_table(db):
     res = await MemorySearchTool().execute(
-        {"query": "x", "table": "routing_events"}, vault=None, db=db
+        {"query": "x", "table": "routing_events", "_role": "dev"}, vault=None, db=db
     )
     assert "error" in res
+
+
+async def test_memory_search_without_role_context_fails_closed(db):
+    """Audit produksi 2026-07-30: tanpa `_role` (konteks sistem, bukan argumen
+    LLM) → tolak, JANGAN diam-diam buka semua data lintas-role."""
+    await db.execute(
+        "INSERT INTO skills (role, skill_name, skill_content) VALUES (?,?,?)",
+        ("dev", "deploy", "cara deploy ke produksi"),
+    )
+    res = await MemorySearchTool().execute(
+        {"query": "deploy", "table": "skills"}, vault=None, db=db
+    )
+    assert "error" in res
+
+
+async def test_memory_search_hides_other_roles_private_skill(db):
+    """Skill 'private' (default) milik role lain TIDAK boleh ketemu — SEBELUMNYA
+    query di sini tak difilter role sama sekali, jadi role apa pun bisa baca
+    skill privat role lain tanpa approval (melanggar isolasi visibility)."""
+    await db.execute(
+        "INSERT INTO skills (role, skill_name, skill_content, visibility) VALUES (?,?,?,?)",
+        ("security", "audit-rahasia", "temuan investigasi rahasia", "private"),
+    )
+    res = await MemorySearchTool().execute(
+        {"query": "rahasia", "table": "skills", "_role": "dev"}, vault=None, db=db
+    )
+    assert res["count"] == 0
+
+
+async def test_memory_search_shows_other_roles_shared_skill(db):
+    """Skill 'shared'/'inherited' milik role lain TETAP terlihat — isolasi
+    hanya untuk 'private', konsisten SkillDecayManager.get_active_skills."""
+    await db.execute(
+        "INSERT INTO skills (role, skill_name, skill_content, visibility) VALUES (?,?,?,?)",
+        ("qa", "checklist-rilis", "checklist sebelum rilis", "shared"),
+    )
+    res = await MemorySearchTool().execute(
+        {"query": "checklist", "table": "skills", "_role": "dev"}, vault=None, db=db
+    )
+    assert res["count"] == 1
+
+
+async def test_memory_search_l1_l2_scoped_to_own_role(db):
+    """memory_l1/l2 (tanpa konsep visibility) HARUS ketat per-role — beda role
+    tak boleh saling baca fakta/checkpoint satu sama lain."""
+    await db.execute(
+        "INSERT INTO memory_l2 (role, fact) VALUES (?,?)", ("security", "temuan sensitif A")
+    )
+    res_own = await MemorySearchTool().execute(
+        {"query": "sensitif", "table": "memory_l2", "_role": "security"}, vault=None, db=db
+    )
+    res_other = await MemorySearchTool().execute(
+        {"query": "sensitif", "table": "memory_l2", "_role": "dev"}, vault=None, db=db
+    )
+    assert res_own["count"] == 1
+    assert res_other["count"] == 0
 
 
 # ── json_query ────────────────────────────────────────────────────────────────

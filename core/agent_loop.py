@@ -768,7 +768,7 @@ class AgentLoop:
         # konteks sesi/role. Tool tak menerima ini via signature execute; model tak
         # perlu — & tak boleh — mengarang session_id/role (sumber kebenaran =
         # AgentLoop, bukan output model).
-        if name in ("todo_write", "report_blocker", "set_workdir"):
+        if name in ("todo_write", "report_blocker", "set_workdir", "memory_search"):
             input_data = {
                 **input_data,
                 "_session_id": self.cfg.session_id,
@@ -804,8 +804,15 @@ class AgentLoop:
             if bypass_approval and name not in _TRUST_MODE_EXEMPT and not policy_forces_approval:
                 approved = await self.approval.auto_approve(self.cfg.session_id, name, input_data)
             else:
+                # Audit produksi 2026-07-29: teruskan identitas user (bila ada,
+                # "default" = auth nonaktif/tak ada user login) agar web/main.py
+                # bisa menggerbangi GET /approvals & POST /approve per-user.
                 approved = await self.approval.request(
-                    self.cfg.session_id, name, input_data, approval_id=approval_id
+                    self.cfg.session_id,
+                    name,
+                    input_data,
+                    approval_id=approval_id,
+                    owner_user_id=self.cfg.user_id if self.cfg.user_id != "default" else None,
                 )
             if not approved:
                 return {"error": f"Tool '{name}' ditolak oleh user"}
