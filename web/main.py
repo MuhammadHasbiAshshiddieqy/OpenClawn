@@ -48,7 +48,12 @@ from infra.logging import log, setup_logging
 from infra.settings import KNOWN_MODELS, SettingsStore
 from infra.chat_sessions import ChatSessionStore
 from infra.users import SHARED_SECRET_SUBJECT, UserStore, role_at_least
-from infra.workspace import WorkspaceViolation, resolve_in_workspace, validate_workdir_candidate
+from infra.workspace import (
+    SessionWorkspaceStore,
+    WorkspaceViolation,
+    resolve_in_workspace,
+    validate_workdir_candidate,
+)
 from security.approval import ApprovalGate
 from security.auth import (
     SESSION_COOKIE,
@@ -390,6 +395,7 @@ async def auth_and_csrf_middleware(request: Request, call_next):
             max_age=SESSION_MAX_AGE_SEC,
             httponly=True,
             samesite="lax",
+            secure=_is_secure_request(request),
         )
 
     return response
@@ -418,6 +424,33 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 def _oidc_configured() -> bool:
     return bool(CONFIG.oidc_issuer and CONFIG.oidc_client_id and CONFIG.oidc_client_secret)
+
+
+def _is_secure_request(request: Request) -> bool:
+    """Audit produksi 2026-07-29/30: cookie sesi/CSRF/OIDC sebelumnya TAK PERNAH
+    set `secure=True`, sekalipun deployment sungguhan berjalan di HTTPS —
+    interceptable di jaringan bila browser suatu saat mengirim cookie itu lewat
+    koneksi HTTP (mis. tab lama, redirect http:// yang salah ketik).
+
+    `request.url.scheme` SELALU "http" di sini walau user sungguhan pakai HTTPS,
+    karena uvicorn (`Dockerfile.role`, tanpa `--proxy-headers`) menerima koneksi
+    dari Caddy secara plain HTTP di `localhost:8000` — Caddy sendiri yang
+    menangani TLS di depan. `Caddyfile.example` eksplisit menyebut Caddy adalah
+    SATU-SATUNYA cara yang direkomendasikan untuk expose ke internet, dan
+    `reverse_proxy` Caddy secara default menyertakan `X-Forwarded-Proto` — jadi
+    memercayai header ini aman dalam topologi yang didokumentasikan proyek ini.
+
+    Fail-safe SIMETRIS (bukan sepihak ke satu arah): salah baca header ini
+    HANYA membuat cookie ikut/tidak ikut flag Secure — browser yang menegakkan
+    aturan itu (tolak kirim cookie Secure lewat HTTP), bukan server memvalidasi
+    apa pun berdasar header ini. Salah positif (Secure padahal HTTP) → user
+    logout paksa, bukan lubang keamanan; salah negatif (tanpa Secure padahal
+    HTTPS) → sama seperti perilaku SEBELUM perbaikan ini, bukan regresi.
+    """
+    return (
+        request.url.scheme == "https"
+        or request.headers.get("x-forwarded-proto", "").lower() == "https"
+    )
 
 
 def _require_role(request: Request, minimum: str) -> None:
@@ -476,17 +509,19 @@ def _can_access_owned_resource(request: Request, owner_user_id: str | None) -> b
     return filt == owner_user_id
 
 
-def _issue_session_cookies(resp: RedirectResponse, user_id: int) -> None:
+def _issue_session_cookies(request: Request, resp: RedirectResponse, user_id: int) -> None:
     """Set cookie sesi + CSRF — dipakai KEDUA jalur login (shared-secret & OIDC),
     karena setelah verifikasi identitas berhasil, mekanisme sesi sama persis.
     `user_id` (TODO.md § Prioritas 5, RBAC) WAJIB — ditandatangani ke dalam
     token sesi agar middleware bisa memuat `request.state.user` tanpa cookie lain."""
+    secure = _is_secure_request(request)
     resp.set_cookie(
         SESSION_COOKIE,
         create_session_token(CONFIG.session_secret, user_id=user_id),
         max_age=SESSION_MAX_AGE_SEC,
         httponly=True,
         samesite="lax",
+        secure=secure,
     )
     resp.set_cookie(
         CSRF_COOKIE,
@@ -494,6 +529,7 @@ def _issue_session_cookies(resp: RedirectResponse, user_id: int) -> None:
         max_age=SESSION_MAX_AGE_SEC,
         httponly=False,  # harus terbaca JS/Jinja untuk disuntik ke form
         samesite="lax",
+        secure=secure,
     )
 
 
@@ -532,7 +568,7 @@ async def login_submit(request: Request):
     # Prioritas 5) — satu-satunya user shared-secret, admin sejak pertama login.
     user = await UserStore(db).upsert_on_login(SHARED_SECRET_SUBJECT)
     resp = RedirectResponse(url=next_url, status_code=303)
-    _issue_session_cookies(resp, user_id=user.id)
+    _issue_session_cookies(request, resp, user_id=user.id)
     return resp
 
 
@@ -567,15 +603,22 @@ async def login_oidc_start(request: Request, next: str = "/"):
     resp = RedirectResponse(url=authorize_url, status_code=303)
     # `next` disematkan ke state cookie (bukan query provider) agar tak bocor/diubah
     # via redirect provider — dibaca lagi persis di callback lewat cookie yang sama.
+    secure = _is_secure_request(request)
     resp.set_cookie(
         _OIDC_STATE_COOKIE,
         f"{state}:{next}",
         max_age=_OIDC_FLOW_MAX_AGE_SEC,
         httponly=True,
         samesite="lax",
+        secure=secure,
     )
     resp.set_cookie(
-        _OIDC_NONCE_COOKIE, nonce, max_age=_OIDC_FLOW_MAX_AGE_SEC, httponly=True, samesite="lax"
+        _OIDC_NONCE_COOKIE,
+        nonce,
+        max_age=_OIDC_FLOW_MAX_AGE_SEC,
+        httponly=True,
+        samesite="lax",
+        secure=secure,
     )
     return resp
 
@@ -615,7 +658,7 @@ async def oidc_callback(request: Request, code: str = "", state: str = ""):
     # user OIDC PERTAMA di tenant ini otomatis admin (bootstrap), berikutnya member.
     user = await UserStore(db).upsert_on_login(claims.subject, email=claims.email, name=claims.name)
     resp = RedirectResponse(url=next_url, status_code=303)
-    _issue_session_cookies(resp, user_id=user.id)
+    _issue_session_cookies(request, resp, user_id=user.id)
     resp.delete_cookie(_OIDC_STATE_COOKIE)
     resp.delete_cookie(_OIDC_NONCE_COOKIE)
     return resp
@@ -1351,17 +1394,38 @@ async def skills_set_visibility(request: Request):
 
 
 @app.get("/workspace/download")
-async def workspace_download(path: str):
+async def workspace_download(request: Request, path: str, session_id: str = ""):
     """Unduh file yang ditulis agent ke workspace (§ user request: file harus bisa diunduh).
 
-    Dibatasi ke `workspace_root` lewat guard yang sama dipakai tool file_write
+    Dibatasi ke workspace root lewat guard yang sama dipakai tool file_write
     (`resolve_in_workspace`) — tidak ada jalur tambahan untuk keluar workspace
     (path traversal, symlink) selain apa yang sudah dijaga di sana. Path tak
     ditemukan atau di luar workspace → 404 (tidak membedakan alasan ke client,
     hindari membocorkan struktur filesystem di luar workspace).
+
+    Audit produksi 2026-07-30, dua perbaikan sekaligus:
+    1. SEBELUMNYA selalu resolve ke `CONFIG.workspace_root` GLOBAL, bukan
+       workspace SESI (`SessionWorkspaceStore`, sama sumber yang dipakai
+       `AgentLoop.run()` — lihat prioritas workdir di sana) — untuk sesi yang
+       pakai folder kerja kustom (`set_workdir`/field UI), link download bisa
+       salah folder. `session_id` (opsional, chat.js selalu mengirimnya
+       sekarang) dipakai untuk resolve ke workspace sesi yang benar.
+    2. SEBELUMNYA user manapun bisa unduh file APA PUN di workspace bersama.
+       Bila `session_id` diberikan, kepemilikan dicek (pola sama chat-sessions/
+       approvals) — 403 bila bukan pemilik/admin. TANPA `session_id` (caller
+       lama/link lama) → fallback perilaku historis (workspace_root global,
+       tanpa cek kepemilikan) — backward-compat, tak ada sesi untuk dicocokkan.
     """
+    root = CONFIG.workspace_root
+    if session_id:
+        owner = await ChatSessionStore(db).get_owner(session_id)
+        if not _can_access_owned_resource(request, owner):
+            raise StarletteHTTPException(status_code=403, detail="forbidden")
+        custom_root = await SessionWorkspaceStore(db).get(session_id)
+        if custom_root:
+            root = custom_root
     try:
-        safe = resolve_in_workspace(path, CONFIG.workspace_root)
+        safe = resolve_in_workspace(path, root)
     except WorkspaceViolation:
         raise StarletteHTTPException(status_code=404, detail="File tidak ditemukan")
     if not safe.is_file():

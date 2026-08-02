@@ -7,7 +7,16 @@ RUN pip install --no-cache-dir -e ".[dev]"
 
 COPY . .
 
+# Non-root (audit produksi 2026-07-30, CLAUDE.md §1 keamanan dulu) — UID/GID
+# tetap (1000) agar operator bisa pre-chown ./data sendiri kalau mau. Drop
+# privilege sungguhan terjadi di docker-entrypoint.sh (chown bind-mount host
+# dulu, baru setpriv) — bukan `USER appuser` statis di sini, lihat komentar
+# di entrypoint untuk alasannya.
+RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser -M -s /usr/sbin/nologin appuser
+RUN chmod +x docker-entrypoint.sh
+
 # Role dikonfigurasi via env var OPENCLAWN_ROLE (pm | qa | dev)
 ENV OPENCLAWN_ROLE=pm
 
+ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["uvicorn", "web.main:app", "--host", "0.0.0.0", "--port", "8000"]

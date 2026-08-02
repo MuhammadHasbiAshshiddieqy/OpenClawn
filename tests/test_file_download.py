@@ -191,6 +191,40 @@ def test_download_directory_returns_404_not_error(client, tmp_path):
     assert resp.status_code == 404
 
 
+def test_download_without_session_id_falls_back_to_global_root(client, tmp_path):
+    """Backward-compat: caller lama/link lama tanpa session_id tetap pakai
+    workspace_root global — perilaku historis tak berubah."""
+    (tmp_path / "old-link.txt").write_text("isi lama")
+    resp = client.get("/workspace/download", params={"path": "old-link.txt"})
+    assert resp.status_code == 200
+    assert resp.text == "isi lama"
+
+
+def test_download_with_session_id_resolves_session_workspace(client, tmp_path, monkeypatch):
+    """Audit produksi 2026-07-30: session_id → resolve ke workspace SESI
+    (SessionWorkspaceStore), BUKAN lagi selalu workspace_root global — file
+    yang ditulis agent ke folder kustom sesi sekarang benar-benar ketemu."""
+    import asyncio
+
+    import web.main as web_main
+    from infra.workspace import SessionWorkspaceStore
+
+    custom_root = tmp_path / "custom-session-dir"
+    custom_root.mkdir()
+    (custom_root / "session-file.txt").write_text("isi sesi kustom")
+    # File dengan nama SAMA di root global harus TIDAK terpilih — buktikan
+    # endpoint benar-benar pindah root, bukan cuma nemu file yang sama-sama ada.
+    (tmp_path / "session-file.txt").write_text("isi root global (salah)")
+
+    asyncio.run(SessionWorkspaceStore(web_main.db).set("s-custom", str(custom_root)))
+
+    resp = client.get(
+        "/workspace/download", params={"path": "session-file.txt", "session_id": "s-custom"}
+    )
+    assert resp.status_code == 200
+    assert resp.text == "isi sesi kustom"
+
+
 # ── AgentLoop: status "approval" event (§ chat approval UI) ──────────────────
 #
 # Regresi lama: tool butuh-approval (file_write dll.) SELALU timeout karena tak

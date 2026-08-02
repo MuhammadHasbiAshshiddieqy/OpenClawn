@@ -47,6 +47,15 @@ dependencies = [
     # implementasi AES manual sendiri — library teraudit, bukan reinvent primitif
     # kripto sendiri (risiko bug keamanan jauh lebih tinggi).
     "cryptography>=42.0",
+    # GrepTool (tools/search.py) menjalankan regex dari LLM tanpa timeout,
+    # requires_approval=False — pattern catastrophic-backtracking (mis.
+    # `(a|a)+$`) bisa macetkan proses (ReDoS, audit produksi 2026-08-02).
+    # stdlib `re` tak punya timeout native, dan `asyncio.wait_for` tak bisa
+    # membatalkan regex CPU-bound yang sedang jalan. Disetujui owner eksplisit.
+    # `regex` dipilih: drop-in replacement `re` dengan parameter timeout=
+    # native (diverifikasi langsung: pattern yang membuat re.search() hang
+    # >30s diinterupsi TimeoutError tepat di batas timeout via regex module).
+    "regex>=2023.0",
 ]
 
 [project.optional-dependencies]

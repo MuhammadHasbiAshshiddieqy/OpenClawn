@@ -483,9 +483,16 @@ async function runSingle(message) {
 
 // File yang berhasil ditulis agent (file_write/file_edit/dll.) → chip download
 // persisten di kolom chat, mirip appendAction tapi dengan link nyata ke
-// GET /workspace/download (dibatasi ke workspace_root, lihat web/main.py).
+// GET /workspace/download (dibatasi ke workspace root, lihat web/main.py).
+//
+// Audit produksi 2026-07-30: session_id disertakan agar backend resolve ke
+// workspace SESI ini (bukan lagi selalu workspace_root global — salah folder
+// untuk sesi berworkdir kustom) dan bisa menggerbangi kepemilikan per-user.
+// form.session_id.value sama untuk mode single maupun conversation (keduanya
+// mengirim field form yang sama ke /chat/stream dan /converse/stream).
 function appendFileDownload(path, beforeEl) {
-    const url = '/workspace/download?path=' + encodeURIComponent(path);
+    const url = '/workspace/download?path=' + encodeURIComponent(path) +
+        '&session_id=' + encodeURIComponent(form.session_id.value);
     const html =
         '<span class="status-tag file">' + T.statusFile + '</span> ' +
         '<code>' + escapeHtml(path) + '</code> ' +

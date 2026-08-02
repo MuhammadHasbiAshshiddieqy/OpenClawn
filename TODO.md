@@ -298,22 +298,10 @@ positive, lihat poin 3).
    `get_shared_http_client`/`close_shared_http_client` (fix minggu ini juga)
    sama sekali tak disebut. Diupdate.
 
-**Ditemukan tapi SENGAJA TIDAK diperbaiki (butuh keputusan/tak bisa
-diverifikasi dari sini):**
-- **`Dockerfile.role` jalan sebagai root** (tak ada `USER` seperti
-  `Dockerfile.sandbox` yang sudah `USER nobody`). Diuji coba tambah `USER
-  nobody` tapi TIDAK diterapkan — bind-mount `./data:/app/data` di
-  `docker-compose.yml` berarti permission bergantung UID pemilik direktori
-  host, yang bisa beda hasil antara Docker Desktop macOS (di mana ini
-  diuji, dan kebetulan tetap bisa nulis) vs VPS Linux sungguhan (kemungkinan
-  besar TIDAK bisa nulis bila direktori auto-dibuat root:root oleh Docker
-  daemon saat container start pertama kali) — tak bisa diverifikasi
-  sungguhan dari sandbox ini. Menerapkan buta berisiko mematahkan
-  `data/openclawn.db` di deployment self-host yang sudah jalan. Butuh
-  salah satu: entrypoint script yang `chown` lalu drop privilege
-  (pola `gosu`/`su-exec`), atau instruksi operator eksplisit
-  (`chown -R 65534:65534 ./data` sebelum `docker compose up` pertama kali),
-  didesain & diuji di environment Linux nyata, bukan diasumsikan dari sini.
+**`Dockerfile.role` jalan sebagai root** — ~~sempat ditandai "tak bisa
+diverifikasi dari sandbox ini"~~ → **DIPERBAIKI 2026-08-02**, lihat §7 untuk
+detail lengkap (pola entrypoint chown+`setpriv`, diverifikasi Linux VM
+sungguhan via Docker Desktop, bukan diasumsikan lagi).
 
 **False positive yang dikoreksi sendiri:** audit awal mengklaim `tenant_id`
 hilang dari `CREATE TABLE routing_events`/`approval_log` di
@@ -406,15 +394,10 @@ per-session.
   user lain, member tetap akses data sendiri, admin tetap lihat/putuskan
   semua). Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`:
   **833 passed**, ruff check/format bersih, `uv.lock` tak tersentuh.
-- [ ] **`GET /workspace/download`** — tak ada cek kepemilikan sesi; user
-  manapun bisa unduh file APA PUN di `workspace_root` bersama (dibatasi path
-  traversal via `resolve_in_workspace`, tapi tidak dibatasi per-sesi). BELUM
-  diperbaiki — di luar cakupan pertanyaan yang dikonfirmasi owner (spesifik
-  "chat history & pending approvals"), dan bentuk fix-nya beda (endpoint ini
-  tak punya `session_id` sama sekali di request saat ini, jadi tak ada
-  owner untuk dicocokkan tanpa desain ulang parameter endpoint lebih dulu).
-  Nice-to-have, bukan blocker seperti 2 item di atas (bukan gate HITL/privasi
-  chat, "cuma" file yang sudah ditulis agent ke workspace bersama).
+- [x] **`GET /workspace/download`** — ~~tak ada cek kepemilikan sesi~~ →
+  **DIPERBAIKI 2026-07-30** (di luar cakupan pertanyaan awal yang dikonfirmasi
+  owner, dikerjakan belakangan setelah desain endpoint diselesaikan — lihat
+  §7 untuk detail lengkap: `session_id` opsional + fallback backward-compat).
 
 **Sudah solid (diverifikasi, tak perlu tindakan):** path traversal guard
 (`resolve_in_workspace`) dipakai konsisten di `/workspace/download`;
@@ -423,15 +406,46 @@ per-session.
 ada CORS middleware (DELETE/PUT tak cross-site-forgeable); `/login`
 open-redirect di `next=` sudah di-guard.
 
-**Ditemukan, should-fix, tapi butuh verifikasi lingkungan Linux nyata:**
-- Cookie sesi/CSRF/OIDC state tak pernah set `secure=True` — interceptable
-  di deployment HTTP/misconfigured. TIDAK diterapkan buta: harus kondisional
-  (hanya saat request benar-benar HTTPS), dan kalau di belakang reverse proxy
-  (Caddy, per `Caddyfile.example`) perlu proxy-header middleware
-  (`X-Forwarded-Proto`) yang belum diverifikasi terpasang — salah terap bisa
-  mematahkan login di balik reverse proxy yang app-nya sendiri menerima
-  HTTP plain dari Caddy. Sama kelas risiko dengan item `Dockerfile.role`
-  non-root di §5 — butuh diuji di topology deployment nyata.
+- [x] **Cookie `secure=True` — DIPERBAIKI (2026-08-02).** `Caddyfile.example`
+  eksplisit menyatakan Caddy sebagai SATU-SATUNYA topologi produksi yang
+  direkomendasikan (`reverse_proxy` Caddy secara default set
+  `X-Forwarded-Proto`), jadi memercayai header ini untuk flag Secure cookie
+  aman dalam konteks yang didokumentasikan proyek ini — bukan asumsi baru.
+  `web/main.py::_is_secure_request()` cek `request.url.scheme == "https"
+  OR X-Forwarded-Proto: https`; dipakai di kelima `set_cookie` (middleware
+  refresh, `_issue_session_cookies` — sesi+CSRF, state+nonce OIDC).
+  Fail-safe SIMETRIS: salah baca header ini cuma pengaruhi flag cookie
+  (browser yang menegakkan, bukan server validasi apa pun berdasarnya) —
+  salah positif = logout paksa, salah negatif = sama seperti sebelum
+  perbaikan (bukan regresi). Test regresi: 5 baru
+  (`test_is_secure_request_*`, `test_login_sets_secure_cookie_when_forwarded_proto_https`,
+  `test_login_no_secure_cookie_over_plain_http`) di `tests/test_auth_web.py`.
+- [x] **`Dockerfile.role` non-root — DIPERBAIKI (2026-08-02), diverifikasi
+  Linux sungguhan (bukan diasumsikan).** Pola entrypoint chown-lalu-drop-
+  privilege (`docker-entrypoint.sh`, baru) — BUKAN `USER appuser` statis
+  (yang sempat diuji coba lalu ditolak minggu lalu, lihat §5): bind-mount
+  host (`./data`) yang auto-dibuat Docker biasanya root:root, jadi chown
+  SETIAP start dulu baru drop privilege via `setpriv --reuid=appuser
+  --regid=appuser --init-groups` (util-linux, SUDAH ada di base image
+  `python:3.12-slim` — tanpa paket tambahan). `setpriv` dipilih atas `su`/
+  `sudo`: execve() langsung menggantikan proses (signal SIGTERM saat
+  `docker stop` sampai tepat ke uvicorn), bukan fork+relay yang tak selalu
+  reliable. **Diverifikasi langsung** (bukan diasumsikan dari macOS sandbox
+  seperti percobaan minggu lalu) via Linux VM Docker Desktop sungguhan:
+  simulasi bind-mount root:root (chown dari container terpisah) → tulis
+  berhasil sebagai uid 1000; `/proc/1/status` konfirmasi `uvicorn` PID 1
+  jalan sebagai uid 1000; `docker stop -t 5` selesai 0.36 detik (bukan
+  timeout 5 detik penuh, membuktikan SIGTERM sampai & graceful shutdown
+  genuinely jalan, bukan cuma asumsi) — dites dulu dengan `sleep` (gagal,
+  0.36s→5s) sebelum sadar `sleep` tanpa signal handler eksplisit adalah
+  kasus uji yang salah (kuirk kernel: signal tanpa handler eksplisit
+  diabaikan untuk PID 1 di namespace — bukan bug `setpriv`); `uvicorn`
+  punya handler SIGTERM eksplisit, jadi kasus uji yang benar. Full round-trip
+  lewat `docker compose build`+`up` juga diverifikasi: healthcheck
+  `(healthy)`, `/health` 200.
+
+Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **849
+passed**, ruff check/format bersih, `uv.lock` tak tersentuh.
 
 ---
 
@@ -466,20 +480,16 @@ reliability, 4 inovasi inti, ops/docs, web/ sudah — lihat §2, §5, §6).
 Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **838
 passed**, ruff check/format bersih, `uv.lock` tak tersentuh.
 
-**Ditemukan, BELUM diperbaiki (butuh desain lebih lanjut, bukan quick-fix):**
-- **`tools/data.py::DbQueryTool` — tak dibatasi tabel, should-fix.** Hanya
-  blokir *keyword* tulis/DDL, bukan *tabel* — `SELECT * FROM users` atau
+**Ditemukan, keputusan owner: DIBIARKAN (bukan bug yang menggantung):**
+- **`tools/data.py::DbQueryTool` — tak dibatasi tabel.** Hanya blokir
+  *keyword* tulis/DDL, bukan *tabel* — `SELECT * FROM users` atau
   `mcp_servers` (env terenkripsi, tapi tetap) tetap diizinkan; deskripsi
   schema di tool ("Tabel: memory_l1, memory_l2, skills, routing_events,
-  role_handoffs, approval_log") aspirasional, bukan ditegakkan. Mitigasi
-  SAAT INI: `requires_approval=True` (manusia me-review SQL sebelum jalan) —
-  primary defense, bukan tanpa gate sama sekali (beda dari `memory_search`
-  yang sudah diperbaiki di atas). TIDAK diperbaiki sepihak: allowlist tabel
-  yang robust butuh SQL parser sungguhan (regex gampang di-bypass — CTE,
-  subquery ke `pragma_table_info`/`sqlite_master`, dsb — allowlist regex
-  yang bisa di-bypass LEBIH BERBAHAYA dari tanpa allowlist sama sekali,
-  karena memberi rasa aman palsu). Butuh keputusan: dependency SQL parser
-  baru (CLAUDE.md §8) atau desain ulang ke view-based access control.
+  role_handoffs, approval_log") aspirasional, bukan ditegakkan. **Keputusan
+  owner (2026-08-02, ditanya eksplisit):** biarkan — `requires_approval=True`
+  (manusia me-review SQL sebelum jalan) dianggap cukup sebagai primary
+  defense. Alternatif (dependency SQL parser baru, atau redesain view-based
+  access control) SENGAJA tidak diambil — bukan lupa/belum sempat.
 - **`memory/layers.py::MemoryManager` tak filter `tenant_id`** — BUKAN bug
   baru, konsisten dengan scope yang SUDAH didokumentasikan eksplisit
   (`migrations/002_multi_tenant.sql`: hanya `ChatSessionStore`/`SkillDecayManager`
@@ -501,25 +511,49 @@ passed**, ruff check/format bersih, `uv.lock` tak tersentuh.
   (`tests/test_tools.py`) — 2 test lama (`test_web_fetch_success`,
   `test_web_fetch_http_error`) disesuaikan mock-nya dari `client.get()` ke
   `client.stream()`.
-- **`tools/search.py::GrepTool` — ReDoS, should-fix, BELUM diperbaiki.**
-  `re.compile(pattern)` dari argumen LLM dijalankan tanpa timeout ke semua
-  file workspace, `requires_approval=False`. Pattern catastrophic-backtracking
-  (mis. `(a+)+b`) terhadap file besar/minified bisa macetkan proses. Python
-  `re` stdlib tak punya timeout native, dan `asyncio.wait_for` tak bisa
-  membatalkan regex CPU-bound yang sedang jalan (butuh thread/process pool
-  sungguhan untuk benar-benar diinterupsi) — perbaikan robust butuh
-  dependency `regex` (mendukung timeout) atau wrapper subprocess+timeout;
-  keputusan dependency baru → owner (CLAUDE.md §8).
-- **`GET /workspace/download` — temuan tambahan, masih should-fix.**
-  Selain tanpa cek kepemilikan (§6), ternyata SELALU resolve ke
-  `CONFIG.workspace_root` GLOBAL (`web/main.py`), BUKAN
-  `CURRENT_WORKSPACE_ROOT` per-sesi (`infra/workspace.py`,
-  fitur "adaptive per-session working directory" yang sudah ada). Untuk
-  sesi yang memilih folder kerja kustom (`set_workdir`/field UI), endpoint
-  ini kemungkinan salah folder, bukan cuma kurang isolasi. Bentuk fix yang
-  benar butuh keputusan: endpoint perlu tahu `session_id` mana yang minta
-  (parameter baru) DAN resolve ke workspace sesi itu (via
-  `SessionWorkspaceStore`) — perubahan desain endpoint, bukan tambal kecil.
+- [x] **`tools/search.py::GrepTool` — ReDoS — DIPERBAIKI (2026-08-02),
+  owner setujui dependency baru.** `re.compile(pattern)` dari argumen LLM
+  dijalankan tanpa timeout ke semua file workspace, `requires_approval=False`
+  — pattern catastrophic-backtracking bisa macetkan proses tanpa batas.
+  Dependency `regex` ditambahkan (CLAUDE.md §7 Pengecualian sadar #5) —
+  drop-in replacement `re` dengan parameter `timeout=` native. **Diverifikasi
+  langsung sebelum memilih** (bukan diasumsikan dari dokumentasi library):
+  `re.search(r'(a|a)+$', 'a'*35+'c')` genuinely hang >30s (dibunuh manual);
+  `regex` module SENDIRI (independen dari timeout) masih rentan pattern yang
+  sama — jadi timeout tetap wajib, ganti modul saja tak cukup; dengan
+  `timeout=1.0`, pattern yang sama diinterupsi `TimeoutError` TEPAT di
+  1.0001 detik. `GrepTool` sekarang set timeout per-baris, dan pada
+  `TimeoutError` pertama menghentikan SELURUH pencarian (bukan cuma lewati
+  baris itu — pattern yang sama akan lambat lagi di baris lain). Test
+  regresi: `test_grep_redos_pattern_times_out_instead_of_hanging`
+  (`tests/test_tools_workspace.py`).
+- [x] **`GET /workspace/download` — DIPERBAIKI (2026-07-30), kedua temuan
+  sekaligus.** Endpoint sekarang terima `session_id` opsional (`chat.js`
+  selalu mengirimnya via `form.session_id.value`, sama field yang sudah
+  dikirim ke `/chat/stream`/`/converse/stream`, jadi tak butuh perubahan UI).
+  Bila diisi: (1) resolve ke workspace SESI via `SessionWorkspaceStore`
+  (sumber sama yang dipakai `AgentLoop.run()` menentukan workdir aktif) alih-
+  alih selalu `CONFIG.workspace_root` global — memperbaiki salah-folder untuk
+  sesi berworkdir kustom; (2) kepemilikan dicek via `_can_access_owned_resource`
+  (pola sama chat-sessions/approvals) — 403 bila bukan pemilik/admin. TANPA
+  `session_id` (caller/link lama) → fallback perilaku historis (workspace_root
+  global, tanpa cek kepemilikan), backward-compat penuh. Test regresi:
+  `test_download_without_session_id_falls_back_to_global_root`,
+  `test_download_with_session_id_resolves_session_workspace`
+  (`tests/test_file_download.py`);
+  `test_member_forbidden_from_downloading_other_users_session_file`,
+  `test_member_can_download_own_session_file` (`tests/test_rbac_web.py`).
+
+Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **844
+passed**, ruff check/format bersih, `uv.lock` tak tersentuh.
+
+**Status akhir §7 (2026-08-02):** dengan `GrepTool` selesai dan `DbQueryTool`
+diputuskan dibiarkan, TIDAK ADA lagi item terbuka di seksi ini — semua
+temuan memory/roles/tools sudah closed (diperbaiki ATAU keputusan owner
+eksplisit untuk dibiarkan). Diverifikasi via Docker `python:3.12-slim` +
+`uv sync --frozen`: **850 passed**, ruff check/format bersih, `uv.lock`
+diregenerate & DISIMPAN (bukan direvert) — penambahan dependency `regex`
+nyata & disetujui, bukan drift.
 
 ---
 

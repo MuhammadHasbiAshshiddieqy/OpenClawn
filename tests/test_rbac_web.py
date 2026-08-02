@@ -625,3 +625,63 @@ def test_admin_can_see_and_resolve_member_approval(client_oidc):
 
     resp = client_oidc.post("/approve", data={"approval_id": approval_id, "decision": "approve"})
     assert resp.json()["ok"] is True
+
+
+# ── Audit produksi 2026-07-30: GET /workspace/download tanpa cek kepemilikan
+# saat session_id diberikan — user manapun bisa unduh file sesi orang lain. ──
+
+
+def test_member_forbidden_from_downloading_other_users_session_file(client_oidc, tmp_path):
+    import asyncio
+
+    from infra.chat_sessions import ChatSessionStore
+
+    alice_id = asyncio.run(_bootstrap_admin_and_get_id())
+
+    import web.main as web_main
+
+    (tmp_path / "alice-secret.txt").write_text("rahasia alice")
+    asyncio.run(
+        ChatSessionStore(web_main.db).ensure_created(
+            "s-alice-file", "pm", owner_user_id=str(alice_id)
+        )
+    )
+
+    _login_via_oidc(client_oidc, "user-bob")
+    resp = client_oidc.get(
+        "/workspace/download",
+        params={"path": "alice-secret.txt", "session_id": "s-alice-file"},
+    )
+    assert resp.status_code == 403
+
+
+def test_member_can_download_own_session_file(client_oidc, tmp_path):
+    import asyncio
+
+    from infra.chat_sessions import ChatSessionStore
+    from infra.users import UserStore
+
+    asyncio.run(_bootstrap_admin_and_get_id())
+    _login_via_oidc(client_oidc, "user-bob")
+
+    import web.main as web_main
+
+    (tmp_path / "bob-file.txt").write_text("milik bob")
+
+    async def _seed_bob_session():
+        bob = await UserStore(web_main.db).get_by_subject("user-bob")
+        await ChatSessionStore(web_main.db).ensure_created(
+            "s-bob-file", "pm", owner_user_id=str(bob.id)
+        )
+
+    asyncio.run(_seed_bob_session())
+
+    # workspace test client diarahkan ke tmp_path (lihat OPENCLAWN_WORKSPACE di
+    # client_oidc), jadi tanpa custom workdir sesi, fallback ke root itu — cukup
+    # untuk membuktikan kepemilikan LOLOS (403 tak muncul), bukan salah folder.
+    resp = client_oidc.get(
+        "/workspace/download",
+        params={"path": "bob-file.txt", "session_id": "s-bob-file"},
+    )
+    assert resp.status_code == 200
+    assert resp.text == "milik bob"

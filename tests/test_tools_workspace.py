@@ -107,6 +107,24 @@ async def test_grep_invalid_regex(ws):
     assert "error" in res
 
 
+async def test_grep_redos_pattern_times_out_instead_of_hanging(ws):
+    """Audit produksi 2026-08-02 (CLAUDE.md §7 Pengecualian sadar #5): pattern
+    catastrophic-backtracking (ReDoS) tak boleh macetkan proses — harus
+    diinterupsi lewat timeout `regex` module dan mengembalikan error, bukan
+    hang tanpa batas."""
+    import time
+
+    (ws / "evil.txt").write_text("a" * 35 + "c\n")
+    start = time.monotonic()
+    res = await GrepTool().execute({"pattern": r"(a|a)+$"}, vault=None)
+    elapsed = time.monotonic() - start
+
+    assert "error" in res
+    # Timeout per baris 1.0s — total harus jauh di bawah durasi hang stdlib re
+    # (>30s, dikonfirmasi manual saat memilih dependency ini), beri margin.
+    assert elapsed < 5
+
+
 # ── file_edit ─────────────────────────────────────────────────────────────────
 
 

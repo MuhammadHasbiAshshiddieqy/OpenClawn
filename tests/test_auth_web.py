@@ -243,6 +243,93 @@ def test_idle_timeout_rejects_session_older_than_idle_window():
     assert verify_session_token(token, "test-secret-token") == (True, None)
 
 
+# ── Cookie Secure flag (audit produksi 2026-07-30) ────────────────────────────
+
+
+def _make_scope(scheme: str, headers: list[tuple[bytes, bytes]] | None = None) -> dict:
+    """Scope ASGI minimal tapi LENGKAP — Starlette `Request.url` butuh
+    `query_string`/`server`/dst untuk membangun URL dengan benar; scope
+    sebagian (tanpa field ini) diam-diam membuat `url.scheme` kosong terlepas
+    dari `scope['scheme']`, ditemukan saat menulis test ini sendiri."""
+    return {
+        "type": "http",
+        "scheme": scheme,
+        "headers": headers or [],
+        "method": "GET",
+        "path": "/",
+        "query_string": b"",
+        "server": ("testserver", 443 if scheme == "https" else 80),
+        "client": ("testclient", 12345),
+        "root_path": "",
+        "http_version": "1.1",
+    }
+
+
+def test_is_secure_request_plain_http():
+    """Request HTTP biasa (tanpa X-Forwarded-Proto) → tidak secure."""
+    from starlette.requests import Request
+
+    from web.main import _is_secure_request
+
+    assert _is_secure_request(Request(_make_scope("http"))) is False
+
+
+def test_is_secure_request_trusts_x_forwarded_proto():
+    """Audit produksi 2026-07-29/30: uvicorn (Dockerfile.role, tanpa
+    --proxy-headers) selalu lihat scheme http walau Caddy men-terminasi TLS di
+    depan (SATU-SATUNYA topologi produksi yang direkomendasikan, lihat
+    Caddyfile.example) — X-Forwarded-Proto dari reverse_proxy Caddy harus
+    dipercaya untuk flag Secure cookie."""
+    from starlette.requests import Request
+
+    from web.main import _is_secure_request
+
+    scope = _make_scope("http", headers=[(b"x-forwarded-proto", b"https")])
+    assert _is_secure_request(Request(scope)) is True
+
+
+def test_is_secure_request_true_for_direct_https():
+    """Deployment yang benar-benar HTTPS langsung di ASGI (bukan lewat proxy
+    plain-HTTP) tetap terdeteksi tanpa butuh header."""
+    from starlette.requests import Request
+
+    from web.main import _is_secure_request
+
+    assert _is_secure_request(Request(_make_scope("https"))) is True
+
+
+def test_login_sets_secure_cookie_when_forwarded_proto_https(client_auth):
+    """End-to-end: login lewat client yang mengirim X-Forwarded-Proto: https
+    (mensimulasikan koneksi asli dari Caddy) → Set-Cookie sesi punya flag Secure."""
+    resp = client_auth.post(
+        "/login",
+        data={"token": "test-secret-token", "next": "/"},
+        headers={"X-Forwarded-Proto": "https"},
+        follow_redirects=False,
+    )
+    set_cookie_headers = resp.headers.get_list("set-cookie")
+    session_cookie_header = next(
+        h for h in set_cookie_headers if h.startswith("openclawn_session=")
+    )
+    assert "Secure" in session_cookie_header
+
+
+def test_login_no_secure_cookie_over_plain_http(client_auth):
+    """Tanpa X-Forwarded-Proto (koneksi plain HTTP biasa, mis. localhost dev)
+    → Set-Cookie TIDAK punya flag Secure, konsisten perilaku sebelum perbaikan
+    ini (bukan regresi untuk dev/topologi tanpa TLS)."""
+    resp = client_auth.post(
+        "/login",
+        data={"token": "test-secret-token", "next": "/"},
+        follow_redirects=False,
+    )
+    set_cookie_headers = resp.headers.get_list("set-cookie")
+    session_cookie_header = next(
+        h for h in set_cookie_headers if h.startswith("openclawn_session=")
+    )
+    assert "Secure" not in session_cookie_header
+
+
 def test_rate_limit_blocks_after_quota_exhausted(client_no_auth):
     """Kuota RateLimiter habis → /chat/stream 429 SEBELUM mencapai handler (tak butuh LLM nyata)."""
     import web.main as web_main

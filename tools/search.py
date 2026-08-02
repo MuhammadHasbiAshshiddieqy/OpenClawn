@@ -4,7 +4,7 @@ Keduanya pure-Python & dibatasi ke workspace — tidak butuh shell, tidak menyen
 host, lebih mudah dipanggil model lokal ketimbang menyusun perintah `find`/`grep`.
 """
 
-import re
+import regex
 
 from infra.config import CONFIG
 from infra.workspace import WorkspaceViolation, resolve_in_current_workspace
@@ -14,6 +14,12 @@ MAX_GLOB_RESULTS = 200
 MAX_GREP_MATCHES = 100
 # Folder yang dilewati saat scan rekursif — hemat waktu & hindari noise.
 SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache"}
+# Audit produksi 2026-08-02 (CLAUDE.md §7 Pengecualian sadar #5): batas waktu
+# regex PER BARIS — pattern catastrophic-backtracking (ReDoS) dari argumen LLM
+# bisa macetkan proses tanpa ini. `regex` module (bukan stdlib `re`) dipakai
+# karena punya parameter timeout= native; stdlib re tak punya mekanisme untuk
+# menginterupsi regex CPU-bound yang sedang jalan sama sekali.
+GREP_LINE_TIMEOUT_SEC = 1.0
 
 
 def _iter_files(root, rel_dir):
@@ -88,8 +94,8 @@ class GrepTool(Tool):
         if not pattern:
             return {"error": "pattern (regex) wajib diisi"}
         try:
-            regex = re.compile(pattern)
-        except re.error as e:
+            compiled = regex.compile(pattern)
+        except regex.error as e:
             return {"error": f"Regex tidak valid: {e}"}
         try:
             root = resolve_in_current_workspace(".", CONFIG.workspace_root)
@@ -102,7 +108,22 @@ class GrepTool(Tool):
             try:
                 with open(p, encoding="utf-8", errors="strict") as f:
                     for lineno, line in enumerate(f, 1):
-                        if regex.search(line):
+                        try:
+                            hit = compiled.search(line, timeout=GREP_LINE_TIMEOUT_SEC)
+                        except TimeoutError:
+                            # Audit produksi 2026-08-02: pattern catastrophic-
+                            # backtracking (ReDoS) terdeteksi — hentikan SELURUH
+                            # pencarian, bukan cuma lewati baris ini (pattern yang
+                            # sama akan lambat lagi di baris berikutnya, jadi
+                            # lanjut scan tetap DoS agregat walau tiap panggilan
+                            # individual dibatasi).
+                            return {
+                                "error": (
+                                    "Regex terlalu lambat pada satu baris (kemungkinan "
+                                    "catastrophic backtracking) — pencarian dihentikan."
+                                )
+                            }
+                        if hit:
                             matches.append(
                                 {
                                     "file": str(p.relative_to(root)),
