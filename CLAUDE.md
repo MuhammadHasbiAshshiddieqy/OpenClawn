@@ -2,9 +2,11 @@
 
 > File ini adalah **panduan operasional** untuk agent coding (Claude Code / Sonnet / model lain) yang mengimplementasikan OpenCLAWN.
 >
-> **Cara pakai:** Bawa file ini + `openclawn-core-spec-v0.3.md` ke repository baru. Dua file ini cukup untuk memberi konteks penuh tanpa membawa riwayat percakapan. Baca **kedua** file sebelum menulis kode apa pun.
+> **Cara pakai:** Bawa file ini + `openclawn-core-spec-v0.4.md` ke repository baru. Dua file ini cukup untuk memberi konteks penuh tanpa membawa riwayat percakapan. Baca **kedua** file sebelum menulis kode apa pun.
 >
-> **Aturan emas:** Spec (`openclawn-core-spec-v0.3.md`) adalah *sumber kebenaran* untuk APA yang dibangun. File ini (`CLAUDE.md`) adalah sumber kebenaran untuk BAGAIMANA membangunnya — konvensi, urutan kerja, dan hal yang tidak boleh dilanggar.
+> **Aturan emas:** Spec (`openclawn-core-spec-v0.4.md`) adalah *sumber kebenaran* untuk APA yang dibangun. File ini (`CLAUDE.md`) adalah sumber kebenaran untuk BAGAIMANA membangunnya — konvensi, urutan kerja, dan hal yang tidak boleh dilanggar.
+>
+> **Catatan versi:** `openclawn-core-spec-v0.3.md` adalah blueprint greenfield asli (Sprint 0–4) — dipertahankan sebagai catatan sejarah, TIDAK lagi mencerminkan kode saat ini. `v0.4` adalah spec yang mengikat kondisi kode sekarang (v0.12.0): multi-tenant, RBAC, OIDC, Policy Engine, Event-Driven Runtime, 5 role, dll.
 
 ---
 
@@ -28,9 +30,9 @@ Empat inovasi ini bukan fitur tambahan — mereka adalah inti dari nilai proyek.
 
 Urut berdasarkan prioritas. Jika dua prinsip bertabrakan, yang lebih atas menang.
 
-1. **Keamanan dulu.** `code_run` HARUS berjalan di dalam Docker sandbox (`--network none`, `--read-only`, non-root, timeout). Tidak ada eksekusi kode di host. Tidak pernah. Lihat spec §16.
+1. **Keamanan dulu.** `code_run` HARUS berjalan di dalam Docker sandbox (`--network none`, `--read-only`, non-root, timeout). Tidak ada eksekusi kode di host. Tidak pernah. Lihat spec §12.
 2. **Credential tidak pernah masuk context/prompt.** Hanya diinjeksi saat outbound request via `Vault`. Jangan pernah log API key. Jangan pernah taruh di tabel DB.
-3. **Setiap dependency eksternal punya kegagalan yang anggun.** LLM call → retry + fallback chain. Ollama offline ≠ agent mati. Lihat spec §8.
+3. **Setiap dependency eksternal punya kegagalan yang anggun.** LLM call → retry + fallback chain. Ollama offline ≠ agent mati. Lihat spec §9.
 4. **Token-first.** Sebelum menambah apa pun ke context window, tanya: apakah ini perlu? Target < 28K token. Aktifkan prompt caching untuk bagian stabil.
 5. **Tidak ada hardcoded domain/locale.** OpenCLAWN harus netral. Tidak ada "ServisIn", tidak ada "Depok", tidak ada Bahasa Indonesia yang dipaksakan di core. Locale via field `locale`, bukan di kode.
 6. **Setiap inovasi = modul yang bisa diekstrak.** Tulis `skill_decay.py`, `audit.py`, `crystallizer.py`, `contracts.py` sedemikian rupa sehingga suatu hari bisa dijadikan paket terpisah. Jangan bocorkan ketergantungan spesifik OpenCLAWN ke dalamnya selain lewat interface yang jelas (`DatabaseManager`).
@@ -117,15 +119,15 @@ Ini fondasi semua interaksi LLM. Jangan ada modul yang call LLM langsung; semua 
 
 ## 4. Urutan kerja (jangan menyimpang)
 
-Ikuti roadmap Sprint di spec §21. Dalam setiap sprint, urutannya:
+Ikuti roadmap di spec §17. Dalam setiap unit kerja, urutannya:
 
 1. **Tulis test dulu** (atau minimal skeleton test) untuk komponen yang akan dibangun.
 2. **Implementasi** komponen.
 3. **Jalankan test** sampai hijau.
 4. **`ruff format` + `ruff check`** sampai bersih.
-5. **Verifikasi manual** via query SQLite (lihat "Verifikasi" di spec §22) jika menyentuh DB.
+5. **Verifikasi manual** via query SQLite (lihat "Verifikasi 4 inovasi + fitur inti" di spec §18) jika menyentuh DB.
 6. **Update dokumentasi** di `docs/` (lihat §11).
-7. **Centang** checklist sprint di spec.
+7. **Centang** checklist relevan di TODO.md / catat di CHANGELOG.md.
 
 Jangan menumpuk banyak komponen sekaligus tanpa test di antaranya. Satu komponen → hijau → lanjut.
 
@@ -146,7 +148,7 @@ Jangan menumpuk banyak komponen sekaligus tanpa test di antaranya. Satu komponen
 - **DB:** selalu `:memory:` untuk test. Jangan sentuh `data/openclawn.db` asli.
 - **LLM:** SELALU mock. Test tidak boleh memanggil Ollama atau Claude sungguhan. Pakai `unittest.mock.AsyncMock`.
 - **Satu file test per inovasi** minimal: `test_router.py`, `test_skill_decay.py`, `test_crystallizer.py`, `test_contracts.py`, `test_fallback.py`.
-- **Test yang wajib ada** (dari spec §20):
+- **Test yang wajib ada** (dari spec §16):
   - Router: soul upgrade_keyword menaikkan kompleksitas
   - Router: prefer_local menahan query di Ollama
   - Fallback: Ollama down → turun ke fallback
@@ -253,12 +255,15 @@ Saat melaporkan progres atau bertanya:
 Saat file ini dibawa ke repo baru, lakukan ini berurutan:
 
 1. [ ] Baca CLAUDE.md (file ini) sampai habis.
-2. [ ] Baca `openclawn-core-spec-v0.3.md` sampai habis, terutama §6 (schema), §7-18 (modul), §21 (roadmap).
+2. [ ] Baca `openclawn-core-spec-v0.4.md` sampai habis, terutama §8 (schema), §9-15 (modul), §17 (roadmap).
 3. [ ] Verifikasi environment: Python 3.12+, Docker, Ollama terpasang & jalan.
-4. [ ] Buat struktur direktori sesuai spec §5.
-5. [ ] Tulis `pyproject.toml` sesuai spec §4.
-6. [ ] Tulis `migrations/001_initial.sql` sesuai spec §6.
-7. [ ] Mulai Sprint 0: `infra/` → `llm_client.py` → `agent_loop.py` minimal → Web UI → audit dasar.
+
+> Langkah 4-7 berikut berlaku bila **membangun ulang dari nol** di repo kosong. Bila repo ini sendiri (kode sudah ada, v0.12.0) — lewati ke §17 (Roadmap) untuk lihat apa yang sudah selesai dan apa yang belum, lalu `docs/*.md` per modul yang mau disentuh.
+
+4. [ ] Buat struktur direktori sesuai spec §6.
+5. [ ] Tulis `pyproject.toml` sesuai spec §5.
+6. [ ] Tulis `migrations/001_initial.sql` sesuai spec §8.
+7. [ ] Mulai dari fondasi: `infra/` → `llm_client.py` → `agent_loop.py` minimal → Web UI → audit dasar (lihat riwayat Sprint 0-4 di spec §17).
 8. [ ] Setelah tiap komponen: test hijau + ruff bersih sebelum lanjut.
 
 Jangan lompati langkah. Fondasi yang rapuh akan meruntuhkan semua di atasnya.
@@ -316,23 +321,26 @@ Folder `docs/` berisi referensi teknis per folder modul. File ini **WAJIB di-upd
 
 ## Lampiran: Peta cepat spec → modul
 
-| Mau kerjakan | Baca spec bagian | File yang dibuat |
+Peta lengkap (termasuk RBAC, multi-tenant, Policy Engine) ada di `openclawn-core-spec-v0.4.md` § Lampiran C. Ringkasan:
+
+| Mau kerjakan | Baca spec bagian (v0.4) | File yang dibuat |
 |---|---|---|
-| Config & DB | §7 | `infra/config.py`, `infra/database.py`, `infra/logging.py` |
-| LLM + fallback | §8 | `core/llm_client.py` |
+| Config & DB | §7-8 | `infra/config.py`, `infra/database.py`, `infra/logging.py` |
+| LLM + fallback | §9 | `core/llm_client.py` |
 | Agent loop | §9 | `core/agent_loop.py` |
-| Router | §10 | `core/router.py` |
-| Audit (Inovasi 1) | §11 | `core/audit.py` |
-| Skill decay (Inovasi 2) | §12 | `memory/skill_decay.py` |
-| Crystallizer (Inovasi 3) | §13 | `core/crystallizer.py` |
-| Contracts (Inovasi 4) | §14 | `roles/contracts.py`, `roles/registry.py` |
-| Memory | §15 | `memory/layers.py`, `memory/search.py` |
-| Tools + sandbox | §16 | `tools/*.py` |
-| Security | §17 | `security/*.py` |
-| Web UI | §18 | `web/main.py`, `web/templates/*` |
-| Role config | §19 | `roles/{pm,qa,dev}/soul.toml` |
-| Test | §20 | `tests/*.py` |
+| Router | §9 | `core/router.py`, `core/router_config.py` |
+| Audit (Inovasi 1) | §9 | `core/audit.py`, `core/calibration.py` |
+| Skill decay (Inovasi 2) | §10 | `memory/skill_decay.py` |
+| Crystallizer (Inovasi 3) | §9 | `core/crystallizer.py` |
+| Contracts (Inovasi 4) | §11 | `roles/contracts.py`, `roles/registry.py` |
+| Memory | §10 | `memory/layers.py`, `memory/search.py` |
+| Tools + sandbox | §12 | `tools/*.py` |
+| Security + RBAC + Policy Engine | §13 | `security/*.py`, `infra/users.py` |
+| Multi-tenant | §14 | `infra/database.py` (migrasi) |
+| Web UI | §15 | `web/main.py`, `web/templates/*` |
+| Role config | §11 | `roles/{pm,qa,dev,data,security}/soul.toml` |
+| Test | §16 | `tests/*.py` |
 
 ---
 
-*CLAUDE.md v1.0 — selaras dengan openclawn-core-spec-v0.3.md. Update bersamaan jika spec berubah.*
+*CLAUDE.md v1.1 — selaras dengan openclawn-core-spec-v0.4.md. Update bersamaan jika spec berubah.*
