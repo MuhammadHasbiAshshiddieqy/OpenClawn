@@ -588,6 +588,27 @@ konfirmasi eksplisit (pola sama item 7-8 di §4).
    `AgentLoop` dengan LLM di-mock ATAU model kecil sungguhan, skor via
    rubric sederhana (bukan LLM-judge kompleks) — evaluator tetap tunduk
    aturan evaluator≥generator (I3) bila dievaluasi model.
+3. **`code_run`/`shell_run` tidak mampu menjalankan proyek nyata yang
+   "lumayan besar dan kompleks"** (ditemukan saat menjelaskan alur
+   coding-assistant ke owner, 2026-08-03) — batasan nyata, bukan bug, tapi
+   worth dicatat sebagai gap kapabilitas. `Dockerfile.sandbox` hanya berisi
+   `python:3.12-slim` + `numpy`/`pandas`; digabung `--network none` (`tools/sandbox.py`),
+   `SANDBOX_TIMEOUT_SEC = 30` hardcoded, `--memory 256m --cpus 0.5`, dan
+   `shell_run` read-only (`tools/shell.py`) — proyek yang butuh
+   `pip install`/`npm install`, runtime non-Python, proses >30 detik, service
+   yang listen di port, sidecar (DB/cache), atau persist hasil build **tidak
+   bisa jalan sama sekali** lewat jalur ini saat ini. Ini konsekuensi
+   langsung dari jaminan "sandbox tanpa network = pertahanan utama, bukan
+   approval" (§ komentar `ShellRunTool`) — bukan sesuatu yang kelewat.
+   Arah kandidat (belum dipilih, butuh keputusan desain terpisah):
+   (a) sandbox image kustom per-proyek dengan dependency di-*bake* saat
+   `docker build` (network hanya terbuka di situ, bukan saat `docker run`);
+   (b) fase install terpisah yang approval-gated & network sementara
+   terbuka, lalu fase run tetap tertutup total — menambah permukaan
+   `PolicyEngine`/`ApprovalGate` yang perlu didesain hati-hati supaya fase
+   install sendiri tak jadi celah baru; (c) timeout/resource limit
+   configurable per-role via `soul.toml`/`AppConfig` untuk proses yang
+   memang perlu lebih lama dari 30 detik.
 
 ---
 
