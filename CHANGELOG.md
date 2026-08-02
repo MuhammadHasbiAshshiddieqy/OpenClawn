@@ -5,6 +5,157 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 [SemVer](https://semver.org/). Versi 0.7.0 menandai keluarnya dari fase
 pre-release (`-alpha`) menjadi rilis stabil pertama.
 
+## [0.12.0] — 2026-08-02
+
+Rilis terbesar sejauh ini: dua inisiatif governance/multi-tenant penuh
+(Policy Engine, Event-Driven Runtime, Multi-Tenant & Enterprise RBAC),
+ekosistem (Prometheus, skill marketplace, integrasi OpenConnector), DAN
+audit production-readiness menyeluruh yang menemukan & menutup beberapa gap
+keamanan nyata — termasuk satu yang melumpuhkan gate human-approval untuk
+user lain. Semua backward-compatible. Dua dependency baru disetujui owner
+eksplisit (`cryptography`, `regex` — lihat CLAUDE.md §7).
+
+### Security — Audit production-readiness (temuan & perbaikan)
+
+Audit menyeluruh atas seluruh codebase (security/sandbox, reliability LLM,
+4 inovasi inti, ops/deployment, lapisan web/, memory/roles/tools) menemukan
+dan menutup gap berikut — beberapa di antaranya bug nyata di produksi saat
+ini, bukan hipotesis:
+
+- **Approval hijack + chat history lintas-user (paling serius).** Sesi chat
+  dan approval pending sebelumnya sama sekali tak punya kepemilikan
+  per-user, hanya per-tenant — user manapun yang login (termasuk role
+  rendah) bisa baca/hapus riwayat chat user lain, dan lebih parah lagi bisa
+  melihat serta approve/reject aksi berbahaya (`code_run`, dst.) milik user
+  lain, melumpuhkan gate human-approval sepenuhnya. Kolom `owner_user_id`
+  baru di `chat_sessions` & `approval_log`, digerbangi di semua endpoint
+  terkait; admin tetap punya oversight penuh.
+- **Stored XSS** di preview parameter tool pada status chat (path/command/
+  code tool, atau nama tool dari server MCP eksternal yang tak tepercaya)
+  — escape universal.
+- **5 endpoint system-config tanpa RBAC gate** (kalibrasi router, visibility
+  skill, autopilot) — ditambahkan `_require_role`, konsisten endpoint
+  sejenis yang sudah tergerbangi.
+- **`memory_search` cross-role data leak** — tool tanpa approval yang bisa
+  baca memori/skill privat role lain, melanggar isolasi visibility skill
+  marketplace. Sekarang difilter per-role via konteks sistem, fail-closed
+  tanpa role.
+- **Evaluator gating crystallizer (Inovasi 3) drift** dari roster router —
+  solusi tier tertinggi (Gemini) bisa dievaluasi model yang plausibel lebih
+  lemah tanpa disadari. Diperbaiki + fail-safe ke `draft` untuk model tak
+  dikenal di masa depan.
+- **Retry LLM yang diam-diam tak pernah jalan** — `@retry` tenacity di
+  async generator streaming tak pernah benar-benar retry; ditulis ulang
+  manual, hanya retry sebelum chunk pertama terkirim (hindari duplikasi
+  output ke browser).
+- **`mcp_servers.env` plaintext di DB** — sekarang dienkripsi-at-rest
+  (Fernet, dependency `cryptography` baru), baris lama tetap terbaca.
+- **Log secret-scrubbing tidak rekursif** — field bersarang (mis. header
+  `Authorization` di dalam dict) sebelumnya lolos sensor sama sekali.
+- **Formula injection XLSX** (`doc_write`) dari konten LLM/web tak
+  dipercaya — escape standar OWASP.
+- **Resource exhaustion**: `web_fetch`/`http_request`/`file_read`/
+  `read_many` membaca seluruh body/file ke memori sebelum dipotong ke
+  batas — sekarang streaming/bounded-read, tanpa dependency baru.
+- **ReDoS di `GrepTool`** — regex dari LLM tanpa timeout bisa macetkan
+  proses. Dependency `regex` baru (drop-in `re` dengan `timeout=` native),
+  diverifikasi langsung bahwa timeout genuinely menginterupsi pattern
+  catastrophic-backtracking yang sebelumnya hang >30 detik.
+- **Cookie sesi/CSRF/OIDC tanpa flag `Secure`** — sekarang kondisional
+  berdasar `X-Forwarded-Proto` (Caddy, satu-satunya topologi produksi yang
+  direkomendasikan, sudah set header ini secara default).
+- **`Dockerfile.role` berjalan sebagai root** — satu-satunya image tanpa
+  non-root user. Entrypoint baru (`docker-entrypoint.sh`) chown lalu drop
+  privilege via `setpriv` (bukan `USER` statis — bind-mount `./data` yang
+  auto-dibuat Docker biasanya root:root). Diverifikasi Linux VM sungguhan:
+  tulis berhasil sebagai uid 1000, graceful shutdown SIGTERM 0.36 detik.
+- Perbaikan pendukung: `httpx.AsyncClient` pooled (bukan baru tiap call),
+  3 dimensi router multibahasa yang tak pernah tersimpan ke audit trail,
+  `.dockerignore` baru, resource limit `docker-compose.yml`, 7 env var
+  terdokumentasi di `.env.example`.
+
+`db_query`'s kurangnya pembatasan tabel dievaluasi tapi sengaja DIBIARKAN
+(keputusan owner eksplisit) — `requires_approval=True` yang sudah ada
+dianggap memadai sebagai primary defense; allowlist regex yang bisa
+di-bypass dinilai lebih berbahaya (rasa aman palsu) daripada tanpa
+allowlist sama sekali.
+
+### Added — Multi-Tenant & Enterprise Identity (TODO Prioritas 5)
+
+- **`tenant_id`** di 6 tabel via migrasi otomatis; `ChatSessionStore` &
+  `SkillDecayManager` wired penuh sebagai bukti konsep (tabel lain dapat
+  kolomnya, query belum difilter — scope terdokumentasi, follow-up).
+- **OAuth2/OIDC login** (`security/oidc.py`) sebagai mode auth TAMBAHAN di
+  samping shared-secret, bukan pengganti — discovery document + JWKS
+  verification via `authlib`/`joserfc`.
+- **Multi-user RBAC sungguhan** (tabel `users`, role admin/member/viewer) —
+  melampaui "single-user internal" yang sebelumnya jadi asumsi dasar
+  (revisi eksplisit CLAUDE.md §7). Endpoint config sistem digerbangi
+  admin-only; chat & halaman read-only tetap terbuka semua role.
+- Dokumentasi jalur migrasi SQLite→PostgreSQL (`docs/postgres-migration.md`)
+  — opsi, bukan migrasi yang didorong.
+
+### Added — Policy Engine + clawn.yaml (TODO Prioritas 3)
+
+- **`security/policy_engine.py`**: lapisan kondisi TAMBAHAN di atas
+  allow-list statis & `requires_approval` statis (bukan pengganti) —
+  `deny_if`/`approval_required_if` per-tool via TOML nested dict (bukan
+  DSL/`eval()`), dievaluasi di dua titik defense-in-depth. Trust mode tidak
+  bisa bypass approval yang dipaksa policy.
+- **`clawn.yaml`** (`infra/manifest.py`): manifest deklaratif tim/role di
+  atas `soul.toml` — idempoten, opt-in per-role, fail-closed.
+
+### Added — Event-Driven Runtime (TODO Prioritas 4)
+
+- **`core/event_bus.py`**: pub/sub in-process murni asyncio, tanpa broker
+  eksternal. `core/conversation.py` refactor penuh jadi producer/consumer
+  granular per event (token/thinking/status/usage) — API publik
+  `ConversationOrchestrator.run()` dijaga identik, streaming real-time
+  tetap utuh. Tabel `agent_events` baru untuk audit trail level tinggi.
+
+### Added — Governance & Audit Trail (TODO Prioritas 2)
+
+- **Evidence-Based Response** (`GET /evidence/{event_id}`): snapshot
+  policy/skill/guardrail per turn.
+- **Human Approval Pipeline** sebagai node query-able
+  (`GET /approval/{approval_id}`) — `approval_id` kolom sendiri, bukan lagi
+  tersirat di kolom `decision`.
+- **Runtime Evaluation Engine**: KPI per-role (`role_report`), rating
+  eksplisit user (`POST /feedback/{event_id}`).
+- Format audit log standar pasar: kolom `user_id` + `actor_is_agent`
+  eksplisit di `routing_events`/`tool_invocations`.
+
+### Added — Ecosystem & Ops (TODO Prioritas 6)
+
+- **`GET /metrics/prometheus`**: 8 metric family, hand-written exposition
+  format.
+- **Cross-role skill marketplace**: visibility `private`/`shared`/
+  `inherited` pada skill, `POST /skills/set-visibility`.
+- **Integrasi OpenConnector** (opsional, third-party Apache-2.0): gateway
+  1000+ provider SaaS lewat MCP standar, dijalankan sebagai container Docker
+  independen, akses granular per role (`security` dikecualikan by design).
+
+### Fixed
+
+- Agent Gemini berhalusinasi telah membuat file (mis. PDF) padahal tidak
+  pernah memanggil tool — `_gemini()` sebelumnya tak pernah meneruskan
+  parameter `tools` ke API Gemini sejak awal.
+- SQLite backup/restore (`infra/backup.py`, Online Backup API) + session
+  idle timeout opsional.
+
+### Docs
+
+README direposisikan sebagai "Agent Control Plane" dengan riset pasar 2026
+tervalidasi (governance gap, perbandingan LangChain/CrewAI/AutoGen);
+diagram Mermaid disinkronkan ulang terhadap kode aktual.
+
+### Tests
+
+850+ test hijau (dari 636 di v0.11.0) — setiap perbaikan security di atas
+disertai test regresi baru; suite lengkap diverifikasi via Docker
+`python:3.12-slim` + `uv sync --frozen` (setara CI) sepanjang rilis ini,
+bukan cuma statis, karena environment dev lokal tak punya Python 3.12.
+
 ## [0.11.0] — 2026-07-02
 
 Rilis otonomi & riwayat chat: agent butuh lebih sedikit approval untuk aksi
