@@ -557,6 +557,40 @@ nyata & disetujui, bukan drift.
 
 ---
 
+## 8. Prioritas 8 (usulan, belum disetujui owner) — dari riset kompetitor eve.dev, 2026-08-03
+
+Dua ide dari membaca positioning eve.dev ("Next.js untuk agent", DX-first) yang
+punya dasar teknis konkret di codebase — **bukan** sekadar meniru fitur
+kompetitor, keduanya menutup gap nyata. Status: **catatan backlog, belum
+ada keputusan owner untuk mengerjakan** — jangan dikerjakan tanpa
+konfirmasi eksplisit (pola sama item 7-8 di §4).
+
+1. **Durable execution — checkpoint & resume approval-pending state lintas
+   restart server.** Saat ini `ApprovalGate` memblokir *in-process* dengan
+   timeout (`security/approval.py`); `AgentLoop` dibuat baru tiap request
+   web sehingga state percakapan tak bertahan lintas restart
+   (`docs/core.md`). Fondasi untuk ini **sudah ada**: `core/event_bus.py` +
+   tabel `agent_events` (Event-Driven Runtime, Prioritas 4) sudah
+   event-sourcing ringan — arah natural adalah menjadikan approval-pending
+   sebagai state yang di-replay dari `agent_events` saat restart, alih-alih
+   cuma in-memory. Perlu keputusan desain: apakah "parkir" agent saat
+   menunggu approval berarti tool loop di-serialize penuh (bukan cuma
+   approval), atau cukup approval state saja yang persisten — ini
+   menentukan seberapa besar perubahan `agent_loop.py`.
+2. **Eval harness formal — test suite dengan scoring rubric untuk kualitas
+   jawaban agent, bukan cuma routing.** `core/crystallizer.py` (I3) menilai
+   kualitas *skill* sebelum disimpan, dan `calibration_report`/`role_report`
+   (I1, `core/audit.py`) mengukur akurasi *routing* dari koreksi user nyata
+   — tapi tak ada regression test untuk "apakah perubahan prompt/model/router
+   menurunkan kualitas jawaban" secara sistematis (mirip promptfoo/evals).
+   Kandidat desain minimal selaras CLAUDE.md §8 (sederhana dulu): file
+   YAML per role berisi `{input, expected_criteria}`, runner yang memanggil
+   `AgentLoop` dengan LLM di-mock ATAU model kecil sungguhan, skor via
+   rubric sederhana (bukan LLM-judge kompleks) — evaluator tetap tunduk
+   aturan evaluator≥generator (I3) bila dievaluasi model.
+
+---
+
 ## Sumber riset tren (dicari 2026-07-27)
 
 - [The best AI agent frameworks in 2026](https://www.langchain.com/resources/ai-agent-frameworks)
