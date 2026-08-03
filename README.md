@@ -15,7 +15,7 @@
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
     <img src="https://img.shields.io/badge/LLM-Ollama%20%2B%20Gemini%20%2B%20Claude-purple" alt="Hybrid LLM">
     <img src="https://img.shields.io/badge/tools-27-orange" alt="27 Tools">
-    <img src="https://img.shields.io/badge/tests-699%20passing-brightgreen" alt="Tests">
+    <img src="https://img.shields.io/badge/tests-850%2B%20passing-brightgreen" alt="Tests">
   </p>
 </div>
 
@@ -91,10 +91,14 @@ is itself now an established market category — GitHub, Google, and Microsoft a
 products under that name in 2026 — and this is where OpenCLAWN sits, self-hosted and
 open-source instead of a vendor platform.
 
-**What OpenCLAWN is *not*, to be equally direct:** it does not have an event-driven runtime,
-multi-tenant isolation, or OAuth/SSO yet — these are tracked as future work, not silently
-skipped. It is honest about being single-user-per-deployment today, not a finished
-multi-tenant product (see [Scope & Production Posture](#scope--production-posture) below).
+**What OpenCLAWN is *not*, to be equally direct:** self-hosted single-instance is still the
+only supported deployment model — no horizontal scaling, no managed multi-region offering.
+Event-driven runtime (`core/event_bus.py`), multi-tenant schema (`tenant_id`), and OAuth/OIDC
+login now exist, but multi-tenant isolation is honestly **partial**: `chat_sessions` and
+`skills` are fully tenant-filtered, while a few other tables (`memory_l1`, `memory_l2`,
+`routing_events`, `approval_log`) carry the column but aren't query-filtered yet — see
+[Scope & Production Posture](#scope--production-posture) below for exactly what's wired vs.
+what's a foundation.
 
 ---
 
@@ -546,20 +550,26 @@ audit DB.
 
 ```
 openclawn/
-├── core/           # agent_loop · llm_client · router (multilingual) · audit · calibration
-│                   # crystallizer · compactor · conversation (multi-agent)
+├── core/           # agent_loop · llm_client · router (multilingual) + router_config
+│                   # audit · calibration · crystallizer · compactor
+│                   # conversation (multi-agent) · event_bus (event-driven runtime)
 │                   # activity (timeline) · autopilot (scheduler) · skill_pack · tool_audit
-├── infra/          # config · database (WAL, POWER()) · logging · env · workspace
+│                   # mcp_client · mcp_registry · guardrails_config · prometheus_metrics
+├── infra/          # config · database (WAL, POWER(), multi-tenant migration) · logging
+│                   # env · workspace · users (RBAC) · chat_sessions · settings
+│                   # manifest (clawn.yaml) · backup
 ├── memory/         # layers (L1–L4) · skill_decay · curator (merge) · skill_feedback
 │                   # user_model · search (FTS5)
 ├── roles/          # pm/qa/dev/data/security soul.toml · contracts (Pydantic) · registry
 ├── tools/          # 27 tools: file_ops · read_many · search · shell · code · web · git
 │                   # document (pdf_read · doc_write · pdf_write) · todo · report_blocker
-├── security/       # vault · shield (NFKD) · guardrails (NeMo-style rails) · approval
-│                   # (HITL + proposal queue) · question · skill_scanner
+│                   # mcp_tool (external MCP servers)
+├── security/       # vault (+ encryption-at-rest) · shield (NFKD)
+│                   # guardrails (NeMo-style rails) · approval (HITL, per-user)
+│                   # policy_engine · auth · oidc · rate_limit · question · skill_scanner
 ├── web/            # FastAPI app · HTMX templates · SSE · /activity /autopilots /skills
-├── migrations/     # 001_initial.sql
-└── tests/          # 490 tests — innovations, tools, web, compounding, guardrails
+├── migrations/     # 001_initial.sql · 002_multi_tenant.sql
+└── tests/          # 850+ tests — innovations, tools, web, compounding, guardrails, RBAC
 ```
 
 The 4 core innovations are stable; everything above (multi-agent, autopilots, skill
@@ -572,9 +582,12 @@ feature history.
 /activity          timeline of agent actions + open blockers
 /autopilots        scheduled runs + pending proposals
 /skills            decay curves · crystallization · curation · skill packs
-/metrics           routing calibration · tool telemetry
+/metrics           routing calibration · tool telemetry (+ /metrics/prometheus)
 /conversations     multi-agent transcripts
-/router · /settings  tier→model map · model override
+/router · /settings  tier→model map · model override (admin-only when auth is active)
+/mcp               external MCP server registry (admin-only)
+/admin/users       RBAC role management (admin-only)
+/evidence/{id} · /feedback/{id}   audit evidence lookup · human feedback rating
 ```
 
 ---
@@ -595,16 +608,18 @@ Detailed reference for every module, class, and function:
 
 | Folder | Doc |
 |---|---|
-| `infra/` | [docs/infra.md](docs/infra.md) — config, database, logging |
-| `core/` | [docs/core.md](docs/core.md) — agent loop, LLM client, router (multilingual), audit, crystallizer, calibration, conversation, activity, autopilot, skill packs |
+| `infra/` | [docs/infra.md](docs/infra.md) — config, database, logging, users (RBAC), chat sessions, manifest |
+| `core/` | [docs/core.md](docs/core.md) — agent loop, LLM client, router (multilingual), audit, crystallizer, calibration, conversation, activity, autopilot, skill packs, event bus, MCP client/registry |
 | `memory/` | [docs/memory.md](docs/memory.md) — L1–L4 layers, skill decay, curator (merge), skill feedback (promote/refine), user model, FTS5 search |
 | `roles/` | [docs/roles.md](docs/roles.md) — contracts, role registry, soul.toml format |
-| `security/` | [docs/security.md](docs/security.md) — vault, shield, guardrails (NeMo-style rails), approval gate HITL, skill scanner |
+| `security/` | [docs/security.md](docs/security.md) — vault (+ encryption-at-rest), shield, guardrails (NeMo-style rails), approval gate HITL (per-user), policy engine, auth, OIDC, rate limiting, skill scanner |
 | `tools/` | [docs/tools.md](docs/tools.md) — 27 tools, permission matrix, Docker sandbox |
 | `web/` | [docs/web.md](docs/web.md) — FastAPI endpoints, SSE streaming |
 | Database | [docs/database.md](docs/database.md) — full schema + example queries |
 | Tests | [docs/tests.md](docs/tests.md) — test index + patterns |
+| Postgres migration | [docs/postgres-migration.md](docs/postgres-migration.md) — SQLite→PostgreSQL path, if/when it's needed |
 | OpenConnector integration | [docs/tools.md](docs/tools.md#integrasi-openconnector-third-party-opsional) — connect 1000+ SaaS providers via MCP |
+| Architecture spec | [openclawn-core-spec-v0.4.md](openclawn-core-spec-v0.4.md) — full architecture reference, kept in sync with the built system (superseding v0.3, the original greenfield blueprint) |
 
 ---
 
@@ -624,6 +639,11 @@ Detailed reference for every module, class, and function:
 | — | Multilingual routing (structural + script-aware signals) | Done |
 | — | MCP client (external tools, approval-gated) · `/health` · stale-draft cleanup | Done |
 | — | Guardrails (NeMo-style input/output rails: injection · prompt-leak · PII redaction) | Done |
+| P3 | Policy Engine (`soul.toml` conditions, deny/require-approval) · `clawn.yaml` manifest | Done |
+| P4 | Event-driven runtime (`core/event_bus.py`, lightweight event-sourcing) | Done |
+| P5 | Multi-tenant schema foundation · OAuth2/OIDC login · multi-user RBAC (admin/member/viewer) | Done |
+| P6 | Cross-role skill marketplace · Prometheus metrics endpoint · OpenConnector integration | Done |
+| P7 | Production-readiness audit: cross-user IDOR (chat/approvals) · XSS · missing RBAC gates · encryption-at-rest for MCP credentials · ReDoS mitigation · non-root container · cookie `Secure` flag | Done |
 
 ---
 
@@ -641,18 +661,24 @@ Detailed reference for every module, class, and function:
 
 ## Scope & Production Posture
 
-OpenCLAWN targets **single-user, self-hosted** use (research/experiment phase). Several
-things a multi-user SaaS would need are **intentionally out of scope** — they are design
-decisions, not technical debt:
+OpenCLAWN targets **self-hosted** deployment — one operator running one instance, not a
+managed multi-region SaaS platform. Within that constraint, it has grown past "single
+shared login, one workspace": genuine multi-user access control and a multi-tenant schema
+foundation now exist, each added because a concrete internal need justified it (see
+`CLAUDE.md §7` for the explicit approval trail behind each), not speculatively.
 
-| Not included | Why (deliberate) |
+| Capability | Status |
 |---|---|
-| Multi-user accounts | Single-user by design — one shared login for the one operator, not a user system |
-| PostgreSQL / horizontal scaling | SQLite (WAL) is sufficient for one user; no multi-instance state |
-| Multi-tenancy | One workspace, one user |
+| Multi-user accounts with RBAC | **Implemented** — `users` table, `admin`/`member`/`viewer` roles. System-config endpoints (`/settings`, `/admin/users`, `/router`, `/mcp/*`, `/skills/import`, calibration apply/revert, skill visibility) are admin-only. Shared-secret login still works unchanged and always bootstraps as admin — this isn't a breaking change for existing single-secret deployments |
+| OAuth2/OIDC login | **Implemented**, opt-in and *additional* to shared-secret (not a replacement) — any standards-compliant provider via `.well-known/openid-configuration` discovery |
+| Multi-tenancy (`tenant_id`) | **Partial, honestly.** `chat_sessions` and `skills` are fully tenant-filtered (proof of concept, including defense-in-depth on single-ID operations). `memory_l1`, `memory_l2`, `routing_events`, and `approval_log` carry the `tenant_id` column but queries against them aren't filtered by it yet — that's a separate follow-up, not an oversight. Not a finished multi-tenant product, but no longer "one workspace, one user" either |
+| PostgreSQL / horizontal scaling | **Still out of scope.** SQLite (WAL) remains the default — data sovereignty for a single self-hosted org. A migration path is documented ([docs/postgres-migration.md](docs/postgres-migration.md)) but nothing is driving the switch yet; adopting it without a real need would be scope creep |
 
-Adopting these would change the project's identity, so they are not on the roadmap unless
-that direction is chosen explicitly.
+Chat/approval ownership is also **per-user, not just per-tenant**: each chat session and
+pending approval is tied to the user who created it (`owner_user_id`), so one logged-in
+user can't read another's chat history or — more importantly — approve/reject another
+user's pending destructive actions. This wasn't always true; see
+[CHANGELOG.md § 0.12.0](CHANGELOG.md) for the IDOR this closed.
 
 ### Self-hosting on a public VPS (opt-in hardening)
 
@@ -685,21 +711,25 @@ If you expose it on a public IP, enable the built-in hardening first:
    bottom of the script. Restore is a straight file copy: stop the server, replace
    `data/openclawn.db` with the chosen backup file, restart.
 
-None of this turns OpenCLAWN into a multi-tenant product — it is still one operator, one
-password, one workspace. It closes the gap between "safe on a trusted network" and "safe to
-expose on the open internet" for that one operator.
+This hardening still doesn't turn OpenCLAWN into a managed multi-tenant SaaS platform — one
+self-hosted instance can now serve multiple accounts with real access control, but it's
+still one deployment, one operator responsible for it, not a horizontally-scaled service
+with per-tenant billing/isolation guarantees. It closes the gap between "safe on a trusted
+network" and "safe to expose on the open internet" for that operator and their users.
 
-**What "production-ready" means here** (for single-user self-hosting): reliable for one
-person, safely reachable from the internet if you choose to. That posture is met —
-Docker-sandboxed execution, SSRF guard, HITL approval, fail-safe error handling, CI on every
-push, opt-in auth + CSRF + rate limiting, a dependency-aware `/health` endpoint, custom
-error pages (no leaked stack traces), and stale draft-skill cleanup. Remaining polish is
-tracked in [CHANGELOG.md](CHANGELOG.md).
+**What "production-ready" means here** (for self-hosted, operator-run deployment):
+reliable for its users, safely reachable from the internet if you choose to, with real
+access control instead of an all-or-nothing shared secret. That posture is met —
+Docker-sandboxed execution, SSRF guard, HITL approval scoped per-user, fail-safe error
+handling, CI on every push, opt-in auth (shared-secret or OIDC) + CSRF + rate limiting +
+RBAC, a dependency-aware `/health` endpoint, custom error pages (no leaked stack traces),
+and stale draft-skill cleanup. Remaining polish is tracked in [CHANGELOG.md](CHANGELOG.md).
 
-> **Common review misread:** OpenCLAWN is *not* an under-built multi-user product. `shell_run`
-> and `code_run` run **only** in the Docker sandbox (never on the host); the DB is never
-> served statically; there are no `except: pass` swallows; CI exists. Evaluate it as a
-> single-user framework, not a SaaS.
+> **Common review misread:** OpenCLAWN is *not* an under-built SaaS product pretending to be
+> more than it is. `shell_run` and `code_run` run **only** in the Docker sandbox (never on
+> the host); the DB is never served statically; there are no `except: pass` swallows; CI
+> exists. Evaluate it as a self-hosted control plane with real (if intentionally scoped)
+> multi-user support — not a horizontally-scaled managed SaaS.
 
 ---
 
