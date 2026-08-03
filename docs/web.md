@@ -227,6 +227,12 @@ Hentikan percakapan (cadangan; STOP utama lewat `AbortController.abort()` di fro
 (mis. dashboard eksternal) — Web UI chat TIDAK melakukan polling terpisah ke endpoint
 ini (lihat catatan di bawah untuk bagaimana chat sesungguhnya menampilkan approval).
 
+**Kepemilikan (audit produksi 2026-07-29):** hanya approval milik user request ini
+(atau tanpa owner tercatat) yang dikembalikan — SEBELUMNYA memanggil ini tanpa
+`session_id` mengembalikan approval SEMUA user, termasuk `tool_input` mentah
+(path/command/code) milik user lain. Admin (atau auth nonaktif) tetap lihat semua.
+Difilter via `ApprovalGate.pending_list(session_id, owner_user_id=...)` (`docs/security.md`).
+
 Query params:
 - `session_id` (opsional) — filter per sesi
 
@@ -268,6 +274,11 @@ Memakai `_validate_workdir` yang SAMA dengan jalur eksekusi (fail-closed) agar h
 
 **Daftar riwayat chat untuk sidebar (§ user report: chat selalu ke-reset, tak ada cara buka chat baru/lanjutkan/hapus riwayat).**
 
+**Kepemilikan (audit produksi 2026-07-29):** hanya sesi milik user request ini (atau
+tanpa owner tercatat) yang dikembalikan — SEBELUMNYA seluruh tenant terlihat oleh
+siapa pun yang login. Admin (atau auth nonaktif) tetap lihat semua. Difilter via
+`ChatSessionStore.list_active(owner_user_id=...)`.
+
 Response:
 ```json
 {"sessions": [
@@ -284,6 +295,11 @@ Response:
 
 **Transkrip penuh satu sesi — dipakai UI untuk "lanjutkan" chat dari riwayat.**
 
+**Kepemilikan (audit produksi 2026-07-29):** kepemilikan dicek SEBELUM transkrip
+dikembalikan (`_can_access_owned_resource`, via `ChatSessionStore.get_owner`) — `403`
+bila bukan pemilik/admin. SEBELUMNYA ini IDOR: user manapun bisa baca transkrip sesi
+siapa pun hanya dengan menebak/mengetahui `session_id`.
+
 Response: `{"session_id": "...", "turns": [{"role": "user"|"assistant", "content": "..."}, ...]}` (urut lama→baru, via `MemoryManager.load_turns`, cap 500 giliran). Sesi tak dikenal / belum ada turn → `turns: []` (bukan 404 — konsisten dengan `load_turns` yang fail-safe kembalikan list kosong).
 
 ---
@@ -291,6 +307,10 @@ Response: `{"session_id": "...", "turns": [{"role": "user"|"assistant", "content
 #### `DELETE /chat-sessions/{session_id}`
 
 **Hapus riwayat chat (§ user request).**
+
+**Kepemilikan (audit produksi 2026-07-29):** kepemilikan dicek SEBELUM menghapus
+(pola sama endpoint `turns` di atas) — `403` bila bukan pemilik/admin. SEBELUMNYA
+IDOR: user manapun bisa hapus riwayat chat siapa pun.
 
 Response: `{"ok": true}`. Soft-delete metadata sidebar (`chat_sessions.deleted_at`), TAPI transkrip (`session_turns`) & folder aktif (`session_workspace`) dihapus FISIK (`ChatSessionStore.soft_delete`) — user minta "hapus", isi percakapan harus benar hilang, bukan cuma disembunyikan dari sidebar.
 
@@ -318,6 +338,13 @@ Response: `{"ok": true}`. Soft-delete metadata sidebar (`chat_sessions.deleted_a
 #### `POST /approve`
 
 **User memutuskan approve atau reject untuk tool destruktif.**
+
+**Kepemilikan (audit produksi 2026-07-29) — TEMUAN PALING SERIUS minggu itu:**
+kepemilikan dicek SEBELUM `resolve()` (`approval_gate.find_pending(approval_id)` →
+`_can_access_owned_resource`) → `403 {"ok": false, "error": "forbidden"}` bila bukan
+pemilik/admin. SEBELUMNYA `approval_id` APA PUN bisa di-approve/reject user manapun
+(hijack lintas-user) — melumpuhkan gate HITL (§1) sepenuhnya, karena approval yang
+seharusnya menunggu keputusan pemilik aslinya bisa diputuskan orang lain.
 
 Form data:
 - `approval_id` — ID approval
@@ -463,9 +490,13 @@ Response sukses: `{"ok": true, "event_id": 141, "rating": 5}`. `400` bila `ratin
 
 Memanggil `CalibrationStore.apply(delta, reason, source="calibration")`: menggeser offset threshold router (disimpan di `app_settings`, dibaca `SmartRouter` tiap turn) dan mencatat baris audit ke `calibration_log`. Redirect ke `/metrics`. **Dipicu manusia** (tombol), bukan auto-apply.
 
+**RBAC (audit produksi 2026-07-29, TODO.md § Prioritas 5):** `_require_role(request, "admin")` di awal handler — mengubah threshold router untuk SEMUA user memengaruhi tenant, bukan aksi member/viewer biasa. SEBELUMNYA endpoint ini tak digerbangi sama sekali walau endpoint config sistem lain (`/settings`, `/router`) sudah. Tak berlaku bila `CONFIG.auth_active` False.
+
 #### `POST /calibration/revert`
 
 Membatalkan kalibrasi aktif terakhir via `CalibrationStore.revert()` — mengembalikan offset ke state sebelumnya, mencatat baris `source='revert'`. Redirect ke `/metrics`.
+
+**RBAC (audit produksi 2026-07-29, TODO.md § Prioritas 5):** `_require_role(request, "admin")`, alasan & catatan sama seperti `/calibration/apply` di atas.
 
 ---
 
@@ -526,6 +557,8 @@ membocorkan struktur filesystem di luar workspace). Dipicu dari chip download di
 `POST /skills/revert-merge` → batalkan merge skill yang **sudah diterapkan** (I1, `status='applied'`) untuk satu role: loser kembali `active`, winner ke konten/versi sebelum merge. Form: `role`. Redirect `/skills`. Panel "Curation" di `skills.html` menampilkan `curation_log` + tombol Batalkan untuk baris `applied` terbaru. `/metrics` menampilkan badge `auto-tune ON/OFF` (I4, `CONFIG.calibration_auto_apply`).
 
 `POST /skills/set-visibility` → Skill Marketplace lintas-role (TODO.md § Prioritas 6): toggle `visibility` satu skill antara `private` (default, hanya role pemilik) dan `shared` (terlihat semua role — lihat `SkillDecayManager.get_active_skills`, `docs/memory.md`). Form: `skill_id`, `visibility` (`private`|`shared`). `visibility='inherited'` (hasil impor skill pack) TIDAK bisa diubah lewat endpoint ini — query `WHERE ... AND visibility != 'inherited'` membuat UPDATE jadi no-op untuk baris begitu (sudah lintas-role sejak asalnya, bukan toggle sadar user). Redirect `/skills`. Tombol toggle di tabel skill `skills.html`, tersembunyi (diganti label statis) untuk skill `inherited`.
+
+**RBAC (audit produksi 2026-07-29, TODO.md § Prioritas 5):** `_require_role(request, "admin")` di awal handler — mengubah visibilitas skill lintas-role adalah config sistem, memengaruhi context yang disuntik ke SEMUA role. SEBELUMNYA tak digerbangi. Tak berlaku bila `CONFIG.auth_active` False.
 
 ---
 

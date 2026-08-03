@@ -165,25 +165,28 @@ Mewakili satu permintaan approval yang sedang menunggu keputusan user.
 | `session_id` | Sesi yang meminta approval |
 | `tool_name` | Nama tool yang butuh disetujui |
 | `tool_input` | Input tool sebagai dict |
+| `owner_user_id` | **[Audit produksi 2026-07-29]** User yang memicu approval ini. SEBELUMNYA tak ada kepemilikan sama sekali — user manapun yang login (termasuk role rendah) bisa lihat & approve/reject approval milik user lain via `GET /approvals` (tanpa `session_id`) + `POST /approve` (approval_id apa pun, tanpa cek kepemilikan) — melumpuhkan gate HITL sepenuhnya. `None` = tak ada owner tercatat (auth nonaktif, atau caller tak menyertakan) — tetap terlihat semua secara graceful, bukan fail-closed total untuk kasus ini. Enforcement kepemilikan sungguhan ada di lapisan endpoint (`web/main.py`), bukan di sini — lihat catatan `resolve()`/`find_pending()` di bawah |
 | `future` | `asyncio.Future` yang di-resolve saat user klik approve/reject |
 
 ### Kelas: `ApprovalGate`
 
-Human-in-the-loop (HITL) gate untuk tool destruktif.
+Human-in-the-loop (HITL) gate untuk tool destruktif. **Privat per-user** sejak audit produksi 2026-07-29 (lihat `owner_user_id` di atas) — sebelumnya siapa pun yang login bisa melihat dan memutuskan approval milik user lain.
 
 **Arsitektur singleton:** `AgentLoop` dibuat baru tiap request, tapi `ApprovalGate` harus di-inject sebagai singleton dari level app (`web/main.py`) agar `resolve()` dari endpoint `/approve` bisa mencapai Future yang sama.
 
 **`__init__(db, config)`**  
 Inisialisasi dict `_pending` untuk track approval yang menunggu.
 
-**`request(session_id, tool_name, tool_input, approval_id=None) → bool`** *(async)*  
+**`request(session_id, tool_name, tool_input, approval_id=None, owner_user_id=None) → bool`** *(async)*  
 Alur lengkap permintaan approval:
-1. Buat `PendingApproval` — pakai `approval_id` bila diberikan, kalau tidak generate UUID baru
-2. Catat ke tabel `approval_log` dengan `decision="pending"` dan `approval_id` di KOLOM SENDIRI (§ Human Approval Pipeline, TODO.md Prioritas 2 — sebelumnya `approval_id` hanya tersirat sebagai substring `pending:{id}` di kolom `decision`, hilang begitu langkah 5 menimpanya jadi keputusan final; sekarang tetap query-able lintas status via `GET /approval/{approval_id}`, `docs/web.md`)
+1. Buat `PendingApproval` — pakai `approval_id` bila diberikan, kalau tidak generate UUID baru. `owner_user_id` (audit produksi 2026-07-29) disertakan ke `PendingApproval` dan ke baris `approval_log` yang diinsert
+2. Catat ke tabel `approval_log` dengan `decision="pending"`, `approval_id` DAN `owner_user_id` di KOLOM SENDIRI (§ Human Approval Pipeline, TODO.md Prioritas 2 — sebelumnya `approval_id` hanya tersirat sebagai substring `pending:{id}` di kolom `decision`, hilang begitu langkah 5 menimpanya jadi keputusan final; sekarang tetap query-able lintas status via `GET /approval/{approval_id}`, `docs/web.md`)
 3. Tunggu `asyncio.wait_for(future, timeout=approval_timeout_sec)`
 4. Jika timeout → **fail-safe DENY** (`approved=False`, decision=`"timeout"`)
 5. Update `approval_log` dengan keputusan final (dicari via kolom `approval_id`, bukan lagi pola string `decision=pending:{id}`)
 6. Return `True` (approved) atau `False` (rejected/timeout)
+
+`owner_user_id` dipakai `web/main.py` untuk menggerbangi `GET /approvals` dan `POST /approve` agar user lain tak bisa lihat/putuskan approval ini — bukan dicek di dalam `ApprovalGate` sendiri (lihat `find_pending`/`resolve` di bawah).
 
 Fail-safe DENY dipilih sesuai prinsip CLAUDE.md §1.1: keamanan dulu — tool destruktif tidak pernah jalan tanpa persetujuan eksplisit.
 
@@ -195,16 +198,22 @@ menunggu. Default `None` → generate seperti sebelumnya (tak ada perubahan peri
 caller yang tidak memberi ID, mis. test lama).
 
 **`resolve(approval_id, approved) → bool`**  
-Dipanggil dari endpoint `/approve` saat user klik tombol. Set result pada Future yang menunggu di `request()`. Return `True` jika approval_id valid dan berhasil di-resolve, `False` jika tidak ditemukan atau sudah selesai.
+Dipanggil dari endpoint `/approve` saat user klik tombol. Set result pada Future yang menunggu di `request()`. Return `True` jika approval_id valid dan berhasil di-resolve, `False` jika tidak ditemukan atau sudah selesai. **Cek kepemilikan TIDAK dilakukan di sini secara sengaja** — dilakukan caller (`web/main.py`, via `find_pending`) SEBELUM memanggil ini, pola sama dengan `_require_role` yang digerbangi di lapisan endpoint, bukan di service layer. `resolve()` tetap mekanisme murni.
+
+**`find_pending(approval_id) → PendingApproval | None`**  
+Cari satu pending approval by ID — dipakai `web/main.py` untuk cek kepemilikan (`owner_user_id`) SEBELUM memanggil `resolve()`.
 
 **`auto_approve(session_id, tool_name, tool_input) → bool`** *(async)*  
 Trust mode per-sesi (§ user request otonomi): tool YANG BUTUH APPROVAL tetap DIEKSEKUSI sungguhan, tapi tanpa Future/blocking — langsung catat ke `approval_log` dengan `decision="auto:trust_mode"` (berbeda dari `"approved"` manual, agar audit trail membedakan keputusan manusia vs toggle) lalu return `True`. Beda dari `queue_proposal`: manusia SEDANG hadir di sesi chat aktif (bukan autopilot tanpa manusia), hanya melewati klik. Caller (`AgentLoop._execute_tool`) yang memutuskan tool mana boleh lewat sini — `code_run` TIDAK PERNAH, berapa pun trust mode-nya (CLAUDE.md §1, lihat `core/agent_loop.py` § `_TRUST_MODE_EXEMPT`).
 
-**`pending_list(session_id=None) → list[dict]`**  
-Kembalikan daftar approval yang masih menunggu. Bisa difilter per sesi. Endpoint
-introspeksi read-only (`GET /approvals`) — Web UI chat TIDAK memakai polling ke sini;
-lihat `docs/web.md` § `POST /approve` untuk bagaimana chat sesungguhnya menampilkan
-approval (via event SSE `status.approval_id`, bukan polling terpisah).
+**`pending_list(session_id=None, owner_user_id=None) → list[dict]`**  
+Kembalikan daftar approval yang masih menunggu. Bisa difilter per sesi. `owner_user_id`
+(audit produksi 2026-07-29): bila diisi, hanya kembalikan approval milik user ini ATAU
+approval tanpa owner tercatat (`None` — dibuat saat auth nonaktif, tetap terlihat semua
+secara graceful). `None` (default, dipakai admin/auth nonaktif) = tanpa filter kepemilikan
+sama sekali. Endpoint introspeksi read-only (`GET /approvals`) — Web UI chat TIDAK memakai
+polling ke sini; lihat `docs/web.md` § `POST /approve` untuk bagaimana chat sesungguhnya
+menampilkan approval (via event SSE `status.approval_id`, bukan polling terpisah).
 
 **`_record_decision(approval_id, decision) → None`** *(async, private)*  
 Update row `approval_log` yang `approval_id`-nya cocok DAN `decision='pending'`, jadi keputusan final.
@@ -338,6 +347,25 @@ diisi, middleware melakukan dua hal tambahan:
 
 Default `None` (OFF) → kedua langkah di atas di-skip sepenuhnya, perilaku lama
 (hanya absolute expiry 7 hari) tak berubah.
+
+**Cookie `Secure` flag — `_is_secure_request()` (`web/main.py`, audit produksi 2026-07-29/30):**
+sebelumnya cookie sesi/CSRF/OIDC **tidak pernah** di-set `secure=True`, sekalipun
+deployment sungguhan jalan di HTTPS — `request.url.scheme` SELALU `"http"` di sana
+karena `Dockerfile.role`/uvicorn (tanpa `--proxy-headers`) menerima koneksi dari
+Caddy secara plain HTTP di `localhost:8000`; Caddy sendiri yang menangani TLS di
+depan. Diperbaiki: `_is_secure_request(request)` mengecek `request.url.scheme == "https"`
+**ATAU** header `X-Forwarded-Proto: https` — `Caddyfile.example` sudah
+mendokumentasikan Caddy `reverse_proxy` sebagai satu-satunya cara resmi expose
+proyek ini ke internet, dan `reverse_proxy` Caddy secara default menyertakan header
+itu, jadi memercayainya aman dalam topologi yang didukung proyek ini. Dipakai di
+kelima `set_cookie()` (sesi, CSRF, OIDC state, dst) di `web/main.py`.
+
+Fail-safe **simetris** (bukan sepihak): salah baca header ini hanya memengaruhi
+apakah cookie ikut flag `Secure` — browser sendiri yang menegakkan aturan itu
+(tolak kirim cookie `Secure` lewat HTTP), bukan server memvalidasi apa pun
+berdasarkan header ini. Salah-positif (`Secure` diset padahal sebenarnya HTTP) →
+user logout paksa, bukan lubang keamanan; salah-negatif (tanpa `Secure` padahal
+HTTPS) → sama seperti perilaku SEBELUM perbaikan ini, bukan regresi baru.
 
 ---
 

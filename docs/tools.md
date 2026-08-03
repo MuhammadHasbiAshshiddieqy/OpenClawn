@@ -156,6 +156,13 @@ Tulis dokumen terstruktur ke workspace dalam format `docx`/`pptx`/`xlsx`/`md` (p
 - Output sukses: `{"path": "...", "format": "...", "ok": true}`
 - Output error: `{"error": "..."}` jika format tak dikenal, struktur content salah, path di luar workspace, atau library hilang
 
+**Mitigasi formula-injection XLSX (audit produksi 2026-07-30).** Cell `xlsx` (header
+maupun row) sebelumnya tidak meng-escape karakter pemicu formula (`=`, `+`, `-`, `@`,
+tab, CR) — risiko CSV/XLSX formula injection standar OWASP kalau konten berasal dari
+LLM/web (bukan cuma risiko teoretis). `_escape_formula_cell()` menambahkan prefix `'`
+untuk string yang diawali salah satu `_FORMULA_TRIGGER_CHARS`; nilai non-string
+(angka, bool) tidak disentuh.
+
 ### `PdfWriteTool`
 
 Tulis dokumen **PDF** ke workspace via `reportlab` (murni-Python). **Destruktif** → butuh approval. `reportlab` di-import lazy.
@@ -205,6 +212,18 @@ Cari di memori agent (`skills`, `memory_l1`, `memory_l2`) via LIKE. Read-only, t
 - Output: `{"table": "...", "results": [...], "count": N}`
 - Tabel di luar allowlist → error (tidak bisa baca `approval_log`/`routing_events` dari sini)
 
+**Isolasi per-role (audit produksi 2026-07-30).** SEBELUMNYA query di sini tidak
+difilter role sama sekali (`requires_approval=False` pula) — satu role bisa baca
+memori/skill privat role lain tanpa approval, melanggar isolasi yang sama dijaga
+skill visibility (`private`/`shared`/`inherited`). Sekarang query WAJIB `_role`
+(diinjeksi SISTEM oleh `agent_loop.py`, BUKAN dari argumen LLM — model tak boleh
+mengarang role sendiri; pola sama `todo_write`/`report_blocker`/`set_workdir`).
+Tanpa konteks role → **fail-closed**, `{"error": "konteks role tidak tersedia — pencarian ditolak"}`,
+bukan diam-diam mengembalikan lintas-role. Untuk tabel `skills`: hasil dibatasi ke
+skill role SENDIRI (visibility apa pun) + skill role LAIN hanya bila `shared`/`inherited`
+(pola sama `SkillDecayManager.get_active_skills`, `docs/memory.md`). Untuk
+`memory_l1`/`memory_l2`: dibatasi `role=?` saja (kedua tabel ini belum punya konsep visibility lintas-role).
+
 ### `JsonQueryTool`
 
 Ekstrak nilai dari JSON via dot-path (stdlib). Read-only, tanpa approval.
@@ -234,6 +253,19 @@ Cari teks/regex di dalam isi file pada workspace.
 - Input: `{"pattern": "<regex>", "path": "<subfolder opsional>"}`
 - Output: `{"matches": [{"file","line","text"}], "count": N, "truncated": bool}` (maks 100)
 - Output error: `{"error": "..."}` jika regex tidak valid
+
+**Mitigasi ReDoS (audit produksi 2026-08-02).** Pattern dari LLM dijalankan tanpa
+approval ke semua file workspace — pattern catastrophic-backtracking (mis. `(a|a)+$`)
+sebelumnya bisa macetkan proses tanpa batas (stdlib `re` tak punya timeout native,
+dan `asyncio.wait_for` tak bisa membatalkan regex CPU-bound yang sedang jalan).
+Dependency `regex` ditambahkan (CLAUDE.md §7 Pengecualian sadar #5, drop-in
+replacement `re` dengan parameter `timeout=` native — diverifikasi langsung sebelum
+dipilih, bukan diasumsikan dari dokumentasi library). Tiap baris dicocokkan dengan
+`compiled.search(line, timeout=GREP_LINE_TIMEOUT_SEC)`; pada `TimeoutError` PERTAMA,
+**seluruh pencarian dihentikan** (bukan cuma baris itu dilewati) — pattern yang
+lambat di satu baris akan lambat lagi di baris berikutnya, jadi melanjutkan scan
+tetap DoS agregat walau tiap panggilan individual dibatasi. Output pada kasus ini:
+`{"error": "Regex terlalu lambat pada satu baris (kemungkinan catastrophic backtracking) — pencarian dihentikan."}`.
 
 ---
 

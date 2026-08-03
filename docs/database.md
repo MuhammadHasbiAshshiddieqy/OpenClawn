@@ -77,6 +77,7 @@ Metadata TAMPILAN (judul, waktu, role) untuk sidebar riwayat chat single-agent (
 |---|---|---|
 | `session_id` | TEXT PK | Sesi yang direpresentasikan |
 | `tenant_id` | TEXT | Multi-Tenant (TODO.md § Prioritas 5), default `'default'`. **WIRED PENUH** — `ChatSessionStore` benar-benar filter per-tenant (lihat § Multi-Tenant) |
+| `owner_user_id` | TEXT | **[Audit produksi 2026-07-29]** User yang membuat sesi ini. `GET /chat-sessions*` & `DELETE` digerbangi kolom ini (`_can_access_owned_resource`, `docs/security.md`) agar user lain (di tenant sama) tak bisa baca/hapus chat orang lain — sebelumnya IDOR: siapa pun login bisa lihat/hapus chat siapa pun. `NULL` = tak tercatat (auth nonaktif, atau sesi dibuat sebelum fitur ini) — tetap terlihat semua secara graceful, bukan terkunci |
 | `role` | TEXT | Role aktif saat sesi dibuat (label kecil di item sidebar) |
 | `title` | TEXT | `NULL` sampai turn pertama selesai; di-generate LLM lokal dari potongan pesan pertama (lihat `infra/chat_sessions.py`) |
 | `created_at` | TIMESTAMP | |
@@ -167,6 +168,9 @@ Setiap keputusan routing dicatat sebelum LLM call dan diupdate setelah selesai.
 | `dim_needs_stream` | INTEGER | Dimensi 7: butuh stream? |
 | `dim_is_continuation` | INTEGER | Dimensi 8: lanjutan percakapan? |
 | `dim_soul_upgrade_hit` | INTEGER | Apakah soul upgrade_keyword cocok |
+| `dim_has_code_signal` | INTEGER | Multibahasa lapis 3 (`core/router.py::_has_code_signal`): sinyal struktural lintas-bahasa (code fence, URL, ≥2 simbol kode) — universal, menutup kelemahan keyword per-bahasa |
+| `dim_query_script` | TEXT | Multibahasa: script Unicode dominan query (`latin`/`cjk`/`arabic`/`cyrillic`/`devanagari`/`other`, dari `_detect_script`) |
+| `dim_language_bumped` | INTEGER | Multibahasa (opt-in, `routing_language_bump`): 1 bila threshold digeser naik tier karena `dim_query_script` di luar `routing_local_scripts` |
 | `complexity_score` | INTEGER | Skor numerik final |
 | `complexity_label` | TEXT | Label: trivial/simple/moderate/complex/critical |
 | `model_chosen` | TEXT | Model yang dipilih |
@@ -222,6 +226,7 @@ Semua permintaan approval tool destruktif.
 | `tool_input` | TEXT | Input dalam JSON |
 | `decision` | TEXT | `pending` / `approved` / `rejected` / `timeout` / `auto:trust_mode` / `proposal:pending` |
 | `approval_id` | TEXT | Human Approval Pipeline (§ Prioritas 2): ID approval di kolom SENDIRI — SEBELUMNYA hanya tersirat sebagai substring `pending:{id}` di `decision`, hilang begitu decision ditimpa jadi keputusan final. Query-able lintas status via `GET /approval/{approval_id}`. `NULL` untuk baris dari `auto_approve()`/`queue_proposal()` (tak ada manusia menunggu ID untuk di-resolve) |
+| `owner_user_id` | TEXT | **[Audit produksi 2026-07-29]** User yang memicu approval ini (dari `AgentConfig.user_id`, sebelumnya ada tapi tak pernah di-wire ke sini). `GET /approvals` & `POST /approve` digerbangi kolom ini (`docs/security.md` § `ApprovalGate`) agar user lain tak bisa lihat/putuskan approval milik orang lain — sebelumnya IDOR PALING SERIUS temuan minggu ini: siapa pun login (termasuk role rendah) bisa approve/reject aksi destruktif (`code_run` dst) milik user lain, melumpuhkan gate HITL sepenuhnya. `NULL` = tak tercatat (auth nonaktif) |
 | `tenant_id` | TEXT | Multi-Tenant (TODO.md § Prioritas 5), default `'default'`. Kolom pasif — belum di-filter di kode query |
 | `created_at` | TIMESTAMP | |
 
