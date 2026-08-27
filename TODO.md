@@ -612,6 +612,131 @@ konfirmasi eksplisit (pola sama item 7-8 di §4).
 
 ---
 
+## 9. Prioritas 9 (usulan, belum disetujui owner) — riset tren & market, 2026-08-03
+
+Empat arah dari riset web terarah (sumber di § Sumber riset tren, batch
+2026-08-03). Status: **catatan backlog, belum ada keputusan owner** — jangan
+dikerjakan tanpa konfirmasi eksplisit (pola sama §4 item 7-8 dan §8).
+
+Diurutkan berdasarkan **urgensi pasar × kesiapan fondasi kode**, bukan
+kemudahan implementasi.
+
+### 9.1 Tamper-evident audit trail (hash chaining) — PALING MENDESAK
+
+**Temuan riset yang mengubah prioritas:** EU AI Act Article 12 (kewajiban
+*automatic recording of events* untuk sistem AI risiko-tinggi) menjadi
+**enforceable 2 Agustus 2026 — KEMARIN**, dengan penalti hingga €15 juta atau
+3% omzet global. Article 12 menuntut log yang (a) otomatis tanpa intervensi
+operator, (b) mencakup seluruh lifetime sistem, (c) retensi minimal 6 bulan,
+(d) cukup untuk traceability penuh input→output→decision point.
+
+**Gap nyata di OpenCLAWN:** README menjual pilar **"Immutable Audit Evidence"**,
+tapi secara teknis klaim itu **belum benar**. `routing_events`, `approval_log`,
+dan `agent_events` hanyalah baris SQLite biasa — tak ada mekanisme apa pun yang
+membuat modifikasi/penghapusan retroaktif terdeteksi. Siapa pun dengan akses
+file DB bisa mengubah riwayat tanpa jejak. Ini bukan cuma kekurangan fitur:
+ini **klaim marketing yang belum didukung implementasi**, kelas masalah yang
+sama dengan temuan-temuan §2-§7 (dokumentasi/klaim ≠ kode nyata).
+
+**Arah kandidat (minimal, konsisten CLAUDE.md §8 "paling sederhana"):**
+tambah kolom `prev_hash` + `record_hash` ke tabel audit; `record_hash =
+SHA-256(canonical_json(baris ini) + prev_hash)`. Verifikasi = satu query
+scan yang mengecek rantai. **Bukan** blockchain (tak perlu konsensus/
+distribusi), **bukan** dependency baru (`hashlib` stdlib). Titik desain yang
+perlu diputuskan: (a) tabel mana yang dirantai — semua atau `routing_events` +
+`approval_log` saja; (b) apakah retensi 6 bulan perlu ditegakkan kode
+(pruning saat ini tak ada) atau cukup didokumentasikan sebagai tanggung jawab
+operator; (c) canonicalization JSON — RFC 8785 (JCS) adalah rujukan standar,
+tapi implementasi manual `json.dumps(sort_keys=True, separators=...)` mungkin
+cukup untuk kasus ini (perlu diverifikasi, jangan diasumsikan).
+
+**Konteks standardisasi (jangan dijadikan patokan buta):** ada Internet-Draft
+IETF `draft-sharif-agent-audit-trail-00` yang mendefinisikan format JSON audit
+agent + hash chaining SHA-256 per RFC 8785 + tanda tangan ECDSA opsional, dan
+memetakan diri ke EU AI Act, SOC 2, ISO/IEC 42001, PCI DSS v4.0.1. **Caveat
+penting:** ini *individual submission*, BUKAN dokumen working-group yang sudah
+diadopsi IETF — draft `draft-sharif-*` lain dari penulis yang sama ada banyak
+(identity framework, ATTP, AEBA, payment trust), dan draft ini kedaluwarsa
+29 September 2026. Perlakukan sebagai **sinyal arah & referensi struktur
+field**, bukan standar yang wajib diikuti. Yang mengikat secara hukum adalah
+EU AI Act-nya, bukan draft ini.
+
+### 9.2 Identitas agent sebagai first-class citizen (Non-Human Identity)
+
+**Validasi pasar kuat:** 91% organisasi sudah memakai AI agent tapi hanya 10%
+punya strategi matang mengelola identitas agent tersebut. NHI kini melampaui
+identitas manusia **144:1** di lingkungan cloud-native (naik dari 92:1 awal
+2024). Pasar NHI access management tumbuh >40% CAGR sampai 2030 — salah satu
+segmen keamanan enterprise tercepat; Palo Alto mengakuisisi CyberArk senilai
+$25 miliar (Februari 2026) untuk menyatukan PAM + machine identity.
+
+**Statistik yang paling relevan langsung:** **68% organisasi tidak bisa
+membedakan aktivitas AI agent dari aktivitas manusia** (survei Cloud Security
+Alliance). OpenCLAWN sudah menjawab sebagian ini — kolom `actor_is_agent`
+(selalu `1`) di `routing_events` & `approval_log`, plus `owner_user_id`
+(audit 2026-07-29) yang memisahkan "user mana yang memicu". Jadi fondasinya
+ADA, tapi masih **flag biner**, belum konsep identitas.
+
+**Arah kandidat:** identitas stabil per *(role + versi konfigurasi)* — bukan
+sekadar nama role — supaya pertanyaan audit "agent dengan konfigurasi mana
+yang melakukan X pada tanggal Y" bisa dijawab lintas sesi, bahkan setelah
+`soul.toml` berubah. Kandidat implementasi ringan: hash konten `soul.toml`
+efektif (termasuk `[policy]` & tool allow-list) disimpan per turn, sehingga
+perubahan permission agent terlihat di jejak audit. Ini melengkapi 9.1 —
+hash chaining membuktikan log tak diubah; identitas agent menjawab log itu
+*tentang siapa*.
+
+**Beda dari yang sudah ditolak (§4 item 8):** item itu soal *credential
+rotation/JIT scoping untuk API key MCP eksternal* — ditolak karena bukan
+target SaaS multi-tenant. Ini soal **identitas & atribusi untuk audit**,
+kebutuhan berbeda yang justru menguat karena 9.1 (EU AI Act butuh
+traceability, bukan cuma penyimpanan).
+
+### 9.3 Exporter OpenTelemetry GenAI — TUNGGU DULU, ada alasan teknis
+
+**Temuan riset yang MENGUBAH rekomendasi awal saya.** Dugaan awal: "OTel makin
+jadi lingua franca, tinggal bikin exporter". Fakta per pertengahan Juli 2026:
+**setiap atribut/span/metric `gen_ai.*` di registry resmi OpenTelemetry masih
+berstatus "Development" — TIDAK SATU PUN sudah "Stable".** Agent Spans dan
+konvensi MCP justru yang paling baru & paling belum settle.
+
+Adopsi nyata memang sudah ada (VS Code Copilot, OpenAI Codex, Claude Code
+[beta] mengemisi trace OTel GenAI; Datadog mendukung natif) — jadi arahnya
+benar. Tapi membangun exporter penuh sekarang berarti **menanggung churn
+spesifikasi** untuk standar yang penulisnya sendiri belum bekukan.
+
+**Rekomendasi jujur:** JANGAN bangun exporter penuh sekarang. Bila mau
+bergerak, batasi ke *adapter tipis* di atas `core/prometheus_metrics.py` yang
+sudah ada — satu titik pemetaan nama field, sehingga saat konvensi stabil
+(kemungkinan 2027) perubahan terbatas di satu file, bukan tersebar. Tinjau
+ulang status "Stable" sebelum investasi lebih besar. Dicatat di sini
+justru supaya **tidak** dikerjakan prematur karena terdengar modern.
+
+### 9.4 Dashboard penghematan biaya dari hybrid routing — effort terendah
+
+**Validasi pasar:** model routing memangkas biaya LLM nyata **40-85% tanpa
+penurunan kualitas terlihat**; riset ICLR 2025 mencapai penghematan 85% pada
+MT-Bench di 95% kualitas GPT-4, dengan model kuat hanya dipakai untuk 14%
+query. Untuk workload enterprise volume tinggi, hybrid + routing ke model
+kecil menghasilkan blended cost 50-85% lebih rendah.
+
+**Kesiapan fondasi: TERTINGGI dari keempat item ini.** Semua data mentah
+SUDAH tersimpan per turn di `routing_events` — `tokens_in`, `tokens_out`,
+`cost_usd`, `model_chosen`, `provider`, `complexity_label`. Yang belum ada
+hanyalah **agregasi + tampilan**: "berapa yang dihemat dibanding skenario
+semua-query-ke-cloud-tier-tertinggi?" Perhitungan counterfactual sederhana
+(tokens aktual × tarif model termahal di `MODELS`) minus biaya aktual.
+
+Tak butuh dependency baru, tak butuh perubahan skema, tak menyentuh jalur
+keamanan mana pun — kandidat paling murah dengan cerita ROI paling konkret
+(dan paling mudah didemonstrasikan ke calon pengguna). Titik desain: apakah
+angka counterfactual ditampilkan sebagai estimasi eksplisit (jujur: itu
+skenario hipotetis, bukan tagihan nyata yang dihindari) — penting supaya
+tidak jadi klaim yang menyesatkan seperti kasus "Immutable Audit Evidence"
+di 9.1.
+
+---
+
 ## Sumber riset tren (dicari 2026-07-27)
 
 - [The best AI agent frameworks in 2026](https://www.langchain.com/resources/ai-agent-frameworks)
@@ -627,3 +752,26 @@ konfirmasi eksplisit (pola sama item 7-8 di §4).
 - [LLM Model Routing in 2026: Cost-Quality Optimization](https://www.digitalapplied.com/blog/llm-model-routing-2026-cost-quality-optimization-engineering-guide)
 - [Self-Evolving Agents: Real Learning, or Memory in a Costume?](https://medium.com/@Micheal-Lanham/self-evolving-agents-real-learning-or-memory-in-a-costume-c397f46bbfce)
 - [Always-On Agents: A Survey of Persistent Memory, State, and Governance in LLM Agents](https://arxiv.org/pdf/2606.30306)
+
+## Sumber riset tren (dicari 2026-08-03, untuk §9)
+
+**Regulasi & audit trail (§9.1):**
+- [EU AI Act Article 12: What AI Teams Need to Log Before August 2026](https://aisecuritygateway.ai/blog/eu-ai-act-article-12-compliance-logging)
+- [Article 12 and the Logging Mandate: What the EU AI Act Actually Requires (FireTail)](https://www.firetail.ai/blog/article-12-and-the-logging-mandate-what-the-eu-ai-act-actually-requires)
+- [What the EU AI Act requires for AI agent logging (Help Net Security)](https://www.helpnetsecurity.com/2026/04/16/eu-ai-act-logging-requirements/)
+- [EU AI Act Articles 12 & 13: Decision Traceability & Audit Compliance](https://aigovernancedesk.com/eu-ai-act-articles-12-13-decision-traceability/)
+- [draft-sharif-agent-audit-trail-00 (IETF Internet-Draft — individual submission, BUKAN WG doc, expired 2026-09-29)](https://datatracker.ietf.org/doc/draft-sharif-agent-audit-trail/)
+
+**Non-Human Identity (§9.2):**
+- [AI Agents: The Next Wave Identity Dark Matter (The Hacker News)](https://thehackernews.com/2026/03/ai-agents-next-wave-identity-dark.html)
+- [AI agent identity security in 2026: are your controls keeping up? (NHI Mgmt Group)](https://nhimg.org/community/agentic-ai-and-nhis/ai-agent-identity-security-in-2026-are-your-controls-keeping-up/)
+- [Top non-human identity (NHI) management tools for enterprise (One Identity)](https://www.oneidentity.com/learn/top-non-human-identity-and-agentic-ai-security-tools.aspx)
+
+**OpenTelemetry GenAI (§9.3 — dasar rekomendasi "tunggu dulu"):**
+- [OpenTelemetry's GenAI semantic conventions are NOT stable yet — what actually shipped in 2026](https://dev.to/azena-ai/opentelemetrys-genai-semantic-conventions-are-not-stable-yet-heres-what-actually-shipped-in-2026-3mke)
+- [How OpenTelemetry Traces LLM Calls, Agent Reasoning, and MCP Tools (Greptime)](https://greptime.com/blogs/2026-05-09-opentelemetry-genai-semantic-conventions)
+- [OpenTelemetry for AI Agents: Observability, Tracing, and the GenAI Semantic Conventions (Zylos)](https://zylos.ai/research/2026-02-28-opentelemetry-ai-agent-observability/)
+
+**Routing cost-quality (§9.4):**
+- [Local LLMs vs Cloud APIs: 2026 Total Cost of Ownership Analysis (SitePoint)](https://www.sitepoint.com/local-llms-vs-cloud-api-cost-analysis-2026/)
+- [Hybrid AI Architecture: Routing Models to Reduce Cost Without Reducing Quality (Princeton IT)](https://princetonits.com/blog/artificial-intelligence-ai/hybrid-ai-architecture-part-2-routing-models-to-reduce-cost-without-reducing-quality/)
