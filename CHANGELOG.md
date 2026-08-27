@@ -7,6 +7,109 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Fixed — Audit lapisan security/: rate-limit bypass, IDOR di /answer, bypass skill scanner (TODO.md § Prioritas 10)
+
+Babak audit baru atas internal modul `security/` (beda dari audit endpoint
+`web/` sebelumnya). Semua temuan diverifikasi lewat reproduksi terisolasi —
+tiap bug dikonfirmasi GAGAL lebih dulu terhadap kode lama sebelum diperbaiki.
+
+- **`RateLimiter` tak efektif + bocor memori saat idle timeout aktif** — kunci
+  rate-limit sebelumnya nilai cookie sesi MENTAH, yang berubah TIAP REQUEST
+  saat `OPENCLAWN_IDLE_TIMEOUT_SEC` diisi (cookie di-refresh dengan `ts` baru
+  tiap request valid). Reproduksi: 10 request dengan cookie berbeda-beda untuk
+  user yang sama, `max_requests=3` → 10/10 lolos + 10 entry bocor permanen di
+  `_hits`. Diperbaiki: key = `user_id` (stabil), bukan cookie. `remaining()`
+  juga diperbaiki (defaultdict side-effect menambah entry hanya karena dibaca).
+- **`POST /answer` — IDOR, tanpa cek kepemilikan sama sekali.** Satu-satunya
+  endpoint session-scoped yang lolos dari audit kepemilikan sebelumnya (
+  `QuestionGate` tak menyimpan `owner_user_id`, beda dari `ApprovalGate`).
+  User mana pun bisa menjawab pertanyaan klarifikasi `ask_user` milik sesi
+  user lain. Diperbaiki: cek kepemilikan via `chat_sessions.owner_user_id`.
+- **`security/skill_scanner.py` — `open(path, mode="w")` (keyword) lolos
+  deteksi sepenuhnya**, padahal bentuk posisional `open(path, "w")` yang
+  IDENTIK terdeteksi. Diperbaiki: cek posisional dan keyword `mode=`.
+- **OIDC callback — perbandingan `state` bukan constant-time**, tak konsisten
+  dengan perbandingan token sejenis lain di codebase (sudah timing-safe).
+  Diperbaiki ke `hmac.compare_digest` untuk konsistensi.
+
+6 test regresi baru. **998 passed** (+6), ruff bersih, tanpa dependency baru.
+
+### Added — Sandbox proyek besar/kompleks: image kustom per-proyek (TODO.md § Prioritas 8.3)
+
+`code_run`/`shell_run` sebelumnya hanya punya `numpy`/`pandas` bawaan
+(`Dockerfile.sandbox`) — proyek nyata yang butuh paket lain tak bisa jalan
+sama sekali. Dari 3 opsi kandidat, **owner memilih opsi (a):** image sandbox
+kustom PER-PROYEK dengan dependency di-*bake* saat `docker build`, network
+HANYA terbuka di situ, TIDAK PERNAH saat `docker run` eksekusi kode
+sungguhan — invarian inti §1 (network isolation = pertahanan utama) tetap
+utuh.
+
+- `infra/sandbox_image.py` (baru) — `CURRENT_SANDBOX_IMAGE`/
+  `SessionSandboxImageStore`, pola sama `infra/workspace.py`: image proyek
+  aktif per-sesi bertahan lintas turn & lintas restart server.
+- `DockerSandbox.build_project_image()` (`tools/sandbox.py`) — image baru
+  `FROM SANDBOX_IMAGE` dasar di build context terisolasi (hanya
+  `requirements.txt` + `Dockerfile` ter-generate), `pip install`, cache via
+  `docker image inspect` (hash konten sebagai tag) — skip rebuild tanpa
+  network bila sudah pernah dibangun. Satu-satunya invocation Docker di
+  modul ini yang sengaja tanpa `--network none`.
+- Tool baru `build_sandbox_image` (`tools/sandbox_image.py`) —
+  `requires_approval=True` non-negotiable (ditambahkan ke
+  `_TRUST_MODE_EXEMPT` sekelas `code_run`). Validasi `requirements.txt`:
+  tolak baris opsi pip (`-e`/`--index-url`/`-r`/dst) yang bisa mengalihkan
+  sumber paket ke index tak tepercaya. Ditambahkan ke allow-list role
+  `dev`/`qa`/`data`.
+- `code_run`/`shell_run` otomatis memakai image proyek aktif
+  (`effective_sandbox_image()`) tanpa perubahan lain — sesi yang tak pernah
+  membangun tetap `SANDBOX_IMAGE` dasar.
+
+25 test baru (`tests/test_sandbox_image.py`, `tests/test_trust_mode.py`).
+**993 passed** (+25), ruff bersih, tanpa dependency baru. **Diverifikasi
+dengan Docker nyata** (bukan cuma mock): base image dibangun, `termcolor`
+diinstall via PyPI sungguhan, cache hit terbukti tanpa network (0.02s vs
+0.4s), `code_run` terbukti memakai image proyek lalu kembali ke image dasar
+saat context di-reset, dan baris `--index-url` berbahaya terbukti ditolak
+sebelum sampai ke `docker build`.
+
+### Added — Durable execution: approval yatim tetap terlihat & bisa dieksekusi lintas restart (TODO.md § Prioritas 8.1)
+
+`ApprovalGate._pending` murni in-memory — begitu server restart, baris
+`approval_log` yang masih `decision='pending'` tak punya `asyncio.Future`
+lagi untuk di-resolve, jadi tak terlihat di `GET /approvals` & tak bisa
+diputuskan lagi SELAMANYA walau barisnya tetap ada di DB. Gap ini
+dikonfirmasi lewat kode sebelum implementasi (bukan asumsi).
+
+**Keputusan desain (dipilih owner secara eksplisit):** orphan cleanup +
+late-execute — approval yang tersangkut dibuat terlihat lagi dan tool-nya
+BENAR-BENAR dijalankan mandiri saat user approve, BUKAN resume percakapan/
+tool-loop penuh (turn asli tetap hilang lintas restart; user perlu tanya
+ulang di chat untuk melanjutkan dari hasil eksekusi).
+
+- `ApprovalGate.pending_list_with_orphans()` (`security/approval.py`) —
+  `pending_list()` lama digabung baris `approval_log` `pending` tanpa
+  Future in-memory ("yatim", `orphan: true`). Dipakai `GET /approvals`.
+- `ApprovalGate.finalize_orphan(approval_id, decision)` — selesaikan
+  approval yatim, menolak bila approval ternyata masih live.
+  `_record_decision` sekaligus diperbaiki: hanya menulis entry
+  `audit_chain` bila `UPDATE` benar-benar mengenai baris (`rowcount > 0`) —
+  sebelumnya bisa menulis entry `approval.decided` palsu.
+- `core/late_execute.py` (baru) — `execute_orphan_approval()` menjalankan
+  tool dari approval yatim mandiri: role dari `chat_sessions`, `soul.toml`
+  dimuat segar, allow-list role (`_soul_allows_tool`, diekstrak module-level
+  dari `AgentLoop._tool_allowed`) & `PolicyEngine` **dievaluasi ulang**
+  (bukan dipercaya dari keputusan lama — policy bisa berubah selama
+  approval tersangkut), folder kerja sesi dipulihkan dari
+  `SessionWorkspaceStore`, lalu `tool.execute()` sungguhan. Decision ditulis
+  `"approved:late"` untuk membedakan dari approve lewat sesi live.
+- `POST /approve` (`web/main.py`) — jatuh ke jalur baru saat approval tak
+  live lagi, mengembalikan `executed`/`result` untuk eksekusi mandiri.
+
+14 test baru (`tests/test_durable_approval.py`,
+`tests/test_durable_approval_web.py`): visibilitas orphan, non-duplikasi
+untuk approval live, fail-closed sesi/role/policy, eksekusi nyata menulis
+file ke workspace sesi, endpoint end-to-end via `TestClient`. **968
+passed** (+14), ruff bersih, tanpa dependency baru.
+
 ### Fixed — Root-caused the eval harness "no such table: memory_l1" anomaly (TODO.md § Prioritas 8.4)
 
 Investigasi lanjutan atas anomali yang dicatat saat eval harness dibangun.

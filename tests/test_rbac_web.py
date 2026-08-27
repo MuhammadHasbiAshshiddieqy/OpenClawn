@@ -650,6 +650,92 @@ def test_admin_can_see_and_resolve_member_approval(client_oidc):
     assert resp.json()["ok"] is True
 
 
+# ── Audit 2026-08-27: POST /answer tanpa cek kepemilikan sama sekali —
+# satu-satunya endpoint session-scoped yang lolos dari audit 2026-07-29
+# (QuestionGate sendiri tak menyimpan owner_user_id, kepemilikan dicek via
+# chat_sessions.owner_user_id, sama tabel yang dipakai endpoint sesi lain). ──
+
+
+def _seed_pending_question(session_id: str, question: str = "lanjutkan?"):
+    """Masukkan PendingQuestion langsung ke `question_gate._pending` GLOBAL
+    milik app — pola sama `_seed_pending_approval` (Future butuh running loop,
+    dibungkus asyncio.run(), tak pernah di-await lintas test ini)."""
+    import asyncio
+
+    import web.main as web_main
+    from security.question import PendingQuestion
+
+    question_id = f"q-{session_id}"
+
+    async def _build() -> PendingQuestion:
+        return PendingQuestion(question_id=question_id, session_id=session_id, question=question)
+
+    web_main.question_gate._pending[question_id] = asyncio.run(_build())
+    return question_id
+
+
+def test_member_forbidden_from_answering_other_users_question(client_oidc):
+    """POST /answer dengan session_id milik user lain harus ditolak 403 —
+    SEBELUMNYA session_id APA PUN bisa dijawab siapa pun (injeksi jawaban ke
+    turn agent orang lain, kelas bug sama dengan approval hijack)."""
+    import asyncio
+
+    from infra.chat_sessions import ChatSessionStore
+
+    alice_id = asyncio.run(_bootstrap_admin_and_get_id())
+
+    import web.main as web_main
+
+    asyncio.run(
+        ChatSessionStore(web_main.db).ensure_created(
+            "s-alice-question", "pm", owner_user_id=str(alice_id)
+        )
+    )
+    question_id = _seed_pending_question("s-alice-question")
+
+    _login_via_oidc(client_oidc, "user-bob")
+    resp = client_oidc.post(
+        "/answer", data={"session_id": "s-alice-question", "answer": "jawaban jahat dari bob"}
+    )
+    assert resp.status_code == 403
+
+    # Pertanyaan tetap belum terjawab — bob tak berhasil resolve.
+    pending = web_main.question_gate._pending[question_id]
+    assert not pending.future.done()
+
+
+def test_member_can_still_answer_own_question(client_oidc):
+    """Isolasi kepemilikan tak berarti user tak bisa jawab pertanyaan
+    klarifikasi di SESI MILIKNYA SENDIRI."""
+    import asyncio
+
+    from infra.chat_sessions import ChatSessionStore
+    from infra.users import UserStore
+
+    asyncio.run(_bootstrap_admin_and_get_id())
+    _login_via_oidc(client_oidc, "user-bob")
+
+    import web.main as web_main
+
+    async def _seed_bob_session():
+        bob = await UserStore(web_main.db).get_by_subject("user-bob")
+        await ChatSessionStore(web_main.db).ensure_created(
+            "s-bob-question", "pm", owner_user_id=str(bob.id)
+        )
+
+    asyncio.run(_seed_bob_session())
+    question_id = _seed_pending_question("s-bob-question")
+
+    resp = client_oidc.post(
+        "/answer", data={"session_id": "s-bob-question", "answer": "jawaban bob sendiri"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    pending = web_main.question_gate._pending[question_id]
+    assert pending.future.done()
+    assert pending.future.result() == "jawaban bob sendiri"
+
+
 # ── Audit produksi 2026-07-30: GET /workspace/download tanpa cek kepemilikan
 # saat session_id diberikan — user manapun bisa unduh file sesi orang lain. ──
 

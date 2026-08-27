@@ -189,9 +189,9 @@ output_type = "PMOutput"
 | Role | `prefer_local` | Fokus | Akses tool |
 |---|---|---|---|
 | **pm** | `true` | Breakdown, prioritas, acceptance criteria | baca + tulis file (`file_write`/`doc_write`/`pdf_write`), web_search/fetch (tanpa eksekusi), `mcp__connector__*` |
-| **qa** | `false` | Review, test case, edge case | baca + tulis (`file_write`/`doc_write`/`pdf_write`), shell_run/code_run (sandboxed), `mcp__connector__*` |
-| **dev** | `false` | Implementasi, fix, refactor | set penuh: baca/tulis/edit/patch (`file_write`/`doc_write`/`pdf_write`), shell_run/code_run, http_request, `mcp__connector__*` |
-| **data** | `false` | Analisis, eksplorasi, statistik, insight, modeling dasar | baca + db_query (SELECT) + code_run (hitung statistik/modeling di sandbox) + `mcp__connector__*`; **tanpa tulis file** |
+| **qa** | `false` | Review, test case, edge case | baca + tulis (`file_write`/`doc_write`/`pdf_write`), shell_run/code_run/**build_sandbox_image** (sandboxed), `mcp__connector__*` |
+| **dev** | `false` | Implementasi, fix, refactor | set penuh: baca/tulis/edit/patch (`file_write`/`doc_write`/`pdf_write`), shell_run/code_run/**build_sandbox_image**, http_request, `mcp__connector__*` |
+| **data** | `false` | Analisis, eksplorasi, statistik, insight, modeling dasar | baca + db_query (SELECT) + code_run/**build_sandbox_image** (hitung statistik/modeling di sandbox) + `mcp__connector__*`; **tanpa tulis file** |
 | **security** | `true` | Audit keamanan & privasi (advisory) | **read-only mutlak**: glob/grep/list_dir/file_read/pdf_read/db_query(SELECT)/json_query/memory_search; tanpa tulis/eksekusi/network/MCP |
 
 **`prefer_local = true`** (PM, security): cenderung tetap di Ollama untuk query biasa, naik ke cloud hanya jika kata kunci upgrade cocok atau skor tinggi. Untuk **security**, ini juga pilihan privasi — data sensitif lebih baik tidak keluar box bila tidak perlu. QA/Dev/Data tidak prefer local — lebih agresif naik ke cloud untuk tugas berat.

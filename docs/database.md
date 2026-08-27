@@ -69,6 +69,18 @@ Folder kerja aktif untuk satu sesi chat, bisa diubah agent sendiri lewat tool `s
 
 ---
 
+### `session_sandbox_image` — Image Sandbox Proyek Aktif Per-Sesi
+
+**[§ Prioritas 8.3, sandbox proyek besar/kompleks]** Image Docker khusus proyek (dependency Python di-*bake* saat `docker build`) yang aktif untuk satu sesi chat, ditulis tool `build_sandbox_image` saat sukses. Satu baris per sesi (UPSERT) — state "saat ini", sama pola `session_workspace` di atas. Dibaca `AgentLoop.run()` di awal turn → `CURRENT_SANDBOX_IMAGE` (ContextVar, `infra/sandbox_image.py`) → `DockerSandbox._base_docker_args` (`tools/sandbox.py`) memakainya untuk `code_run`/`shell_run` SISA sesi, lintas turn maupun restart server.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `session_id` | TEXT PK | Sesi pemilik image aktif |
+| `image_tag` | TEXT | `openclawn-sandbox-proj:<hash12>` — hash SHA-256 (12 karakter) dari konten `requirements.txt` yang dipakai membangunnya, dipakai juga sebagai cache key (`docker image inspect` sebelum rebuild) |
+| `updated_at` | TIMESTAMP | |
+
+---
+
 ### `chat_sessions` — Metadata Sidebar Riwayat Chat
 
 Metadata TAMPILAN (judul, waktu, role) untuk sidebar riwayat chat single-agent (§ user report: "chat selalu ke-reset", tak ada cara buka chat baru/lanjutkan/hapus riwayat). Terpisah dari `session_turns` (transkrip per-giliran) — tabel ini murni untuk daftar di sidebar, bukan isi percakapan.

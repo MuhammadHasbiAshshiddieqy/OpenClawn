@@ -159,6 +159,7 @@ Inisialisasi semua komponen: LLM client, memory manager, skill decay, router, au
 Pipeline utama per turn. Menghasilkan `AgentEvent` (`token` + `status`) ke Web UI via SSE. Status di-emit di titik kunci: `routing` (setelah model dipilih), `thinking` (sebelum tiap stream LLM), `tool` (sebelum eksekusi tool), `fallback` (saat fallback chain aktif). Urutan:
 
 0. **Resolve & set workspace root** — prioritas: (a) `AgentConfig.workspace_override` dari form UI bila diisi eksplisit di request ini; (b) kalau kosong & `persist_history=True`, folder tersimpan di `session_workspace` (`SessionWorkspaceStore.get`) dari panggilan tool `set_workdir` di turn SEBELUMNYA (§ user request "pindah direktori dinamis lewat chat" — `AgentLoop` dibuat baru tiap request, jadi perpindahan folder harus dimuat balik dari DB, bukan cuma ContextVar in-memory yang sudah reset); (c) default `CONFIG.workspace_root`. Hasilnya di-set ke `CURRENT_WORKSPACE_ROOT` (ContextVar), di-reset di `finally` agar tak bocor ke request lain.
+0b. **Resolve & set sandbox image proyek** *(§ Prioritas 8.3, sandbox proyek besar/kompleks)* — bila `persist_history=True`, muat `session_sandbox_image` (`SessionSandboxImageStore.get`, `infra/sandbox_image.py`) — image yang ditulis tool `build_sandbox_image` di turn manapun sebelumnya untuk sesi ini. Bila ada, di-set ke `CURRENT_SANDBOX_IMAGE` (ContextVar), sama pola langkah 0 — `code_run`/`shell_run` (`tools/sandbox.py::DockerSandbox._base_docker_args`) otomatis memakainya untuk SISA turn ini, tanpa model perlu memanggil tool lain. `None` (sesi belum pernah membangun image) → ContextVar tetap `None`, `code_run`/`shell_run` jatuh ke `SANDBOX_IMAGE` dasar (perilaku lama, tak berubah). Direset di `finally` yang sama dengan langkah 0.
 1. **Shield scan** — tolak input mencurigakan sebelum masuk pipeline
 2. **Correction check** — deteksi apakah turn sebelumnya dikoreksi user (audit feedback)
 2b. **Load session history** — bila `persist_history` & `self.history` kosong, muat giliran sesi ini dari `session_turns` (`MemoryManager.load_turns`, cap `session_history_turns`) → agent ingat percakapan lintas-request (§ user report). Multi-agent skip (kelola transkrip sendiri).
@@ -196,7 +197,10 @@ Validasi ringan input vs `input_schema` (required fields ada & non-kosong). Retu
 Ubah dict hasil tool jadi teks jelas untuk model: `ERROR: ...` bila ada error, `SUCCESS: file written to ... Do NOT write it again` untuk tool `_FILE_WRITE_TOOLS` yang sukses (sinyal terminal agar model lokal tak mengulang), `SUCCESS: k=v...` untuk ok lain, `str(result)` sebagai fallback. Dipakai `_run_tool_loop` saat menulis hasil ke `messages`.
 
 **`_tool_allowed(name) → bool`** *(private)*  
-Cek apakah tool ada di daftar `soul.toml[tools][allowed]` untuk role aktif.
+Cek apakah tool ada di daftar `soul.toml[tools][allowed]` untuk role aktif — delegasi ke `_soul_allows_tool(self._soul, name)` (lihat di bawah).
+
+**`_soul_allows_tool(soul, name) → bool`** *(module-level)*  
+**[§ Durable execution, TODO.md Prioritas 8.1]** Logika cek allow-list (termasuk wildcard `mcp__*`/`mcp__<server>__*`) DIEKSTRAK dari `_tool_allowed` jadi fungsi murni atas satu `soul` dict yang sudah dimuat, tanpa perlu instance `AgentLoop` — dipakai `core/late_execute.py` untuk memvalidasi ulang izin role saat mengeksekusi approval yatim (`soul.toml` role itu dimuat segar dari `chat_sessions.role`, bukan dari instance `AgentLoop` yang sudah tak ada). Satu sumber kebenaran keamanan, bukan diduplikasi di dua tempat.
 
 **`_tools_for_role() → list`** *(private)*  
 Kembalikan schema hanya untuk tool yang diizinkan role ini (hemat token).

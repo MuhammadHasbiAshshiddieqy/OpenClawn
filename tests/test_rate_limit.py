@@ -61,3 +61,13 @@ def test_remaining_never_negative():
     limiter.allow("session-a")
     limiter.allow("session-a")  # ditolak
     assert limiter.remaining("session-a") == 0
+
+
+def test_remaining_is_read_only_does_not_create_key():
+    """Audit 2026-08-27: `remaining()` untuk key yang BELUM PERNAH `allow()`
+    tidak boleh diam-diam menambah entry ke `_hits` (bug ditemukan berpasangan
+    dengan key rate-limit tak-stabil di web/main.py — method read-only harus
+    benar-benar read-only, jangan bergantung pada side-effect defaultdict)."""
+    limiter = RateLimiter(max_requests=3, window_sec=60)
+    assert limiter.remaining("never-seen-key") == 3
+    assert "never-seen-key" not in limiter._hits

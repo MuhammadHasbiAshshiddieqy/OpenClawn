@@ -55,7 +55,7 @@ web/main.py          → web.md
 ├── ConversationOrchestrator → core.md (conversation: pipeline/debate/orchestrator)
 ├── AutopilotScheduler → core.md (autopilot — scheduled, proposal-gated)
 │
-├── TOOL_REGISTRY (27 tools)
+├── TOOL_REGISTRY (28 tools)
 │   ├── file_ops · read_many · search · shell · code (+ DockerSandbox) → tools.md
 │   ├── web (web_fetch/web_search/http_request + SSRF guard) → tools.md
 │   ├── git · document (pdf/doc) · data · todo · report_blocker → tools.md

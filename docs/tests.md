@@ -288,6 +288,7 @@ Test untuk `security/skill_scanner.py` (lapis scanner impor, terinspirasi skills
 | `test_credential_path_flagged_or_blocked` | `~/.ssh/id_rsa` → minimal `flag` |
 | `test_non_python_code_block_not_crash` | Blok bukan-Python → AST skip diam, tak crash |
 | `test_open_write_is_medium_not_reject_alone` | `open(...,'w')` sendiri = medium, tak auto-reject |
+| `test_open_write_via_keyword_mode_also_detected` | **[Audit 2026-08-27]** `open(path, mode="w")` (keyword) skor SAMA dengan bentuk posisional — sebelumnya lolos tanpa terdeteksi sama sekali |
 | `test_never_raises_on_garbage` | Input biner/sampah → tak pernah raise |
 | `test_import_rejects_high_risk_skill` | Integrasi: skill `exec()` tak masuk DB sama sekali |
 | `test_import_clean_skill_succeeds` | Skill bersih tetap masuk draft (jalur normal utuh) |
@@ -662,7 +663,7 @@ Test untuk `tools/`.
 
 | Test | Yang Diverifikasi |
 |---|---|
-| `test_registry_has_all_27_tools` | Semua 27 tool terdaftar di registry |
+| `test_registry_has_all_28_tools` | Semua 28 tool terdaftar di registry |
 | `test_file_read_returns_content` | `FileReadTool` baca file yang ada |
 | `test_file_read_not_found` | File tidak ada → error dict (tidak crash) |
 | `test_file_write_creates_file` | `FileWriteTool` tulis konten |
@@ -982,6 +983,7 @@ Test end-to-end untuk `auth_and_csrf_middleware` di `web/main.py` (bukan unit
 | `test_csrf_missing_token_rejected_after_login` / `test_csrf_valid_token_allows_post` | POST form tanpa token CSRF ditolak (403); dengan token cocok diterima |
 | `test_csrf_exempt_paths_bypass_check` | `/answer` (endpoint fetch JS) tak butuh token CSRF |
 | `test_logout_clears_session` / `test_logout_without_csrf_rejected` | Logout hapus cookie via form ber-CSRF; tanpa CSRF ditolak sama seperti form lain |
+| `test_rate_limit_key_stable_across_idle_cookie_refresh` | **[Audit 2026-08-27]** Kunci `RateLimiter` (`fixture client_auth_idle`) tetap `user:{id}` yang SAMA meski cookie sesi berbeda (mensimulasikan refresh idle-timeout) — sebelumnya kunci ikut berubah tiap cookie, membuat rate limit tak efektif untuk user terautentikasi |
 
 ---
 
@@ -1071,6 +1073,8 @@ config sistem (`/settings`, `/skills/import`, `/mcp/*`, `/router`,
 | `test_no_auth_settings_accessible_without_rbac` | Auth nonaktif sepenuhnya → RBAC tak berlaku, `/settings` tetap 200 (perilaku lama) |
 | `test_member_forbidden_from_audit_verify` | Member GET `/audit/verify` → 403 (§ Prioritas 9.1) |
 | `test_member_forbidden_from_audit_anchor` | Member POST `/audit/anchor` → 403 (§ Prioritas 9.1 follow-up) |
+| `test_member_forbidden_from_answering_other_users_question` | **[Audit 2026-08-27]** `POST /answer` dengan `session_id` milik user lain → 403, pertanyaan tetap belum terjawab — SEBELUMNYA `session_id` APA PUN bisa dijawab siapa pun (injeksi jawaban ke turn agent orang lain) |
+| `test_member_can_still_answer_own_question` | Isolasi kepemilikan `/answer` tak menghalangi user menjawab pertanyaan di SESI MILIKNYA SENDIRI |
 
 > **Catatan:** tabel di atas belum mencakup semua test di file ini (mis. `test_member_forbidden_from_calibration_apply/revert`, `test_member_forbidden_from_skills_set_visibility`, `test_member_forbidden_from_autopilots_*`, dan test kepemilikan chat-session/approval) — gap dokumentasi dari sesi sebelumnya, dicatat di sini agar tak disalahartikan sebagai test yang hilang, bukan cuma belum terdaftar.
 
@@ -1109,6 +1113,7 @@ Test untuk `security/rate_limit.py` (`RateLimiter`) — sliding window in-memory
 | `test_window_expiry_allows_again` | Hit di luar window tak lagi dihitung |
 | `test_rejected_hit_not_counted` | Request yang DITOLAK tak ikut disimpan (retry setelah window lewat tak terhambat) |
 | `test_remaining_reflects_usage` / `test_remaining_never_negative` | `remaining()` akurat, tak pernah negatif |
+| `test_remaining_is_read_only_does_not_create_key` | **[Audit 2026-08-27]** `remaining()` untuk key yang belum pernah `allow()` TIDAK diam-diam menambah entry ke `_hits` (bug `defaultdict` side-effect) |
 
 ---
 
@@ -1189,6 +1194,7 @@ Test trust mode per-sesi (§ user request otonomi: kurangi approval yang tak per
 | `test_shell_run_no_longer_requires_approval` | `ShellRunTool.requires_approval` sekarang `False` (sandbox = pertahanan, bukan approval) |
 | `test_code_run_still_requires_approval` | Kontrol negatif: `CodeRunTool.requires_approval` tetap `True` |
 | `test_code_run_is_trust_mode_exempt` | `"code_run"` ada di `_TRUST_MODE_EXEMPT` |
+| `test_build_sandbox_image_is_trust_mode_exempt` | **[§ Prioritas 8.3]** `build_sandbox_image` sekelas `code_run`: `requires_approval=True` & ada di `_TRUST_MODE_EXEMPT` — `docker build`-nya sendiri membuka network sementara |
 | `test_trust_mode_bypasses_approval_and_executes_for_real` | Trust mode aktif → `file_write` benar-benar menulis file (bukan cuma diloloskan), lewat `auto_approve`; tercatat `decision="auto:trust_mode"` |
 | `test_trust_mode_never_bypasses_code_run` | `code_run` + `trust_mode=True` + `bypass_approval=True` tetap lewat `approval.request()` normal, `auto_approve` tak pernah dipanggil |
 | `test_bypass_approval_false_uses_normal_request` | `bypass_approval=False` → jalur `request()` biasa, `auto_approve` tak dipanggil |
@@ -1263,6 +1269,39 @@ Test pindah direktori kerja dinamis lewat chat (§ user request: "pindah direkto
 
 ---
 
+### `tests/test_sandbox_image.py`
+
+Sandbox proyek besar/kompleks (§ Prioritas 8.3 — keputusan owner: opsi (a), image kustom per-proyek dengan dependency di-*bake* saat `docker build`, network hanya terbuka di situ). Docker di-mock di seluruh file (pola sama `test_tools.py`) — TIDAK ada network/build sungguhan di suite pytest; verifikasi end-to-end sungguhan (base image nyata + `termcolor` beneran ter-install + cache hit tanpa network + `code_run` otomatis memakai image proyek) dilakukan manual di luar pytest, dicatat di TODO.md § Prioritas 8.3.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_session_sandbox_image_get_set_roundtrip` | `SessionSandboxImageStore.set`/`get` roundtrip |
+| `test_session_sandbox_image_upsert_overwrites` | `set()` kedua menimpa nilai lama (UPSERT) |
+| `test_session_sandbox_image_isolated_per_session` | Image sesi A tak bocor ke sesi B |
+| `test_effective_sandbox_image_falls_back_to_default` | `CURRENT_SANDBOX_IMAGE` kosong → `effective_sandbox_image` kembalikan default (`SANDBOX_IMAGE`) |
+| `test_effective_sandbox_image_uses_override_when_set` | ContextVar diisi → override menang atas default |
+| `test_validate_requirements_rejects_empty` | `requirements.txt` kosong/whitespace → error |
+| `test_validate_requirements_accepts_plain_packages` | Baris paket biasa (`pkg==1.0`) + komentar + baris kosong → lolos |
+| `test_validate_requirements_rejects_pip_option_lines` | Baris diawali `-` (`-e`, `--index-url`, `-i`, `-r`, `--extra-index-url`) → ditolak, mencegah pengalihan sumber paket |
+| `test_validate_requirements_rejects_too_many_lines` | >200 baris → error |
+| `test_validate_requirements_rejects_too_large` | >20.000 byte → error |
+| `test_build_project_image_cache_hit_skips_build_no_network` | Image hash sama sudah ada (`docker image inspect` sukses) → TIDAK ada panggilan `docker build` kedua |
+| `test_build_project_image_cache_miss_builds_without_network_none` | Cache miss → `docker build` dipanggil, argv TIDAK mengandung `--network none` (satu-satunya invocation Docker yang network-nya sengaja terbuka) |
+| `test_build_project_image_same_content_yields_same_tag` | Konten identik → tag sama (deterministik, cache-able); konten beda → tag beda |
+| `test_build_project_image_build_failure_returns_error_dict` | `docker build` gagal (returncode≠0) → dict `{"ok": False, "log_tail": ...}`, bukan exception |
+| `test_build_project_image_timeout_kills_process` | Timeout → `proc.kill()` dipanggil (build tak dibiarkan menggantung di background) |
+| `test_build_project_image_fails_safe_when_docker_absent` | Docker tak terpasang → `SandboxUnavailable`, bukan fallback build di host |
+| `test_build_sandbox_image_tool_missing_file_errors` | `requirements.txt` tak ada di workspace → error, `docker` tak dipanggil |
+| `test_build_sandbox_image_tool_rejects_invalid_requirements_without_calling_docker` | Validasi gagal → `sandbox.build_project_image` TIDAK dipanggil sama sekali |
+| `test_build_sandbox_image_tool_success_persists_image_for_session` | Sukses → `session_sandbox_image` tertulis untuk `_session_id` yang diberikan |
+| `test_build_sandbox_image_tool_docker_unavailable_returns_error_not_raise` | `SandboxUnavailable` dari sandbox → dikembalikan sebagai dict error, tak menjalar ke caller |
+| `test_build_sandbox_image_tool_missing_session_id_still_builds_but_does_not_persist` | `_session_id` absen (panggilan di luar `AgentLoop`) → build tetap jalan, TIDAK menulis ke DB |
+| `test_sandbox_image_persists_to_next_agentloop` | AgentLoop BARU turn 2 (sesi sama, image dibangun turn 1) → `CURRENT_SANDBOX_IMAGE` otomatis terisi tanpa tool lain dipanggil lagi |
+| `test_no_sandbox_image_leaves_contextvar_unset` | Sesi yang tak pernah `build_sandbox_image` → ContextVar tetap `None` sepanjang turn |
+| `test_build_sandbox_image_registered_and_requires_approval` | Terdaftar di `TOOL_REGISTRY`, `requires_approval=True`, ada di `_TRUST_MODE_EXEMPT` |
+
+---
+
 ### `tests/test_chat_sessions.py`
 
 Test sidebar riwayat chat (§ user report: chat selalu ke-reset, tak ada cara buka chat baru/lanjutkan/hapus riwayat). `_post_turn` diuji LANGSUNG (`await agent._post_turn(...)`), bukan lewat `agent.run()` penuh — ia dijadwalkan sebagai background task terpisah (`asyncio.create_task`), pola sama `test_memory_wiring.py`.
@@ -1316,6 +1355,38 @@ Test untuk `GET /approval/{approval_id}` (§ Human Approval Pipeline, TODO.md §
 | `test_approval_404_for_unknown_id` | `approval_id` tak pernah tercatat → `404` |
 | `test_approval_returns_pending_status_before_resolve` | Setelah `resolve()` → `decision` terbaca "approved" via endpoint, `tool_input` ter-decode dari JSON |
 | `test_approval_status_traceable_through_full_lifecycle` | Regresi inti: `approval_id` tetap query-able setelah `decision` berubah pending→rejected (sebelumnya hilang, hanya tersirat di substring `decision` yang ditimpa) |
+
+---
+
+### `tests/test_durable_approval.py`
+
+Test untuk `ApprovalGate.pending_list_with_orphans`/`finalize_orphan` dan `core/late_execute.py::execute_orphan_approval` (§ Durable execution, TODO.md § Prioritas 8.1). "Restart" disimulasikan dengan membuat `ApprovalGate` BARU (`_pending` kosong) di atas DB yang sudah punya baris `pending` — persis kondisi proses baru membaca `approval_log` peninggalan proses lama.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_orphan_visible_in_pending_list_with_orphans` | Baris pending tanpa Future in-memory tak muncul di `pending_list()` lama, TAPI muncul (`orphan: True`) di `pending_list_with_orphans()` |
+| `test_live_pending_not_duplicated_as_orphan` | Approval yang MASIH punya Future hidup tidak dobel muncul sebagai orphan |
+| `test_orphan_respects_owner_filter` | `owner_user_id` tetap menggerbangi baris orphan, sama seperti baris live |
+| `test_finalize_orphan_rejects_when_future_still_live` | `finalize_orphan` menolak (`False`) approval yang masih live — caller harus pakai `resolve()` biasa |
+| `test_finalize_orphan_false_when_already_decided` | Panggilan kedua ke `finalize_orphan` untuk approval yang sama → `False`, TIDAK menulis entry `audit_chain` kedua (`_record_decision` cek `cursor.rowcount`) |
+| `test_execute_orphan_approval_happy_path_runs_tool` | Tool (`file_write`) BENAR-BENAR dieksekusi mandiri, file tertulis ke folder kerja sesi (dipulihkan dari `session_workspace`), `decision` jadi `"approved:late"` |
+| `test_execute_orphan_approval_unknown_session_fails_closed` | `chat_sessions` tak punya baris untuk `session_id` approval itu → ditolak fail-closed (`rejected`), tool TIDAK dijalankan |
+| `test_execute_orphan_approval_tool_not_allowed_for_role_fails_closed` | Role (`pm`) yang soul.toml-nya tak mengizinkan tool (`code_run`) → ditolak, walau approval sebelumnya sempat lolos `requires_approval` |
+| `test_execute_orphan_approval_reevaluates_policy_deny` | `PolicyEngine` dievaluasi ULANG (bukan dipercaya dari keputusan lama) — deny → tool TIDAK dijalankan (file tak tertulis) |
+| `test_execute_orphan_approval_does_not_double_execute_live_future` | Approval yang masih live (Future hidup) ditolak jalur ini — mencegah double-execute lewat dua jalur berbeda |
+
+---
+
+### `tests/test_durable_approval_web.py`
+
+Pelengkap endpoint-level `tests/test_durable_approval.py` — `GET /approvals` & `POST /approve` lewat `TestClient` sungguhan, baris orphan disuntik langsung ke DB (bukan lewat `web_main.approval_gate`, yang tak pernah diisi manual — persis simulasi restart).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_get_approvals_shows_orphan_after_simulated_restart` | `GET /approvals` menampilkan baris orphan (`orphan: true`) walau `approval_gate` in-memory kosong |
+| `test_approve_orphan_actually_executes_tool` | `POST /approve` (`decision=approve`) pada approval orphan benar-benar menjalankan tool & mengembalikan `result` di response; `GET /approval/{id}` lalu menunjukkan `"approved:late"` |
+| `test_reject_orphan_marks_rejected_without_executing` | `POST /approve` (`decision=reject`) pada approval orphan → `rejected`, tool TIDAK dijalankan |
+| `test_approve_unknown_approval_id_returns_error` | `approval_id` yang tak ada sama sekali → `ok: false`, bukan crash |
 
 ---
 

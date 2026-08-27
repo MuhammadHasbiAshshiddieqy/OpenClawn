@@ -84,6 +84,17 @@ def test_open_write_is_medium_not_reject_alone():
     assert not r.blocked
 
 
+def test_open_write_via_keyword_mode_also_detected():
+    """Audit 2026-08-27: `open(path, mode='w')` (keyword, bukan posisional)
+    SEBELUMNYA lolos tanpa terdeteksi sama sekali — bypass trivial dari sinyal
+    yang justru jadi alasan AST scan ada. Harus sama skor dengan bentuk
+    posisional `open(path, 'w')`."""
+    positional = scan_skill("writer-pos", "```python\nopen('out.txt', 'w')\n```")
+    keyword = scan_skill("writer-kw", "```python\nopen('out.txt', mode='w')\n```")
+    assert keyword.score == positional.score > 0
+    assert "ast call:open(write)" in keyword.findings
+
+
 def test_never_raises_on_garbage():
     """Input sampah/biner → tak pernah raise, fail-safe."""
     r = scan_skill("x", "\x00\xff binary ‮ garbage ```python ```")

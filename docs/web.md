@@ -36,7 +36,12 @@ ditandatangani `CONFIG.session_secret` (BUKAN `auth_token` langsung, lihat
    `/converse/stop`, `/answer`, `/approve`) di-exempt — dilindungi cookie auth +
    `SameSite=lax`, bukan form CSRF biasa.
 3. `/chat/stream` & `/converse/stream` dibatasi `RateLimiter` (default 20/60 detik per
-   sesi) → 429 JSON + header `Retry-After` bila terlampaui.
+   `user_id` terautentikasi, fallback IP bila auth nonaktif/user tak dikenal) → 429 JSON
+   + header `Retry-After` bila terlampaui. **[Audit 2026-08-27]** kunci sebelumnya
+   nilai cookie sesi MENTAH — salah bila idle timeout aktif (cookie di-refresh tiap
+   request, lihat poin 1), membuat rate limit sama sekali tak efektif untuk user
+   terautentikasi & `RateLimiter._hits` bocor tanpa batas. Detail lengkap:
+   `docs/security.md` § `security/rate_limit.py`.
 
 ### Exception handlers
 
@@ -95,7 +100,9 @@ generate `state`+`nonce`, simpan di cookie sementara `openclawn_oidc_state`
 (berisi `{state}:{next}`) + `openclawn_oidc_nonce` (httponly, umur 10 menit),
 redirect ke `authorization_endpoint` provider (dari discovery document).
 
-`GET /auth/callback?code=...&state=...` → validasi `state` cocok dengan cookie,
+`GET /auth/callback?code=...&state=...` → validasi `state` cocok dengan cookie
+(`hmac.compare_digest`, bukan `!=` — audit 2026-08-27, konsisten dengan
+perbandingan CSRF/login token lain di codebase ini yang sengaja timing-safe),
 tukar `code` → `id_token` (network), verifikasi signature+klaim (JWKS provider).
 Gagal di titik manapun → redirect `/login?error=true` (fail-closed, BUKAN
 fail-open). Sukses → set cookie sesi SAMA PERSIS seperti `POST /login` biasa
@@ -231,7 +238,16 @@ ini (lihat catatan di bawah untuk bagaimana chat sesungguhnya menampilkan approv
 (atau tanpa owner tercatat) yang dikembalikan — SEBELUMNYA memanggil ini tanpa
 `session_id` mengembalikan approval SEMUA user, termasuk `tool_input` mentah
 (path/command/code) milik user lain. Admin (atau auth nonaktif) tetap lihat semua.
-Difilter via `ApprovalGate.pending_list(session_id, owner_user_id=...)` (`docs/security.md`).
+Difilter via `ApprovalGate.pending_list_with_orphans(session_id, owner_user_id=...)`
+(`docs/security.md`).
+
+**[§ Durable execution, TODO.md Prioritas 8.1]** Sejak Prioritas 8.1, response juga
+menyertakan approval yang dibuat SEBELUM restart server terakhir ("yatim" — tak punya
+`asyncio.Future` in-memory lagi, ditandai `orphan: true`). Sebelumnya `AgentLoop`
+dibuat baru tiap request web sehingga approval pending yang belum sempat diputuskan
+saat server mati jadi tak terlihat SELAMANYA di endpoint ini walau barisnya tetap
+`pending` di `approval_log` — lihat `POST /approve` di bawah untuk bagaimana
+approval yatim ini tetap bisa diputuskan (termasuk dieksekusi mandiri bila approve).
 
 Query params:
 - `session_id` (opsional) — filter per sesi
@@ -245,6 +261,13 @@ Response:
       "session_id": "...",
       "tool_name": "code_run",
       "tool_input": {"code": "..."}
+    },
+    {
+      "approval_id": "xyz789",
+      "session_id": "...",
+      "tool_name": "file_write",
+      "tool_input": {"path": "..."},
+      "orphan": true
     }
   ]
 }
@@ -350,7 +373,7 @@ Form data:
 - `approval_id` — ID approval
 - `decision` — `"approve"` atau `"reject"`
 
-Response:
+Response (approval live — sesi masih berjalan di proses ini):
 ```json
 {"ok": true, "approval_id": "abc123", "decision": "approve"}
 ```
@@ -361,6 +384,36 @@ Atau jika parameter tidak valid:
 ```
 
 Memanggil `approval_gate.resolve(approval_id, decision == "approve")` yang meng-unblock Future di `AgentLoop._execute_tool()`.
+
+**[§ Durable execution, TODO.md Prioritas 8.1] Approval yatim (lintas restart server):**
+bila `approval_gate.find_pending(approval_id)` sudah `None` (tak ada Future in-memory —
+server sempat restart sementara approval ini masih menunggu), endpoint jatuh ke jalur
+kedua: cek langsung baris `approval_log` (`decision='pending'`, sekaligus cek kepemilikan
+`owner_user_id` di sana). Turn percakapan ASLI yang memintanya sudah hilang (bukan resume
+penuh — keputusan desain, lihat `core/late_execute.py`), tapi aksinya sendiri TIDAK
+dibiarkan hilang percuma:
+- `decision="reject"` → `ApprovalGate.finalize_orphan(approval_id, "rejected")`, tool
+  TIDAK dijalankan.
+- `decision="approve"` → `core.late_execute.execute_orphan_approval(...)` menjalankan
+  tool MANDIRI (re-validasi role/policy segar, restore folder kerja sesi dari
+  `session_workspace`, lalu `tool.execute(...)` sungguhan) dan mencatat
+  `decision="approved:late"` (bukan `"approved"` biasa, agar audit trail membedakan
+  dari approve lewat sesi live).
+
+Response untuk jalur yatim menyertakan field tambahan:
+```json
+{
+  "ok": true, "approval_id": "xyz789", "decision": "approved",
+  "executed": true, "result": {"ok": true, "path": "...", "bytes": 12},
+  "error": null
+}
+```
+`ok: false` berarti eksekusi TIDAK terjadi sama sekali (approval sudah diputuskan lebih
+dulu, atau ditolak fail-closed — sesi/role/tool tak dikenal, policy deny, dst; lihat
+`error`) — beda dari `result.error` yang berarti tool BENAR-BENAR dijalankan tapi gagal
+sendiri (mis. timeout). Hasil dikembalikan hanya lewat response JSON ini, TIDAK dikirim
+ke sesi chat asli (SSE turn itu sudah selesai/hilang) — user perlu tanya ulang di chat
+bila ingin agent melanjutkan dari hasil eksekusi ini.
 
 **Bagaimana chat SESUNGGUHNYA menampilkan approval (§ chat approval UI):** sebelumnya
 `GET /approvals` didokumentasikan sebagai "dipolling Web UI", tapi `chat.js` sama sekali
@@ -384,7 +437,7 @@ read-only, bukan jalur utama.
 
 **Human Approval Pipeline sebagai node query-able (§ Human Approval Pipeline, TODO.md § Prioritas 2).**
 
-Berbeda dari `GET /approvals` (list SEMUA yang masih pending, sumber `ApprovalGate._pending` in-memory), endpoint ini melacak SATU `approval_id` lintas seluruh siklus hidupnya (pending → approved/rejected/timeout/auto:trust_mode), dibaca dari DB (`approval_log.approval_id`, kolom independen dari mekanisme `asyncio.Future` in-memory). Response:
+Berbeda dari `GET /approvals` (list SEMUA yang masih pending, sumber `ApprovalGate._pending` in-memory DIGABUNG baris yatim di DB — lihat `pending_list_with_orphans` di atas), endpoint ini melacak SATU `approval_id` lintas seluruh siklus hidupnya (pending → approved/rejected/timeout/auto:trust_mode/**approved:late**), dibaca dari DB (`approval_log.approval_id`, kolom independen dari mekanisme `asyncio.Future` in-memory). `decision="approved:late"` (§ Durable execution, Prioritas 8.1) berarti tool dieksekusi MANDIRI lewat `core/late_execute.py` — bukan lewat sesi live — setelah server sempat restart selagi approval ini menunggu. Response:
 ```json
 {
   "approval_id": "cf1196b7...", "session_id": "...", "tool_name": "file_write",
@@ -400,11 +453,23 @@ Berbeda dari `GET /approvals` (list SEMUA yang masih pending, sumber `ApprovalGa
 
 **User menjawab pertanyaan klarifikasi (`ask_user`).**
 
+**Kepemilikan (audit 2026-08-27):** kepemilikan `session_id` dicek (via
+`ChatSessionStore.get_owner` + `_can_access_owned_resource`) SEBELUM
+`resolve_by_session()` — 403 bila bukan pemilik/admin. SEBELUMNYA endpoint ini
+SATU-SATUNYA jalur session-scoped yang lolos dari audit kepemilikan 2026-07-29
+(`/chat-sessions/*`, `/approve` sudah digerbangi saat itu) — user login mana
+pun bisa menjawab pertanyaan klarifikasi `ask_user` milik sesi user LAIN hanya
+dengan menebak/mengetahui `session_id`-nya, menyuntikkan jawaban palsu ke
+tengah turn agent orang lain. `QuestionGate` sendiri tak menyimpan
+`owner_user_id` (beda dari `ApprovalGate`/`PendingApproval`) — kepemilikan
+dicek via `chat_sessions.owner_user_id`, tabel yang SAMA dipakai endpoint sesi
+lain, bukan menambah state baru.
+
 Form data:
 - `session_id` — sesi yang sedang menunggu jawaban
 - `answer` — teks jawaban user
 
-Response: `{"ok": true}` bila ada pertanyaan pending untuk sesi itu, `{"ok": false, ...}` bila tidak.
+Response: `{"ok": true}` bila ada pertanyaan pending untuk sesi itu, `{"ok": false, ...}` bila tidak, `403 {"ok": false, "error": "forbidden"}` bila bukan pemilik sesi.
 
 Memanggil `question_gate.resolve_by_session(session_id, answer)` yang meng-unblock Future di `AgentLoop._execute_tool()` (jalur `ask_user`). Frontend mengirim jawaban ke sini saat status `question` aktif, alih-alih memulai chat baru. `QuestionGate` di-inject sebagai singleton dari level app (sama seperti `ApprovalGate`).
 

@@ -132,7 +132,7 @@ Dibaca `AgentLoop` tiap turn untuk membangun `GuardrailEngine(enabled=...)` — 
 Pemeriksa keamanan untuk **skill yang diimpor dari luar** (skill packs). Terinspirasi `nvidia/skillspector`: skill pack = konten TAK-TEPERCAYA, jadi diperiksa SEBELUM masuk DB. Lebih dalam dari `Shield` (yang hanya regex prompt-injection) — menangkap kode/eksfiltrasi yang dibawa skill. Murni stdlib (`ast`+`re`), tanpa dependency (§6). **Selalu aktif** pada impor — keamanan bukan optimasi, tak bisa dimatikan dari UI.
 
 Dua lapis:
-1. **AST** (`ast.walk`) pada blok kode berpagar (```` ```python ````): `exec`/`eval`/`compile`/`__import__`, `os.system`/`os.popen`, `subprocess.*`, `shutil.rmtree`, `open(...,'w')`. Blok yang tak parse sebagai Python → di-skip diam (banyak skill = prosa).
+1. **AST** (`ast.walk`) pada blok kode berpagar (```` ```python ````): `exec`/`eval`/`compile`/`__import__`, `os.system`/`os.popen`, `subprocess.*`, `shutil.rmtree`, `open(...,'w')` — dicek POSISIONAL (`open(path, "w")`) **dan** keyword (`open(path, mode="w")`, audit 2026-08-27: bentuk keyword sebelumnya lolos tanpa terdeteksi sama sekali, bypass trivial dari sinyal ini). Blok yang tak parse sebagai Python → di-skip diam (banyak skill = prosa).
 2. **Pola leksikal**: eksfiltrasi shell (`curl|wget … | sh`), `curl` POST, path kredensial (`~/.ssh`, `id_rsa`, `.aws/credentials`), URL dengan kredensial inline, endpoint metadata cloud (`169.254.169.254`), `eval(input())`, blob base64 panjang.
 
 ### Dataclass: `ScanResult`
@@ -209,16 +209,83 @@ Cari satu pending approval by ID — dipakai `web/main.py` untuk cek kepemilikan
 Trust mode per-sesi (§ user request otonomi): tool YANG BUTUH APPROVAL tetap DIEKSEKUSI sungguhan, tapi tanpa Future/blocking — langsung catat ke `approval_log` dengan `decision="auto:trust_mode"` (berbeda dari `"approved"` manual, agar audit trail membedakan keputusan manusia vs toggle) lalu return `True`. Beda dari `queue_proposal`: manusia SEDANG hadir di sesi chat aktif (bukan autopilot tanpa manusia), hanya melewati klik. Caller (`AgentLoop._execute_tool`) yang memutuskan tool mana boleh lewat sini — `code_run` TIDAK PERNAH, berapa pun trust mode-nya (CLAUDE.md §1, lihat `core/agent_loop.py` § `_TRUST_MODE_EXEMPT`). `agent_identity` (§ Prioritas 9.2) dicatat SEKALIGUS PENTING di jalur ini — approval yang MELEWATI klik manusia justru paling perlu bisa dijawab "agent versi mana yang melakukannya".
 
 **`pending_list(session_id=None, owner_user_id=None) → list[dict]`**  
-Kembalikan daftar approval yang masih menunggu. Bisa difilter per sesi. `owner_user_id`
-(audit produksi 2026-07-29): bila diisi, hanya kembalikan approval milik user ini ATAU
-approval tanpa owner tercatat (`None` — dibuat saat auth nonaktif, tetap terlihat semua
-secara graceful). `None` (default, dipakai admin/auth nonaktif) = tanpa filter kepemilikan
-sama sekali. Endpoint introspeksi read-only (`GET /approvals`) — Web UI chat TIDAK memakai
-polling ke sini; lihat `docs/web.md` § `POST /approve` untuk bagaimana chat sesungguhnya
-menampilkan approval (via event SSE `status.approval_id`, bukan polling terpisah).
+Kembalikan daftar approval yang masih menunggu **DARI `self._pending` IN-MEMORY SAJA**.
+Bisa difilter per sesi. `owner_user_id` (audit produksi 2026-07-29): bila diisi, hanya
+kembalikan approval milik user ini ATAU approval tanpa owner tercatat (`None` — dibuat
+saat auth nonaktif, tetap terlihat semua secara graceful). `None` (default, dipakai
+admin/auth nonaktif) = tanpa filter kepemilikan sama sekali. Karena murni in-memory,
+method ini **selalu kosong tepat setelah proses baru mulai** — lihat `pending_list_with_orphans`
+di bawah untuk kenapa `GET /approvals` (`docs/web.md`) tidak lagi memanggil ini langsung.
+
+**`pending_list_with_orphans(session_id=None, owner_user_id=None) → list[dict]`** *(async)*  
+**[§ Durable execution, TODO.md Prioritas 8.1]** `pending_list()` DIGABUNG baris
+`approval_log` yang masih `decision='pending'` tapi TAK PUNYA `asyncio.Future` in-memory
+lagi ("yatim" — `approval_id` tidak ada di `self._pending`), yaitu dibuat SEBELUM
+restart server terakhir. Tanpa method ini, `GET /approvals` cuma baca `self._pending`
+yang SELALU kosong tepat setelah proses baru mulai — approval yatim jadi tak terlihat
+& tak bisa diputuskan lagi SELAMANYA walau barisnya tetap ada di DB (gap durability
+nyata: `AgentLoop` dibuat baru tiap request web, jadi state percakapan/approval
+in-memory TAK bertahan lintas restart). Baris orphan ditandai `orphan: True` di
+response. Dipakai `GET /approvals` (`docs/web.md`) — `POST /approve` (`docs/web.md`)
+sendiri yang menentukan apakah approval_id yang di-approve/reject itu live (lewat
+`resolve()` biasa) atau yatim (lewat `finalize_orphan`/`core/late_execute.py` di bawah).
+
+**`finalize_orphan(approval_id, decision) → bool`** *(async)*  
+**[§ Durable execution, Prioritas 8.1]** Selesaikan approval **yatim** (bukan live —
+menolak dengan `False` bila `approval_id` masih punya Future di `self._pending`, agar
+tak ada dua sumber kebenaran untuk satu approval yang sama). Return `True` hanya bila
+baris memang masih `pending` & berhasil diselesaikan; `False` bila sudah diputuskan
+lebih dulu (race dua caller menyelesaikan approval yatim yang sama — approval_id unik
+per permintaan, jadi ini cuma bisa terjadi dari klik ganda). Dipanggil `core/late_execute.py`
+dua kali: langsung untuk reject, atau SETELAH tool selesai dieksekusi mandiri untuk
+approve (dengan `decision="approved:late"`, bukan `"approved"` biasa, agar audit trail
+membedakan approve lewat sesi live vs. dieksekusi mandiri lintas restart).
 
 **`_record_decision(approval_id, decision) → None`** *(async, private)*  
-Update row `approval_log` yang `approval_id`-nya cocok DAN `decision='pending'`, jadi keputusan final.
+Update row `approval_log` yang `approval_id`-nya cocok DAN `decision='pending'`, jadi
+keputusan final. **[§ Durable execution]** Sejak Prioritas 8.1: hanya menulis entry
+`audit_chain` bila `UPDATE` benar-benar mengenai baris (`cursor.rowcount > 0`) — sebelum
+ini, memanggil method ini untuk `approval_id` yang sudah diputuskan (atau tak ada) tetap
+menulis entry `approval.decided` PALSU ke rantai audit. Sama pola dengan `set_human_feedback`
+(`docs/core.md`).
+
+---
+
+## `core/late_execute.py`
+
+**`execute_orphan_approval(db, config, approval_gate, approval_id) → dict`** *(async)*  
+**[§ Durable execution, TODO.md Prioritas 8.1]** Jalankan MANDIRI tool dari satu
+approval **yatim** (dibuat sebelum restart server terakhir) yang baru saja user
+approve lewat `POST /approve` (`docs/web.md`). Turn percakapan ASLI yang memintanya
+sudah selesai/hilang begitu proses lama mati — desain ini **bukan** resume percakapan
+penuh (opsi itu butuh serialisasi tool loop lengkap, di luar skop yang dipilih owner);
+yang dikerjakan hanya "aksi yang sudah diminta approval tidak boleh hilang percuma".
+
+Alur, fail-closed di setiap langkah (§1 — tak pernah asumsikan aman hanya karena baris
+ini pernah lolos `requires_approval` check saat pertama diminta, karena `soul.toml`/policy
+bisa berubah SELAMA approval tersangkut, kadang berbulan-bulan):
+1. Baca baris `approval_log` (`session_id`, `tool_name`, `tool_input`) — 404 bila tak
+   `pending`, atau bila `approval_gate.find_pending(approval_id)` masih punya Future
+   hidup (bukan yatim — caller salah jalur, seharusnya `resolve()` biasa).
+2. Cari `role` dari `chat_sessions` via `session_id` — tak ada sesi → tolak (fail-closed,
+   tak bisa verifikasi izin tanpa role).
+3. Muat `roles/{role}/soul.toml` segar (bukan cache lama) → cek `TOOL_REGISTRY` kenal
+   tool-nya, `_soul_allows_tool` (diekstrak dari `AgentLoop._tool_allowed`, `docs/core.md`)
+   mengizinkan role ini memakainya, dan `_validate_tool_input` lolos.
+4. Evaluasi ULANG `PolicyEngine(soul["policy"]).evaluate(...)` — `deny` → tolak. Sengaja
+   dievaluasi ulang, bukan dipercaya dari keputusan lama, karena policy admin bisa
+   berubah selama approval menunggu.
+5. Pulihkan folder kerja sesi dari `SessionWorkspaceStore` (`infra/workspace.py`,
+   § working directory adaptif) ke `CURRENT_WORKSPACE_ROOT` — tanpa ini tool file jatuh
+   ke `CONFIG.workspace_root` global, bukan folder yang sebenarnya dipakai sesi itu.
+6. `tool.execute(tool_input, vault=Vault(), db=db)` dengan timeout `config.tool_timeout_sec`
+   (pola sama `AgentLoop._execute_tool`) + `ToolAudit.record(...)`.
+7. `approval_gate.finalize_orphan(approval_id, "approved:late")`.
+
+Return `{"ok": False, "error": ...}` bila eksekusi TIDAK terjadi sama sekali (langkah
+1-4/5 gagal); `{"ok": True, "executed": True, "result": {...}}` bila tool BENAR-BENAR
+dijalankan — `result` bisa saja `{"error": ...}` sendiri (tool dijalankan tapi gagal,
+mis. timeout) tanpa mengubah `ok` di level luar jadi `False`.
 
 ---
 
@@ -517,11 +584,31 @@ tak-terkendali & mencegah DoS sederhana saat self-host di VPS publik.
 **`allow(key: str) → bool`**  
 True bila request boleh lanjut; mencatat hit HANYA bila diizinkan (hit yang
 ditolak tak ikut disimpan, agar retry setelah window lewat tak ikut diblokir).
-`key` = session cookie auth (bukan app `session_id` — satu user dgn banyak tab
-tetap dibatasi bersama), fallback client IP bila auth nonaktif.
+`key` = **`f"user:{session_user_id}"`** bila auth aktif & user dikenal (audit
+2026-08-27 — lihat catatan di bawah), fallback client IP bila auth nonaktif
+atau user tak dikenal (token lama pra-RBAC).
+
+**[Audit 2026-08-27] `key` HARUS `session_user_id`, bukan cookie sesi mentah.**
+Sebelumnya `key` = nilai cookie `openclawn_session` langsung — SALAH bila
+`CONFIG.idle_timeout_sec` aktif: cookie itu diterbitkan ULANG dengan `ts` baru
+tiap request valid (§ idle timeout, `security/auth.py`), jadi nilainya BERUBAH
+tiap request. Diverifikasi lewat reproduksi terisolasi: 10 request berturut-
+turut dengan cookie di-refresh tiap kali, `max_requests=3` → SEMUA 10 lolos
+(rate limit sama sekali tak efektif untuk user terautentikasi) DAN `_hits`
+bocor tanpa batas (10 key berbeda tersimpan permanen, tak pernah dibuang —
+satu entry baru per request selamanya). `user_id` stabil lintas refresh cookie
+MAUPUN lintas device/re-login akun yang sama — juga lebih dekat ke niat asli
+komentar `web/main.py` ("satu user dgn banyak tab dibatasi bersama").
 
 **`remaining(key: str) → int`**  
-Sisa kuota di window saat ini.
+Sisa kuota di window saat ini. **[Audit 2026-08-27]** Baca via
+`self._hits.get(key, [])`, BUKAN `self._hits[key]` — `_hits` adalah
+`defaultdict(list)`; mengindeks key yang belum pernah `allow()` akan diam-diam
+menambah entry `[]` permanen ke dict hanya karena DIBACA (ditemukan
+berpasangan dengan bug key di atas — method read-only tak boleh punya efek
+samping menulis state). Method ini belum dipakai endpoint mana pun saat ini
+(disiapkan untuk header `X-RateLimit-Remaining`), jadi bug lama tak reachable
+di produksi — diperbaiki sebagai pencegahan sebelum benar-benar dipakai.
 
 State in-memory murni — reset otomatis saat restart proses (dapat diterima
 untuk single-user, tak perlu persisten).

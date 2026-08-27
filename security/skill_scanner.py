@@ -122,16 +122,24 @@ def _scan_ast(code: str) -> list[tuple[str, int]]:
                 key = (func.value.id, func.attr)
                 if key in _DANGEROUS_ATTR_CALLS:
                     out.append((f"call:{key[0]}.{key[1]}", _DANGEROUS_ATTR_CALLS[key]))
-        # open(path, 'w'/'a') → tulis file (sinyal sedang).
+        # open(path, 'w'/'a') → tulis file (sinyal sedang). Cek POSISIONAL
+        # (open(path, "w")) DAN keyword (open(path, mode="w")) — audit
+        # 2026-08-27: bentuk keyword sebelumnya lolos tanpa terdeteksi sama
+        # sekali (hanya `node.args[1:]` dicek, `node.keywords` diabaikan),
+        # bypass trivial untuk sinyal yang justru jadi alasan AST scan ada.
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id == "open"
         ):
-            for arg in node.args[1:]:
-                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                    if any(m in arg.value for m in ("w", "a", "+")):
-                        out.append(("call:open(write)", _SEV_MED))
+            mode_args = [arg for arg in node.args[1:] if isinstance(arg, ast.Constant)] + [
+                kw.value
+                for kw in node.keywords
+                if kw.arg == "mode" and isinstance(kw.value, ast.Constant)
+            ]
+            for arg in mode_args:
+                if isinstance(arg.value, str) and any(m in arg.value for m in ("w", "a", "+")):
+                    out.append(("call:open(write)", _SEV_MED))
     return out
 
 

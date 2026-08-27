@@ -46,8 +46,16 @@ class RateLimiter:
         return True
 
     def remaining(self, key: str) -> int:
-        """Sisa kuota di window saat ini — untuk header X-RateLimit-Remaining."""
+        """Sisa kuota di window saat ini — untuk header X-RateLimit-Remaining.
+
+        `self._hits.get(key, [])`, BUKAN `self._hits[key]` — `_hits` adalah
+        `defaultdict(list)`; mengindeks key yang belum pernah `allow()` akan
+        DIAM-DIAM menambah entry `[]` permanen ke dict hanya karena dibaca
+        (audit 2026-08-27, ditemukan berpasangan dengan bug key tak-stabil di
+        `web/main.py`'s rate limit middleware) — method read-only tak boleh
+        punya efek samping menulis state.
+        """
         now = time.monotonic()
         cutoff = now - self.window_sec
-        hits = [h for h in self._hits[key] if h >= cutoff]
+        hits = [h for h in self._hits.get(key, []) if h >= cutoff]
         return max(0, self.max_requests - len(hits))

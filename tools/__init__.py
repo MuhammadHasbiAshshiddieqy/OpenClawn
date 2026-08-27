@@ -10,6 +10,7 @@ from tools.file_ops import (
 from tools.web import HttpRequestTool, WebFetchTool, WebSearchTool
 from tools.interaction import AskUserTool
 from tools.code import CodeRunTool
+from tools.sandbox_image import BuildSandboxImageTool
 from tools.shell import ListDirTool, ShellRunTool
 from tools.search import GlobTool, GrepTool
 from tools.document import DocWriteTool, PdfReadTool, PdfWriteTool
@@ -41,6 +42,7 @@ TOOL_REGISTRY: dict[str, Tool] = {
     # eksekusi (sandboxed)
     "shell_run": ShellRunTool(),
     "code_run": CodeRunTool(),
+    "build_sandbox_image": BuildSandboxImageTool(),
     # akses luar
     "web_fetch": WebFetchTool(),
     "web_search": WebSearchTool(),

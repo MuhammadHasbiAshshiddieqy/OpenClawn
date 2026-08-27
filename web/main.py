@@ -27,6 +27,7 @@ from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
 from core.audit_chain import AuditChain
 from core.audit_anchor import verify_against_anchors, write_anchor
+from core.late_execute import execute_orphan_approval
 from core.llm_client import close_shared_http_client, get_shared_http_client
 from core.autopilot import AutopilotScheduler, AutopilotStore
 from core.skill_pack import SkillPack
@@ -377,10 +378,27 @@ async def auth_and_csrf_middleware(request: Request, call_next):
     # Rate limit endpoint LLM per sesi otentikasi (bukan per app session_id, agar
     # satu user dengan banyak tab tetap dibatasi bersama). Fallback ke IP client
     # bila auth nonaktif (tak ada cookie sesi).
+    #
+    # Audit 2026-08-27: kunci HARUS `session_user_id` (stabil), BUKAN cookie
+    # mentah — `create_session_token` menyisipkan `ts` baru tiap kali cookie
+    # di-refresh (§ idle_timeout_sec di atas, `refresh_session_cookie`), jadi
+    # nilai cookie berubah TIAP REQUEST saat idle timeout aktif. Memakai cookie
+    # sebagai key membuat tiap request punya key BARU: `RateLimiter.allow()`
+    # selalu mulai dari window kosong (rate limit jadi TAK EFEKTIF SAMA SEKALI
+    # untuk user terautentikasi) DAN `RateLimiter._hits` bocor tanpa batas (satu
+    # entry permanen per request, tak pernah dibuang — key lama tak pernah
+    # dipakai lagi). Diverifikasi lewat reproduksi terisolasi (bukan diasumsikan):
+    # 10 request dengan cookie di-refresh tiap kali, `max_requests=3` → SEMUA 10
+    # lolos & 10 key berbeda tersimpan permanen. `user_id` tak berubah lintas
+    # refresh cookie MAUPUN lintas device/re-login akun yang sama — sekaligus
+    # lebih dekat ke niat komentar di atas ("satu user ... dibatasi bersama").
     if path in _RATE_LIMITED_PATHS:
-        key = request.cookies.get(
-            SESSION_COOKIE, request.client.host if request.client else "unknown"
-        )
+        if session_user_id is not None:
+            key = f"user:{session_user_id}"
+        else:
+            key = request.cookies.get(
+                SESSION_COOKIE, request.client.host if request.client else "unknown"
+            )
         if not _rate_limiter.allow(key):
             return JSONResponse(
                 {"ok": False, "error": "rate_limited"},
@@ -639,7 +657,13 @@ async def oidc_callback(request: Request, code: str = "", state: str = ""):
     cookie_state, _, next_url = cookie_state_raw.partition(":")
     next_url = next_url or "/"
 
-    if not code or not state or not cookie_state or state != cookie_state:
+    # Audit 2026-08-27: `hmac.compare_digest` (bukan `!=`) — konsisten dengan
+    # perbandingan CSRF/login token lain di codebase ini (audit produksi
+    # 2026-07-29), yang semuanya sengaja timing-safe. `state` adalah secret
+    # anti-CSRF acak (`generate_state`); `!=` biasa membocorkan info panjang
+    # kecocokan lewat waktu eksekusi, sekecil apa pun risikonya secara praktis
+    # untuk flow login sekali-pakai ini.
+    if not code or not state or not cookie_state or not hmac.compare_digest(state, cookie_state):
         log.warning("oidc_state_mismatch", ip=request.client.host if request.client else "unknown")
         return RedirectResponse(url="/login?error=true", status_code=303)
 
@@ -1097,9 +1121,18 @@ async def approvals(request: Request, session_id: str | None = None):
     tercatat) yang dikembalikan — SEBELUMNYA memanggil ini tanpa `session_id`
     mengembalikan approval SEMUA user, termasuk tool_input mentah (path/
     command/code) milik user lain. Admin (atau auth nonaktif) tetap lihat semua.
+
+    § Durable execution (TODO.md Prioritas 8.1): `pending_list_with_orphans`
+    (bukan `pending_list` biasa) juga menyertakan approval yang dibuat SEBELUM
+    restart server terakhir (`orphan: True`) — tanpa ini approval yatim tak
+    terlihat lagi selamanya walau barisnya tetap `pending` di DB.
     """
     owner_filter = _session_owner_filter(request)
-    return {"pending": approval_gate.pending_list(session_id, owner_user_id=owner_filter)}
+    return {
+        "pending": await approval_gate.pending_list_with_orphans(
+            session_id, owner_user_id=owner_filter
+        )
+    }
 
 
 @app.get("/workdir/check")
@@ -1133,22 +1166,65 @@ async def approve(request: Request):
         return {"ok": False, "error": "approval_id dan decision (approve|reject) wajib"}
 
     pending = approval_gate.find_pending(approval_id)
-    owner = pending.owner_user_id if pending else None
-    if not _can_access_owned_resource(request, owner):
+    if pending is not None:
+        if not _can_access_owned_resource(request, pending.owner_user_id):
+            return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+        resolved = approval_gate.resolve(approval_id, decision == "approve")
+        return {"ok": resolved, "approval_id": approval_id, "decision": decision}
+
+    # Tak ada Future in-memory — mungkin approval YATIM (dibuat sebelum restart
+    # server terakhir, § Durable execution TODO.md Prioritas 8.1) daripada
+    # sekadar approval_id salah. Cek approval_log langsung sebelum menyerah.
+    row = await db.fetchone(
+        "SELECT owner_user_id FROM approval_log WHERE approval_id=? AND decision='pending'",
+        (approval_id,),
+    )
+    if row is None:
+        return {"ok": False, "error": "approval tidak ditemukan atau sudah diputuskan"}
+    if not _can_access_owned_resource(request, row["owner_user_id"]):
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
-    resolved = approval_gate.resolve(approval_id, decision == "approve")
-    return {"ok": resolved, "approval_id": approval_id, "decision": decision}
+    if decision == "reject":
+        finalized = await approval_gate.finalize_orphan(approval_id, "rejected")
+        return {"ok": finalized, "approval_id": approval_id, "decision": "rejected"}
+
+    # approve: tool ASLI (turn percakapan yang memintanya sudah hilang lintas
+    # restart) dieksekusi MANDIRI di sini — lihat docstring core/late_execute.py
+    # untuk kenapa ini bukan resume percakapan penuh.
+    outcome = await execute_orphan_approval(db, CONFIG, approval_gate, approval_id)
+    return {
+        "ok": outcome["ok"],
+        "approval_id": approval_id,
+        "decision": "approved" if outcome["ok"] else decision,
+        "executed": outcome.get("executed", False),
+        "result": outcome.get("result"),
+        "error": outcome.get("error"),
+    }
 
 
 @app.post("/answer")
 async def answer(request: Request):
-    """User menjawab pertanyaan klarifikasi (ask_user) → resolve Future QuestionGate."""
+    """User menjawab pertanyaan klarifikasi (ask_user) → resolve Future QuestionGate.
+
+    Audit 2026-08-27: kepemilikan dicek SEBELUM `resolve_by_session()` — SEBELUMNYA
+    endpoint ini SATU-SATUNYA jalur session-scoped yang tak pernah digerbangi
+    kepemilikan (berbeda dari `/chat-sessions/{id}/turns`, `DELETE
+    /chat-sessions/{id}`, `POST /approve` yang sudah diaudit 2026-07-29) —
+    user login mana pun (termasuk role terendah) bisa menjawab pertanyaan
+    klarifikasi `ask_user` milik SESI USER LAIN hanya dengan menebak/mengetahui
+    `session_id`-nya, menyuntikkan jawaban PALSU ke tengah turn agent orang lain
+    (`QuestionGate` sendiri tak menyimpan `owner_user_id` — kepemilikan dicek
+    via `chat_sessions.owner_user_id`, tabel yang SAMA dipakai endpoint sesi
+    lain, bukan menambah state baru).
+    """
     form = await request.form()
     session_id = (form.get("session_id") or "").strip()
     text = (form.get("answer") or "").strip()
     if not session_id or not text:
         return {"ok": False, "error": "session_id dan answer wajib"}
+    owner = await ChatSessionStore(db).get_owner(session_id)
+    if not _can_access_owned_resource(request, owner):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
     resolved = question_gate.resolve_by_session(session_id, text)
     return {"ok": resolved}
 

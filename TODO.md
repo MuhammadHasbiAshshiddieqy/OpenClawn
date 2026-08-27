@@ -566,17 +566,72 @@ ada keputusan owner untuk mengerjakan** — jangan dikerjakan tanpa
 konfirmasi eksplisit (pola sama item 7-8 di §4).
 
 1. **Durable execution — checkpoint & resume approval-pending state lintas
-   restart server.** Saat ini `ApprovalGate` memblokir *in-process* dengan
-   timeout (`security/approval.py`); `AgentLoop` dibuat baru tiap request
-   web sehingga state percakapan tak bertahan lintas restart
-   (`docs/core.md`). Fondasi untuk ini **sudah ada**: `core/event_bus.py` +
-   tabel `agent_events` (Event-Driven Runtime, Prioritas 4) sudah
-   event-sourcing ringan — arah natural adalah menjadikan approval-pending
-   sebagai state yang di-replay dari `agent_events` saat restart, alih-alih
-   cuma in-memory. Perlu keputusan desain: apakah "parkir" agent saat
-   menunggu approval berarti tool loop di-serialize penuh (bukan cuma
-   approval), atau cukup approval state saja yang persisten — ini
-   menentukan seberapa besar perubahan `agent_loop.py`.
+   restart server — ✅ SELESAI (skop: orphan cleanup + late-execute,
+   2026-08-27).**
+
+   **Keputusan desain (dipilih owner via pertanyaan eksplisit, BUKAN resume
+   percakapan penuh):** dari 3 opsi yang diajukan (resume penuh / orphan
+   cleanup saja / orphan cleanup + late-execute), owner memilih opsi
+   tengah-atas — approval yang tersangkut dibuat terlihat lagi DAN tool-nya
+   benar-benar dijalankan mandiri saat user approve, TANPA menyerialisasi
+   tool loop `AgentLoop` (yang butuh perubahan arsitektur besar untuk
+   kebutuhan yang belum terbukti nyata). Turn percakapan ASLI yang meminta
+   approval itu tetap hilang lintas restart — user perlu tanya ulang di chat
+   bila ingin agent melanjutkan dari hasil eksekusi.
+
+   **Gap nyata yang dikonfirmasi lewat kode SEBELUM implementasi** (bukan
+   asumsi): `GET /approvals` (`web/main.py`) hanya membaca
+   `ApprovalGate._pending` in-memory — begitu server restart, baris
+   `approval_log` yang masih `decision='pending'` jadi tak terlihat &
+   tak bisa diputuskan lagi SELAMANYA, walau barisnya tetap ada di DB.
+
+   **Hasil:**
+   - `ApprovalGate.pending_list_with_orphans()` (`security/approval.py`) —
+     `pending_list()` lama DIGABUNG baris `approval_log` `pending` yang tak
+     punya Future in-memory lagi ("yatim"), ditandai `orphan: true`. Dipakai
+     `GET /approvals`.
+   - `ApprovalGate.finalize_orphan(approval_id, decision)` — selesaikan
+     approval yatim (menolak bila ternyata masih live, mencegah dua sumber
+     kebenaran). `ApprovalGate._record_decision` sekaligus diperbaiki: hanya
+     menulis entry `audit_chain` bila `UPDATE` benar-benar mengenai baris
+     (`cursor.rowcount > 0`) — sebelumnya bisa menulis entry `approval.decided`
+     PALSU untuk approval yang sudah diputuskan/tak ada.
+   - `core/late_execute.py::execute_orphan_approval()` — dipanggil
+     `POST /approve` saat approval_id yang di-approve/reject ternyata yatim.
+     Fail-closed di setiap langkah (§1): cari `role` via `chat_sessions`
+     (sesi tak ditemukan → tolak), muat `soul.toml` SEGAR (bukan cache
+     instance `AgentLoop` yang sudah tak ada) → cek allow-list role
+     (`_soul_allows_tool`, diekstrak dari `AgentLoop._tool_allowed` jadi
+     fungsi module-level di `core/agent_loop.py` — satu sumber kebenaran,
+     bukan diduplikasi) → validasi schema → **evaluasi ULANG `PolicyEngine`
+     deny** (policy admin bisa berubah SELAMA approval tersangkut, kadang
+     berbulan-bulan — tak boleh dipercaya dari keputusan lama) → pulihkan
+     folder kerja sesi dari `SessionWorkspaceStore` (§ working directory
+     adaptif) → `tool.execute()` sungguhan dengan timeout & `ToolAudit`.
+     `decision` ditulis `"approved:late"` (bukan `"approved"` biasa) agar
+     audit trail membedakan dari approve lewat sesi live.
+   - `POST /approve` (`web/main.py`): bila `find_pending()` sudah `None`,
+     jatuh ke jalur baru (cek `approval_log` langsung, termasuk kepemilikan)
+     alih-alih langsung gagal. Response menyertakan `executed`/`result` untuk
+     jalur yatim.
+
+   **TIDAK dikerjakan (sengaja, di luar skop yang dipilih):** resume tool
+   loop/percakapan penuh via `agent_events` (Event-Driven Runtime, Prioritas
+   4) — fondasinya memang ada, tapi butuh `agent_loop.py` jadi state machine
+   eksplisit yang bisa di-rehydrate, perubahan arsitektur besar untuk
+   kebutuhan yang belum ada bukti nyata dibutuhkan.
+
+   Diverifikasi via `uv run --python 3.12` (mesin dev cuma Python 3.9):
+   **968 passed** (+14 baru: `tests/test_durable_approval.py`,
+   `tests/test_durable_approval_web.py`), ruff check/format bersih, `uv.lock`
+   tak tersentuh (tanpa dependency baru). Test mencakup: orphan visible di
+   `pending_list_with_orphans` tapi tidak di `pending_list` lama, tak
+   dobel-hitung untuk approval live, `finalize_orphan` menolak race &
+   approval yang masih live, eksekusi mandiri BENAR-BENAR menulis file ke
+   workspace sesi yang dipulihkan, fail-closed untuk sesi tak dikenal & tool
+   tak diizinkan role, evaluasi ulang policy deny mencegah eksekusi, dan
+   endpoint `POST /approve`/`GET /approvals` end-to-end via `TestClient`
+   sungguhan (bukan hanya unit `ApprovalGate`).
 2. **Eval harness formal — ✅ SELESAI (2026-08-03).** `core/eval_harness.py`
    (murni logika: `EvalCase`, `load_eval_cases`, `evaluate_rubric` — dites
    pytest tanpa LLM, konsisten CLAUDE.md §5) + `scripts/run_evals.py`
@@ -618,26 +673,77 @@ konfirmasi eksplisit (pola sama item 7-8 di §4).
 > dari test dengan LLM di-mock, persis tujuan fitur ini dibangun — kali ini
 > bug di skrip pendukungnya sendiri, bukan di kode produksi.
 3. **`code_run`/`shell_run` tidak mampu menjalankan proyek nyata yang
-   "lumayan besar dan kompleks"** (ditemukan saat menjelaskan alur
-   coding-assistant ke owner, 2026-08-03) — batasan nyata, bukan bug, tapi
-   worth dicatat sebagai gap kapabilitas. `Dockerfile.sandbox` hanya berisi
-   `python:3.12-slim` + `numpy`/`pandas`; digabung `--network none` (`tools/sandbox.py`),
-   `SANDBOX_TIMEOUT_SEC = 30` hardcoded, `--memory 256m --cpus 0.5`, dan
-   `shell_run` read-only (`tools/shell.py`) — proyek yang butuh
-   `pip install`/`npm install`, runtime non-Python, proses >30 detik, service
-   yang listen di port, sidecar (DB/cache), atau persist hasil build **tidak
-   bisa jalan sama sekali** lewat jalur ini saat ini. Ini konsekuensi
-   langsung dari jaminan "sandbox tanpa network = pertahanan utama, bukan
-   approval" (§ komentar `ShellRunTool`) — bukan sesuatu yang kelewat.
-   Arah kandidat (belum dipilih, butuh keputusan desain terpisah):
-   (a) sandbox image kustom per-proyek dengan dependency di-*bake* saat
-   `docker build` (network hanya terbuka di situ, bukan saat `docker run`);
-   (b) fase install terpisah yang approval-gated & network sementara
-   terbuka, lalu fase run tetap tertutup total — menambah permukaan
-   `PolicyEngine`/`ApprovalGate` yang perlu didesain hati-hati supaya fase
-   install sendiri tak jadi celah baru; (c) timeout/resource limit
-   configurable per-role via `soul.toml`/`AppConfig` untuk proses yang
-   memang perlu lebih lama dari 30 detik.
+   "lumayan besar dan kompleks" — ✅ SEBAGIAN SELESAI (skop: opsi (a), image
+   kustom per-proyek Python, 2026-08-27).**
+
+   **Keputusan desain (dipilih owner via pertanyaan eksplisit, dari 3 opsi):**
+   opsi (a) — image sandbox kustom PER-PROYEK dengan dependency di-*bake*
+   saat `docker build`, network HANYA terbuka DI SITU, TIDAK PERNAH saat
+   `docker run` eksekusi kode sungguhan. Dipilih atas (b) (fase install
+   network-terbuka saat RUN — melemahkan invarian inti §1 untuk sementara,
+   permukaan `PolicyEngine`/`ApprovalGate` baru yang rawan celah `curl|sh`)
+   dan (c) (cuma perbaikan timeout — tak menyentuh gap `pip install` sama
+   sekali, sub-masalah paling kecil dari tiga yang dilaporkan).
+
+   **Hasil:**
+   - `infra/sandbox_image.py` (baru) — `CURRENT_SANDBOX_IMAGE` (ContextVar) +
+     `SessionSandboxImageStore`, PERSIS pola `infra/workspace.py`
+     (`CURRENT_WORKSPACE_ROOT`/`SessionWorkspaceStore`, § working directory
+     adaptif) — image proyek aktif per-sesi bertahan lintas turn DAN lintas
+     restart server (memakai pola durability yang sama dipelajari §8.1).
+   - `DockerSandbox.build_project_image()` (`tools/sandbox.py`) — image baru
+     dibangun `FROM SANDBOX_IMAGE` dasar (mewarisi semua properti keamanan
+     lain) di build context TERISOLASI (temp dir HANYA `requirements.txt` +
+     `Dockerfile` ter-generate, bukan seluruh workspace) via `pip install`.
+     **Satu-satunya** invocation `docker` di modul ini yang sengaja TANPA
+     `--network none`. Cache: `docker image inspect` (hash SHA-256 12-char
+     konten `requirements.txt` sebagai tag) SEBELUM build — skip rebuild
+     TANPA network sama sekali bila sudah pernah dibangun. Timeout build
+     300 detik dengan `proc.kill()` eksplisit (tak ada wrapper `timeout`
+     command portabel di level host seperti `run_python`/`run_shell`, yang
+     timeout-nya jalan DI DALAM container).
+   - `DockerSandbox._base_docker_args` membaca `effective_sandbox_image()` —
+     `code_run`/`shell_run` OTOMATIS memakai image proyek aktif tanpa
+     perubahan lain, sesi yang tak pernah membangun tetap `SANDBOX_IMAGE`
+     dasar (perilaku lama tak berubah).
+   - Tool baru `build_sandbox_image` (`tools/sandbox_image.py`) —
+     `requires_approval=True` **non-negotiable**, ditambahkan ke
+     `_TRUST_MODE_EXEMPT` sekelas `code_run` (build-nya sendiri membuka
+     network). `_validate_requirements`: tolak kosong, >20.000 byte, >200
+     baris, atau baris manapun yang diawali `-` (opsi pip `-e`/`--index-url`/
+     `-r`/dst) — mencegah pengalihan sumber paket ke index tak tepercaya
+     atau instalasi VCS/lokal arbitrer. Ditambahkan ke allow-list role
+     `dev`/`qa`/`data` (role yang sudah punya `code_run`), TIDAK `pm`/`security`.
+   - **Residual risk didokumentasikan jujur (§1/§17):** `pip install` bisa
+     menjalankan kode arbitrer dari `setup.py`/build backend paket pihak
+     ketiga SELAMA build — risiko inheren pip apa pun sumbernya, validasi di
+     atas hanya mempersempit permukaan (PyPI resmi saja), tidak menghapusnya.
+
+   **Belum ditangani (skop MVP, dicatat eksplisit — bukan diabaikan diam-diam):**
+   hanya Python/`requirements.txt` — Node/`package.json` dkk belum didukung;
+   tidak ada garbage collection image `openclawn-sandbox-proj:*` (operator
+   perlu `docker image prune` manual); (b) fase-install-network-terbuka dan
+   (c) timeout/resource configurable TETAP backlog terbuka bila dibutuhkan
+   nanti (proses >30 detik yang bukan soal dependency, runtime non-Python,
+   service yang listen di port — semua ini TETAP tidak bisa jalan lewat
+   jalur ini).
+
+   Diverifikasi via `uv run --python 3.12`: **993 passed** (+25:
+   `tests/test_sandbox_image.py` 24 test + 1 di `tests/test_trust_mode.py`),
+   ruff check/format bersih, `uv.lock` tak tersentuh (tanpa dependency baru).
+   **Smoke test SUNGGUHAN dengan Docker nyata** (bukan cuma mock) —
+   `docker build -t openclawn-sandbox:latest -f Dockerfile.sandbox .` lalu
+   skrip terisolasi yang membuktikan END-TO-END: (1) `termcolor` TAK bisa
+   di-import di image dasar; (2) `build_project_image("termcolor==2.4.0")`
+   sukses BENAR-BENAR install via PyPI nyata; (3) build kedua dengan konten
+   SAMA → `cached=True`, 0.02 detik (vs 0.4 detik build pertama) — TANPA
+   network; (4) dengan `CURRENT_SANDBOX_IMAGE` diaktifkan, `run_python`
+   BENAR-BENAR bisa `import termcolor` & memanggilnya; (5) tanpa override,
+   balik ke image dasar → `termcolor` TAK bisa di-import lagi (isolasi
+   per-sesi terbukti, bukan image dasar yang diam-diam tertimpa); (6) baris
+   `--index-url` di `requirements.txt` DITOLAK sebelum sampai ke `docker
+   build`. Image proyek uji coba dihapus (`docker rmi`) setelah verifikasi;
+   `openclawn-sandbox:latest` (base) dibiarkan ada untuk pemakaian berikutnya.
 4. **[Ditemukan lewat eval harness §8.2] `_post_turn` melempar `"no such
    table: memory_l1"` — ✅ ROOT CAUSE DITEMUKAN & DIPERBAIKI (2026-08-03).**
 
@@ -995,6 +1101,84 @@ angka counterfactual ditampilkan sebagai estimasi eksplisit (jujur: itu
 skenario hipotetis, bukan tagihan nyata yang dihindari) — penting supaya
 tidak jadi klaim yang menyesatkan seperti kasus "Immutable Audit Evidence"
 di 9.1.
+
+---
+
+## 10. Audit lapisan `security/` — internal modul (2026-08-27)
+
+Babak audit baru (pola sama §2/§5/§6/§7 — dikerjakan atas permintaan eksplisit
+owner setelah backlog §8/§9 bersih semua). Fokus: internal modul `security/`
+sendiri (`auth.py`, `rate_limit.py`, `shield.py`, `question.py`,
+`policy_engine.py`, `guardrails.py`, `oidc.py`, `skill_scanner.py`,
+`vault.py`) — beda dari §6 yang mengaudit LAPISAN ENDPOINT `web/`. Semua
+temuan di bawah DIVERIFIKASI langsung baca kode + reproduksi terisolasi
+(bukan cuma laporan/asumsi) sebelum ditindaklanjuti, sama metodologi audit
+sebelumnya.
+
+**Diperbaiki (bug jelas & satu gap IDOR, tak ambigu):**
+
+1. **`RateLimiter` — kunci rate-limit tak stabil saat idle timeout aktif,
+   BLOCKER untuk deployment yang mengaktifkan `OPENCLAWN_IDLE_TIMEOUT_SEC`.**
+   `web/main.py`'s middleware memakai nilai cookie sesi MENTAH sebagai key
+   rate-limit — tapi `create_session_token` menyisipkan `ts` BARU tiap kali
+   cookie di-refresh (§ idle timeout, `security/auth.py`), yang terjadi TIAP
+   REQUEST VALID saat `idle_timeout_sec` diisi. Diverifikasi lewat reproduksi
+   terisolasi (bukan diasumsikan): `RateLimiter(max_requests=3)` + 10 token
+   sesi ber-`ts` berbeda untuk user yang SAMA → **10/10 request lolos**
+   (rate limit sama sekali tak efektif) DAN 10 entry berbeda tersimpan
+   PERMANEN di `_hits` (kebocoran memori tanpa batas — satu entry baru per
+   request, key lama tak pernah dipakai lagi jadi tak pernah dibuang).
+   Diperbaiki: key = `f"user:{session_user_id}"` (stabil lintas refresh
+   cookie MAUPUN lintas device/re-login akun yang sama) bila auth aktif &
+   user dikenal, fallback cookie/IP untuk kasus lama. Sekaligus diperbaiki
+   `RateLimiter.remaining()`: membaca `self._hits[key]` (bukan `.get(key,
+   [])`) pada `defaultdict` diam-diam MENAMBAH entry permanen hanya karena
+   dibaca — method belum dipakai endpoint mana pun saat ini (disiapkan untuk
+   header `X-RateLimit-Remaining`), jadi tak reachable di produksi, tapi
+   diperbaiki sebagai pencegahan sebelum benar-benar dipakai.
+2. **`POST /answer` tanpa cek kepemilikan sama sekali — IDOR, sekelas bug
+   approval-hijack yang diperbaiki §6.** Satu-satunya endpoint session-scoped
+   yang LOLOS dari audit kepemilikan 2026-07-29 (`/chat-sessions/*`,
+   `/approve` sudah digerbangi saat itu) — `QuestionGate` sendiri tak
+   menyimpan `owner_user_id` (beda dari `ApprovalGate`), jadi gap ini tak
+   ketahuan lewat pola pencarian yang sama. User login mana pun (termasuk
+   role terendah) bisa menjawab pertanyaan klarifikasi `ask_user` milik sesi
+   USER LAIN hanya dengan menebak/mengetahui `session_id`-nya, menyuntikkan
+   jawaban PALSU ke tengah turn agent orang lain. Diperbaiki: kepemilikan
+   dicek via `chat_sessions.owner_user_id` (tabel yang SAMA dipakai endpoint
+   sesi lain, bukan menambah state baru) + `_can_access_owned_resource`,
+   pola identik `/chat-sessions/{id}/turns`.
+3. **`security/skill_scanner.py` — deteksi `open(path, mode="w")` (keyword)
+   sepenuhnya lolos, bypass trivial dari sinyal file-write scanner.**
+   `_scan_ast` hanya mengecek `node.args[1:]` (argumen posisional) untuk mode
+   `open()`, mengabaikan `node.keywords` sama sekali. Diverifikasi: `open(x,
+   "w")` → skor 15 (terdeteksi); `open(x, mode="w")` — OPERASI IDENTIK —
+   → skor 0 (lolos total). Diperbaiki: cek posisional DAN keyword `mode=`.
+4. **`GET /auth/callback` (OIDC) — perbandingan `state` bukan constant-time.**
+   `state != cookie_state` (operator biasa) dipakai untuk membandingkan token
+   anti-CSRF acak, TIDAK konsisten dengan pola timing-safe yang SUDAH
+   ditegakkan di seluruh perbandingan sejenis lain di codebase ini (CSRF form
+   token, login token — audit produksi 2026-07-29). Diperbaiki ke
+   `hmac.compare_digest` untuk konsistensi standar keamanan proyek sendiri
+   — risiko praktis rendah (flow login sekali-pakai, bukan endpoint yang
+   dipanggil berulang), tapi tak ada alasan membiarkan satu pengecualian.
+
+**Sudah solid (dibaca, tak perlu tindakan):** `security/policy_engine.py`
+(fail-safe konsisten, `deny_if` menang atas `approval_required_if`),
+`security/guardrails.py` (keterbatasan streaming sudah didokumentasikan
+jujur, pola regex PII/leak konservatif by design), `security/oidc.py` sisanya
+(signature/iss/aud/exp/nonce semua diverifikasi ketat, algoritma dibatasi
+eksplisit `["RS256", "ES256"]` — cegah algorithm-confusion), `security/vault.py`
+(env-var-backed cache tak pernah stale karena env tak berubah selama proses
+hidup; enkripsi-at-rest `Fernet` sudah diaudit sesi sebelumnya).
+
+Diverifikasi via `uv run --python 3.12`: **998 passed** (+6 test regresi
+baru: `tests/test_rate_limit.py`, `tests/test_auth_web.py`,
+`tests/test_rbac_web.py` ×2, `tests/test_skill_scanner.py`), ruff
+check/format bersih, tanpa dependency baru. Tiap bug diverifikasi GAGAL
+lebih dulu terhadap kode SEBELUM perbaikan (bukan cuma lolos setelah
+diperbaiki) — memastikan test benar-benar menangkap regresi, bukan
+kebetulan lolos.
 
 ---
 

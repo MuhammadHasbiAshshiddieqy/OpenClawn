@@ -144,10 +144,16 @@ class ApprovalGate:
     async def _record_decision(self, approval_id: str, decision: str) -> None:
         """Update baris pending menjadi keputusan final, dicari via kolom approval_id
         (bukan lagi via 'decision=pending:{id}' yang rapuh — lihat request())."""
-        await self.db.execute(
+        cursor = await self.db.execute(
             "UPDATE approval_log SET decision=? WHERE approval_id=? AND decision='pending'",
             (decision, approval_id),
         )
+        # rowcount==0: baris sudah diputuskan lebih dulu (mis. dua caller balapan
+        # menyelesaikan approval yatim yang sama — § durable execution, Prioritas
+        # 8.1) atau approval_id tak ada. Jangan tulis entry chain untuk keputusan
+        # yang TAK BENAR-BENAR terjadi — sama pola `set_human_feedback`.
+        if cursor.rowcount <= 0:
+            return
         # Entry BARU, bukan mengubah entry 'requested' — pasangan
         # requested→decided inilah bukti bahwa checkpoint manusia benar-benar
         # dilalui (dan berapa lama), bukan diklaim setelah fakta.
@@ -160,6 +166,78 @@ class ApprovalGate:
             ref_table="approval_log",
             ref_id=None,
         )
+
+    async def finalize_orphan(self, approval_id: str, decision: str) -> bool:
+        """Selesaikan approval 'pending' YATIM (dibuat sebelum restart server
+        terakhir — tak ada `asyncio.Future` in-memory lagi untuk di-resolve lewat
+        `resolve()`) — § Durable execution, TODO.md Prioritas 8.1.
+
+        Dipanggil `core/late_execute.py` dua kali: langsung untuk reject, atau
+        SETELAH tool selesai dieksekusi mandiri untuk approve (`decision`
+        biasanya `"approved:late"` agar audit trail membedakan dari approve
+        langsung lewat klik saat sesi masih live). Return True bila baris
+        memang masih pending & berhasil diselesaikan (rowcount>0), False bila
+        sudah diputuskan lebih dulu (race dengan caller lain) — caller
+        (`core/late_execute.py`) tetap sudah menjalankan tool dalam kasus race
+        approve; itu risiko fail-soft yang diterima, bukan double-execute yang
+        disengaja (approval_id unik per permintaan, race hanya bisa terjadi
+        dari dua klik ganda pada tombol yang sama)."""
+        if approval_id in self._pending:
+            # Ada Future hidup — bukan orphan. Caller salah jalur (seharusnya
+            # `resolve()`), tolak agar tak ada dua sumber kebenaran untuk satu
+            # approval yang sama.
+            return False
+        before = await self.db.fetchone(
+            "SELECT 1 FROM approval_log WHERE approval_id=? AND decision='pending'",
+            (approval_id,),
+        )
+        if before is None:
+            return False
+        await self._record_decision(approval_id, decision)
+        return True
+
+    async def pending_list_with_orphans(
+        self, session_id: str | None = None, owner_user_id: str | None = None
+    ) -> list[dict]:
+        """`pending_list()` (in-memory, live) DIGABUNG baris `approval_log` yang
+        masih `decision='pending'` tapi TAK PUNYA Future in-memory lagi — yaitu
+        approval yang dibuat sebelum restart server terakhir ("yatim", § Durable
+        execution TODO.md Prioritas 8.1). Tanpa ini, `GET /approvals` cuma baca
+        `self._pending` yang SELALU kosong tepat setelah proses baru mulai —
+        approval yatim jadi tak terlihat & tak bisa di-resolve lagi selamanya,
+        walau barisnya tetap ada di DB. Field `orphan: True` membedakan di UI
+        (approve/reject approval ini lewat `POST /approve` tetap sama, endpoint
+        yang menentukan jalur mana yang dipakai — lihat `web/main.py`).
+        """
+        live = self.pending_list(session_id, owner_user_id)
+        live_ids = {p["approval_id"] for p in live}
+        query = (
+            "SELECT approval_id, session_id, tool_name, tool_input, owner_user_id "
+            "FROM approval_log WHERE decision='pending'"
+        )
+        params: list[str] = []
+        if session_id is not None:
+            query += " AND session_id=?"
+            params.append(session_id)
+        rows = await self.db.fetchall(query, tuple(params))
+        orphans = []
+        for row in rows:
+            approval_id = row["approval_id"]
+            if not approval_id or approval_id in live_ids:
+                continue
+            row_owner = row["owner_user_id"]
+            if owner_user_id is not None and row_owner is not None and row_owner != owner_user_id:
+                continue
+            orphans.append(
+                {
+                    "approval_id": approval_id,
+                    "session_id": row["session_id"],
+                    "tool_name": row["tool_name"],
+                    "tool_input": json.loads(row["tool_input"]) if row["tool_input"] else {},
+                    "orphan": True,
+                }
+            )
+        return live + orphans
 
     async def auto_approve(
         self,

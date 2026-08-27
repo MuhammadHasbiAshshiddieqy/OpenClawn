@@ -47,6 +47,7 @@ TOOL_REGISTRY = {
     # eksekusi (sandboxed)
     "shell_run":    ShellRunTool(),
     "code_run":     CodeRunTool(),
+    "build_sandbox_image": BuildSandboxImageTool(),
     # akses luar
     "web_fetch":    WebFetchTool(),
     "web_search":   WebSearchTool(),
@@ -481,6 +482,28 @@ Jika asyncio timeout → `{"error": "Eksekusi melebihi timeout", "exit_code": -1
 
 ---
 
+## `tools/sandbox_image.py`
+
+### `BuildSandboxImageTool`
+
+**[§ Prioritas 8.3, sandbox proyek besar/kompleks]** Bangun image sandbox **khusus proyek ini** dengan dependency Python di-*bake* saat `docker build` — jawaban atas gap `code_run` hanya punya `numpy`/`pandas` bawaan (`Dockerfile.sandbox`), sehingga proyek nyata yang butuh paket lain tak bisa jalan sama sekali. Dari 3 arah kandidat di TODO.md, **owner memilih opsi (a)**: image kustom per-proyek, network HANYA terbuka saat `docker build`, TIDAK PERNAH saat `docker run` eksekusi kode sungguhan — invarian inti §1 (network isolation = pertahanan utama) tetap utuh untuk `code_run`/`shell_run`.
+
+- `requires_approval = True` **selalu**, non-negotiable (sekelas `code_run` — `_TRUST_MODE_EXEMPT`, `docs/core.md`) — `docker build`-nya sendiri membuka network sementara.
+- Input: `{"path": "requirements.txt"}` — `path` opsional (default `"requirements.txt"`), relatif ke workspace, divalidasi `resolve_in_current_workspace` (sama guard file tool lain). `_session_id` disuntik `AgentLoop._execute_tool` (model tak boleh mengarang ini — dipakai menulis `session_sandbox_image` setelah build sukses).
+- Validasi `_validate_requirements` SEBELUM build (§ residual risk pip, lihat di bawah): tolak kosong, >20.000 byte, >200 baris, atau baris manapun (non-komentar) yang diawali `-` — memblokir opsi pip (`-e`, `--index-url`, `-r`, `-c`, dst) yang bisa mengalihkan sumber paket ke index tak tepercaya atau instalasi VCS/lokal arbitrer.
+- Output sukses: `{"ok": True, "image": "openclawn-sandbox-proj:<hash12>", "cached": bool, "error": None, "log_tail": ""}`. `cached=True` bila image dengan hash konten `requirements.txt` yang SAMA sudah pernah dibangun (`docker image inspect` dulu — **tanpa network** bila cache hit).
+- Output gagal: `{"ok": False, "image": None, ..., "error": "...", "log_tail": "..."}` (`docker build` gagal atau timeout `SANDBOX_BUILD_TIMEOUT_SEC=300`) atau `{"error": "..."}` (validasi/path gagal, Docker tak terpasang).
+
+**Bagaimana `code_run`/`shell_run` otomatis memakainya:** setelah sukses, tool menulis `(session_id, image_tag)` ke `session_sandbox_image` via `SessionSandboxImageStore` (`infra/sandbox_image.py`). `AgentLoop.run()` memulihkan ini ke `CURRENT_SANDBOX_IMAGE` (ContextVar) di awal SETIAP turn untuk sesi itu — persis pola `CURRENT_WORKSPACE_ROOT`/`set_workdir` (§ working directory adaptif, `docs/core.md`) — jadi bertahan lintas turn DAN lintas restart server, tanpa model perlu memanggil tool lain untuk "memilih" image. `DockerSandbox._base_docker_args` membaca `effective_sandbox_image(SANDBOX_IMAGE)`: image proyek bila sesi punya satu aktif, kalau tidak `SANDBOX_IMAGE` dasar (perilaku lama, tak berubah untuk sesi yang tak pernah membangun).
+
+**Mekanisme build (`DockerSandbox.build_project_image`):** image baru dibangun `FROM {SANDBOX_IMAGE}` dasar (mewarisi semua properti keamanan lain) di build context TERISOLASI (temp dir berisi HANYA `requirements.txt` + `Dockerfile` yang di-generate — bukan seluruh workspace, agar tak ada file/secret proyek lain ikut terkirim), lalu `USER root` → `pip install --no-cache-dir -r requirements.txt` → `USER nobody`. **Satu-satunya** invocation `docker` di seluruh `tools/sandbox.py` yang sengaja TANPA `--network none`.
+
+**Residual risk yang jujur (§1/§17, jangan beri rasa aman palsu):** `pip install` bisa menjalankan kode arbitrer dari `setup.py`/build backend paket pihak ketiga SELAMA build — risiko inheren memakai pip apa pun sumbernya, TIDAK bisa dihilangkan validasi di atas, hanya dipersempit permukaannya (index resmi PyPI saja, tanpa VCS/lokal/index custom). Operator perlu menyadari ini sebelum meng-approve — sama seperti risiko `pip install` apa pun di mesin developer.
+
+**Belum ditangani (di luar skop MVP ini, dicatat sebagai follow-up, bukan diabaikan diam-diam):** hanya Python/`requirements.txt` (Node/`package.json` dkk belum didukung); tidak ada garbage collection image `openclawn-sandbox-proj:*` — operator perlu `docker image prune` manual bila banyak proyek dibangun.
+
+---
+
 ## `tools/shell.py`
 
 ### `ShellRunTool`
@@ -550,6 +573,7 @@ Prioritas resolusi folder di `AgentLoop.run()`: (1) `workspace_override` dari fo
 | `git_log` | ❌ | ✅ | ✅ | ❌ | ✅ | Tidak |
 | `shell_run` | ❌ | ✅ | ✅ | ❌ | ❌ | Tidak (sandboxed) |
 | `code_run` | ❌ | ✅ | ✅ | ✅ | ❌ | **Ya (selalu)** |
+| `build_sandbox_image` | ❌ | ✅ | ✅ | ✅ | ❌ | **Ya (selalu)** |
 | `web_fetch` | ✅ | ❌ | ✅ | ✅ | ❌ | Tidak |
 | `web_search` | ✅ | ❌ | ✅ | ✅ | ❌ | Tidak |
 | `http_request` | ❌ | ❌ | ✅ | ❌ | ❌ | **Ya** |

@@ -51,6 +51,17 @@ CREATE TABLE IF NOT EXISTS session_workspace (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Image sandbox proyek AKTIF per-sesi (§ Prioritas 8.3, sandbox proyek besar/
+-- kompleks) — lihat infra/sandbox_image.py::SessionSandboxImageStore. Diisi
+-- setelah tool build_sandbox_image sukses; code_run/shell_run otomatis memakai
+-- image ini untuk sisa sesi lewat CURRENT_SANDBOX_IMAGE (ContextVar dipulihkan
+-- dari sini di awal tiap AgentLoop.run(), sama pola session_workspace di atas).
+CREATE TABLE IF NOT EXISTS session_sandbox_image (
+    session_id TEXT PRIMARY KEY,
+    image_tag TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Metadata sesi chat single-agent untuk sidebar riwayat (§ user report: "chat
 -- selalu ke-reset", tak ada cara membuka chat baru/lanjutkan/hapus riwayat).
 -- Terpisah dari session_turns (transkrip per-giliran) — ini metadata TAMPILAN

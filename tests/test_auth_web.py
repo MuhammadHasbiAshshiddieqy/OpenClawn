@@ -330,6 +330,70 @@ def test_login_no_secure_cookie_over_plain_http(client_auth):
     assert "Secure" not in session_cookie_header
 
 
+def test_rate_limit_key_stable_across_idle_cookie_refresh(client_auth_idle):
+    """Audit 2026-08-27: kunci rate limiter HARUS `session_user_id` (stabil),
+    BUKAN cookie mentah. `idle_timeout_sec` me-refresh cookie (`ts` baru) TIAP
+    request valid (`test_idle_timeout_on_refreshes_cookie_each_valid_request`)
+    — tanpa fix ini, tiap request ke endpoint rate-limited punya key BARU,
+    membuat rate limit tak efektif sama sekali untuk user terautentikasi (dan
+    `RateLimiter._hits` bocor tanpa batas, satu entry permanen per request).
+
+    `allow()` di-patch untuk selalu tolak (429) — cukup untuk membuktikan key
+    yang dipakai KONSISTEN lintas dua request meski COOKIE-nya beda (disuntik
+    manual di sini, mensimulasikan dua cookie hasil refresh idle-timeout yang
+    berbeda `ts` tapi user_id sama — persis yang terjadi nyata di
+    `test_idle_timeout_on_refreshes_cookie_each_valid_request`), tanpa perlu
+    handler chat/LLM sungguhan."""
+    from security.auth import create_session_token, verify_session_token
+
+    import web.main as web_main
+
+    login_resp = client_auth_idle.post(
+        "/login", data={"token": "test-secret-token", "next": "/"}, follow_redirects=False
+    )
+    cookie1 = login_resp.cookies.get("openclawn_session")
+    valid, user_id = verify_session_token(cookie1, web_main.CONFIG.session_secret)
+    assert valid is True
+
+    # Cookie KEDUA yang sengaja beda string (ts berbeda) tapi user_id SAMA —
+    # persis bentuk cookie hasil refresh idle-timeout nyata.
+    cookie2 = create_session_token(web_main.CONFIG.session_secret, user_id=user_id)
+    while cookie2 == cookie1:  # tebakan `ts` detik yang sama persis — regenerasi
+        import time as _time
+
+        _time.sleep(1.01)
+        cookie2 = create_session_token(web_main.CONFIG.session_secret, user_id=user_id)
+    assert cookie2 != cookie1
+
+    captured_keys = []
+    original_allow = web_main._rate_limiter.allow
+
+    def _spy_allow(key):
+        captured_keys.append(key)
+        return False  # selalu tolak — hindari perlu handler chat sungguhan/LLM
+
+    web_main._rate_limiter.allow = _spy_allow
+    try:
+        client_auth_idle.cookies.set("openclawn_session", cookie1)
+        resp1 = client_auth_idle.post(
+            "/chat/stream", data={"message": "hi", "role": "pm", "session_id": "s1"}
+        )
+        client_auth_idle.cookies.set("openclawn_session", cookie2)
+        resp2 = client_auth_idle.post(
+            "/chat/stream", data={"message": "hi lagi", "role": "pm", "session_id": "s1"}
+        )
+    finally:
+        web_main._rate_limiter.allow = original_allow
+
+    assert resp1.status_code == 429
+    assert resp2.status_code == 429
+    assert len(captured_keys) == 2
+    assert captured_keys[0] == captured_keys[1], (
+        f"key rate-limit HARUS stabil lintas cookie berbeda: {captured_keys}"
+    )
+    assert captured_keys[0].startswith("user:")
+
+
 def test_rate_limit_blocks_after_quota_exhausted(client_no_auth):
     """Kuota RateLimiter habis → /chat/stream 429 SEBELUM mencapai handler (tak butuh LLM nyata)."""
     import web.main as web_main

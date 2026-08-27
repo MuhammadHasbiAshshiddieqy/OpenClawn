@@ -46,6 +46,15 @@ def test_code_run_is_trust_mode_exempt():
     assert "code_run" in _TRUST_MODE_EXEMPT
 
 
+def test_build_sandbox_image_is_trust_mode_exempt():
+    """§ Prioritas 8.3: build_sandbox_image sekelas sensitivitas code_run —
+    docker build-nya sendiri membuka network sementara, tak boleh lolos trust mode."""
+    from tools.sandbox_image import BuildSandboxImageTool
+
+    assert BuildSandboxImageTool.requires_approval is True
+    assert "build_sandbox_image" in _TRUST_MODE_EXEMPT
+
+
 # ── AgentLoop._execute_tool: trust_mode bypass ───────────────────────────────
 
 

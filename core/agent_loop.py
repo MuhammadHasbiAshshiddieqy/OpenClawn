@@ -11,6 +11,7 @@ from infra.database import DatabaseManager
 from infra.logging import log
 from infra.settings import SettingsStore
 from infra.workspace import CURRENT_WORKSPACE_ROOT, SessionWorkspaceStore
+from infra.sandbox_image import CURRENT_SANDBOX_IMAGE, SessionSandboxImageStore
 from core.router import SmartRouter
 from core.agent_identity import agent_identity
 from core.audit import RoutingAuditor
@@ -118,7 +119,10 @@ _FILE_WRITE_TOOLS = frozenset(
 # adalah aturan keras CLAUDE.md §1 ("code_run → True selalu"), bukan preferensi tool
 # yang bisa dilonggarkan fitur otonomi. Toggle trust mode di UI tetap memblokir ini
 # ke jalur ApprovalGate.request() normal (menunggu klik manusia), sama seperti mode biasa.
-_TRUST_MODE_EXEMPT = frozenset({"code_run"})
+# "build_sandbox_image" (§ Prioritas 8.3): sekelas sensitivitas dengan code_run —
+# `docker build`-nya sendiri membuka network sementara (§ residual risk didokumentasikan
+# `DockerSandbox.build_project_image`), jadi tak boleh lolos trust mode juga.
+_TRUST_MODE_EXEMPT = frozenset({"code_run", "build_sandbox_image"})
 
 
 def _format_tool_params(tool_name: str, params: dict) -> str:
@@ -183,6 +187,25 @@ def _validate_tool_input(tool, input_data: dict) -> str | None:
     if missing:
         return f"Tool '{tool.name}' butuh field: {', '.join(missing)}"
     return None
+
+
+def _soul_allows_tool(soul: dict, name: str) -> bool:
+    """Cek `[tools] allowed` di satu soul.toml SUDAH DIMUAT (dict), tanpa perlu instance
+    `AgentLoop`. Diekstrak dari `AgentLoop._tool_allowed` (yang delegasi ke sini dengan
+    `self._soul`) agar `core/late_execute.py` (durable execution, TODO.md § Prioritas 8.1)
+    bisa memvalidasi ulang izin role untuk approval yatim lintas restart tanpa
+    menduplikasi logika keamanan ini di dua tempat."""
+    allowed = soul.get("tools", {}).get("allowed", [])
+    if name in allowed:
+        return True
+    # Izin MCP via wildcard agar role tak perlu mendaftar tiap tool yang
+    # di-discover dinamis: "mcp__*" (semua MCP) atau "mcp__<server>__*" (satu server).
+    # Tetap OPT-IN eksplisit (§1) — tanpa wildcard di soul, MCP tool ditolak.
+    if name.startswith("mcp__"):
+        for pat in allowed:
+            if pat == "mcp__*" or (pat.endswith("*") and name.startswith(pat[:-1])):
+                return True
+    return False
 
 
 class AgentLoop:
@@ -323,12 +346,28 @@ class AgentLoop:
         ws_token = None
         if effective_override:
             ws_token = CURRENT_WORKSPACE_ROOT.set(effective_override)
+
+        # Sandbox image proyek adaptif (§ Prioritas 8.3): sama pola & alasan
+        # persis dengan folder kerja di atas — bila sesi ini pernah sukses
+        # `build_sandbox_image`, code_run/shell_run untuk SISA sesi (termasuk
+        # lintas restart server, dipulihkan dari session_sandbox_image) harus
+        # otomatis memakai image itu, bukan diam-diam balik ke SANDBOX_IMAGE
+        # dasar. Token di-reset di finally — sama alasan (jangan bocor ke
+        # request lain yang berbagi loop event).
+        sandbox_image = None
+        if self.cfg.persist_history:
+            sandbox_image = await SessionSandboxImageStore(self.db).get(self.cfg.session_id)
+        img_token = None
+        if sandbox_image:
+            img_token = CURRENT_SANDBOX_IMAGE.set(sandbox_image)
         try:
             async for ev in self._run(user_message):
                 yield ev
         finally:
             if ws_token is not None:
                 CURRENT_WORKSPACE_ROOT.reset(ws_token)
+            if img_token is not None:
+                CURRENT_SANDBOX_IMAGE.reset(img_token)
 
     async def _run(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         start = time.monotonic()
@@ -777,11 +816,17 @@ class AgentLoop:
             return {"error": f"Tool '{name}' ditolak oleh policy: {policy_decision.reason}"}
         policy_forces_approval = policy_decision.action == "require_approval"
 
-        # Tool internal per-sesi (todo_write, report_blocker, set_workdir): suntik
-        # konteks sesi/role. Tool tak menerima ini via signature execute; model tak
-        # perlu — & tak boleh — mengarang session_id/role (sumber kebenaran =
-        # AgentLoop, bukan output model).
-        if name in ("todo_write", "report_blocker", "set_workdir", "memory_search"):
+        # Tool internal per-sesi (todo_write, report_blocker, set_workdir,
+        # build_sandbox_image § Prioritas 8.3): suntik konteks sesi/role. Tool tak
+        # menerima ini via signature execute; model tak perlu — & tak boleh —
+        # mengarang session_id/role (sumber kebenaran = AgentLoop, bukan output model).
+        if name in (
+            "todo_write",
+            "report_blocker",
+            "set_workdir",
+            "memory_search",
+            "build_sandbox_image",
+        ):
             input_data = {
                 **input_data,
                 "_session_id": self.cfg.session_id,
@@ -883,17 +928,7 @@ class AgentLoop:
         return out
 
     def _tool_allowed(self, name: str) -> bool:
-        allowed = self._soul.get("tools", {}).get("allowed", [])
-        if name in allowed:
-            return True
-        # Izin MCP via wildcard agar role tak perlu mendaftar tiap tool yang
-        # di-discover dinamis: "mcp__*" (semua MCP) atau "mcp__<server>__*" (satu server).
-        # Tetap OPT-IN eksplisit (§1) — tanpa wildcard di soul, MCP tool ditolak.
-        if name.startswith("mcp__"):
-            for pat in allowed:
-                if pat == "mcp__*" or (pat.endswith("*") and name.startswith(pat[:-1])):
-                    return True
-        return False
+        return _soul_allows_tool(self._soul, name)
 
     def _tools_for_role(self) -> list:
         """Nit #1: hanya kirim schema tool yang diizinkan ke LLM."""

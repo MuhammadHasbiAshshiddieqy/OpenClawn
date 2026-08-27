@@ -14,7 +14,7 @@
     <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python 3.12+">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
     <img src="https://img.shields.io/badge/LLM-Ollama%20%2B%20Gemini%20%2B%20Claude-purple" alt="Hybrid LLM">
-    <img src="https://img.shields.io/badge/tools-27-orange" alt="27 Tools">
+    <img src="https://img.shields.io/badge/tools-28-orange" alt="28 Tools">
     <img src="https://img.shields.io/badge/tests-850%2B%20passing-brightgreen" alt="Tests">
   </p>
 </div>
@@ -193,10 +193,10 @@ graph TB
         COMPACTOR["ContextCompactor · token budget"]
     end
 
-    subgraph TOOLS["Tools — 27 total, all workspace-bounded"]
+    subgraph TOOLS["Tools — 28 total, all workspace-bounded"]
         FS["Filesystem · read/write/edit/append/patch/glob/grep/list_dir · read_many"]
         WORKDIR["set_workdir · switch active folder mid-chat, persists per session"]
-        EXEC["Execution · code_run · shell_run (both sandboxed)"]
+        EXEC["Execution · code_run · shell_run (both sandboxed)<br/>build_sandbox_image · per-project deps, network only at build"]
         NET["Network · web_fetch · web_search · http_request (SSRF-guarded)"]
         DATA["Data/docs · db_query · json_query · pdf_read · doc_write · pdf_write"]
         DEVT["Dev/agent · git_status/diff/log · todo_write · report_blocker"]
@@ -362,7 +362,7 @@ flowchart TD
 
 ### Tools & Security
 
-All 27 tools are **workspace-bounded** — every file path is resolved with `Path.resolve()`
+All 28 tools are **workspace-bounded** — every file path is resolved with `Path.resolve()`
 and rejected if it escapes the workspace root (defeats `../` and symlink escape). Tools that
 mutate state or run code require explicit approval.
 
@@ -561,7 +561,7 @@ openclawn/
 ├── memory/         # layers (L1–L4) · skill_decay · curator (merge) · skill_feedback
 │                   # user_model · search (FTS5)
 ├── roles/          # pm/qa/dev/data/security soul.toml · contracts (Pydantic) · registry
-├── tools/          # 27 tools: file_ops · read_many · search · shell · code · web · git
+├── tools/          # 28 tools: file_ops · read_many · search · shell · code · sandbox_image · web · git
 │                   # document (pdf_read · doc_write · pdf_write) · todo · report_blocker
 │                   # mcp_tool (external MCP servers)
 ├── security/       # vault (+ encryption-at-rest) · shield (NFKD)
@@ -613,7 +613,7 @@ Detailed reference for every module, class, and function:
 | `memory/` | [docs/memory.md](docs/memory.md) — L1–L4 layers, skill decay, curator (merge), skill feedback (promote/refine), user model, FTS5 search |
 | `roles/` | [docs/roles.md](docs/roles.md) — contracts, role registry, soul.toml format |
 | `security/` | [docs/security.md](docs/security.md) — vault (+ encryption-at-rest), shield, guardrails (NeMo-style rails), approval gate HITL (per-user), policy engine, auth, OIDC, rate limiting, skill scanner |
-| `tools/` | [docs/tools.md](docs/tools.md) — 27 tools, permission matrix, Docker sandbox |
+| `tools/` | [docs/tools.md](docs/tools.md) — 28 tools, permission matrix, Docker sandbox |
 | `web/` | [docs/web.md](docs/web.md) — FastAPI endpoints, SSE streaming |
 | Database | [docs/database.md](docs/database.md) — full schema + example queries |
 | Tests | [docs/tests.md](docs/tests.md) — test index + patterns |
