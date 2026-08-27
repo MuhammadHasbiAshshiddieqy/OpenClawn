@@ -7,6 +7,41 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Added — Eval harness: regression test kualitas jawaban agent (TODO.md § Prioritas 8.2)
+
+Menjawab gap yang sebelumnya tak tertutup: `crystallizer.py` (I3) menilai
+kualitas skill, `calibration_report`/`role_report` (I1) mengukur akurasi
+routing — tapi tak ada cara sistematis menjawab "apakah perubahan
+prompt/model/router menurunkan kualitas JAWABAN agent" (mirip promptfoo/evals).
+
+- **`core/eval_harness.py`** (baru) — logika murni (`EvalCase`,
+  `load_eval_cases`, `evaluate_rubric`), diuji lewat pytest TANPA LLM
+  (konsisten CLAUDE.md §5). Skor via **rubrik deterministik**
+  (`contains`/`not_contains`/`tool_called`/`tool_not_called`/`min_length`),
+  BUKAN LLM-judge — menghindari non-determinisme & biaya tambahan untuk
+  manfaat belum terbukti perlu.
+- **`scripts/run_evals.py`** (baru) — jembatan ke `AgentLoop` SUNGGUHAN
+  (butuh Ollama nyala), di luar suite pytest, pola sama `seed_routing.py`.
+  `AgentConfig(autopilot=True)` supaya tool butuh-approval diantri sebagai
+  proposal (bukan menunggu manusia yang tak ada), tapi `Turn.tool_calls`
+  tetap mencatat NIAT model — rubrik mengukur pilihan, bukan hasil eksekusi.
+- **`evals/dev/basic.yaml`** — 2 kasus contoh membuktikan mekanisme.
+
+**Dijalankan sungguhan terhadap Ollama lokal**, bukan diasumsikan bekerja —
+menemukan & memperbaiki dua bug nyata di skrip: (1) `_post_turn` adalah
+background task fire-and-forget yang masih jalan setelah generator `run()`
+habis, DB berumur-pendek skrip menutup diri terlalu cepat dan menabraknya
+("Cannot operate on a closed database") — diperbaiki dengan menunggu task
+baru sebelum `db.close()`; (2) `config=` custom lupa diteruskan ke
+`AgentLoop`, diam-diam jatuh ke `CONFIG` global. Run nyata juga menyingkap
+(tapi TIDAK memperbaiki — di luar scope, dicatat TODO.md §8.4) anomali
+`_post_turn` di kondisi tertentu — bukti bahwa harness ini menangkap kelas
+bug yang tak terlihat dari test dengan LLM di-mock, persis tujuannya dibangun.
+
+Tanpa dependency baru (`pyyaml` sudah ada sejak Prioritas 3). 22 test baru
+(`tests/test_eval_harness.py`). Diverifikasi via Docker (`python:3.12-slim`
++ `uv sync --frozen`, sama CI): **954 passed**, ruff bersih.
+
 ### Added — Sinyal koreksi & human feedback ikut dirantai (TODO.md § Prioritas 9.1 follow-up (a))
 
 Merevisi keputusan awal saat audit chain dibangun ("`had_correction`/

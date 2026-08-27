@@ -476,6 +476,30 @@ Test untuk `core/agent_identity.py` — Non-Human Identity (§ Prioritas 9.2).
 
 ---
 
+### `tests/test_eval_harness.py`
+
+Test untuk `core/eval_harness.py` — eval harness (§ Prioritas 8.2). SEMUA murni logika (parsing YAML, evaluasi rubrik) — TIDAK memanggil LLM, konsisten CLAUDE.md §5. Menjalankan kasus lewat agent sungguhan ada di `scripts/run_evals.py`, di luar suite pytest.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_contains_passes_when_present` / `test_contains_is_case_insensitive` / `test_contains_fails_when_missing` | Kriteria `contains` |
+| `test_not_contains_fails_when_present` / `test_not_contains_passes_when_absent` | Kriteria `not_contains` |
+| `test_tool_called_passes_when_present` / `test_tool_called_fails_when_absent` | Kriteria `tool_called` |
+| `test_tool_not_called_fails_when_present` / `test_tool_not_called_passes_when_absent` | Kriteria `tool_not_called` |
+| `test_min_length_fails_when_too_short` / `test_min_length_passes_when_long_enough` / `test_min_length_absent_by_default_never_fails` | Kriteria `min_length`, termasuk kasus kriteria tak diisi |
+| `test_multiple_failures_all_reported_not_just_first` | SEMUA kegagalan dilaporkan, bukan berhenti di yang pertama |
+| `test_no_expect_criteria_always_passes` | Kasus tanpa `expect` sama sekali → selalu lolos |
+| `test_answer_preview_truncated_to_200_chars` | Preview jawaban dipotong 200 karakter |
+| `test_load_eval_cases_from_single_file` | Parsing satu file YAML berisi list kasus |
+| `test_load_eval_cases_role_derived_from_parent_folder_name` | `role` diambil dari nama folder induk, bukan field YAML |
+| `test_load_eval_cases_from_directory_loads_all_yaml_files` | Direktori → semua `*.yaml` dimuat |
+| `test_load_eval_cases_missing_name_falls_back_to_filename_index` | Kasus tanpa `name` → fallback `{filename}-{index}` |
+| `test_load_eval_cases_setup_files_defaults_to_empty_dict` | `setup_files` opsional |
+| `test_load_eval_cases_rejects_non_list_yaml` | YAML bukan list (mis. dict) → `ValueError` |
+| `test_supported_expect_keys_matches_what_evaluate_rubric_actually_checks` | Cegah drift `SUPPORTED_EXPECT_KEYS` vs kunci yang benar-benar dicek |
+
+---
+
 ### `tests/test_cost_pricing.py`
 
 Test untuk `core/cost_pricing.py` — estimasi biaya retrospektif (§ Prioritas 9.4).

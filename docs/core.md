@@ -599,6 +599,34 @@ Tabel harga publik untuk **estimasi retrospektif**, bukan untuk keputusan routin
 
 ---
 
+## `core/eval_harness.py` — Eval Harness (TODO.md § Prioritas 8.2)
+
+Regression test kualitas JAWABAN agent — bukan cuma routing (I1) atau kualitas skill (I3). Menjawab "apakah perubahan prompt/model/router menurunkan kualitas jawaban" secara sistematis (mirip promptfoo/evals), sebelumnya cuma bisa diketahui dari laporan user setelah fakta.
+
+**Desain sengaja sederhana:** skor via **rubrik deterministik** (substring/tool-called/panjang minimum), BUKAN LLM-judge — LLM-judge menambah non-determinisme dan biaya (satu LLM call lagi per kasus) untuk manfaat belum terbukti perlu. Kalau nanti dibutuhkan, LLM-judge harus ditambah sebagai mode terpisah yang **tunduk aturan evaluator≥generator** (I3, `EVALUATOR_FOR`) — jangan ditambah tanpa aturan itu diperiksa ulang.
+
+**Pemisahan sengaja dari `scripts/run_evals.py`:** modul ini HANYA logika murni (parsing YAML, evaluasi rubrik) — TIDAK menyentuh `AgentLoop`/LLM sama sekali, supaya bisa diuji lewat pytest biasa tanpa melanggar CLAUDE.md §5 ("LLM: selalu mock"). Menjalankan kasus lewat agent sungguhan (butuh Ollama nyala) ada di `scripts/run_evals.py`, di luar suite pytest.
+
+### Dataclass: `EvalCase`
+
+`name`, `role`, `input`, `setup_files` (dict `{path_relatif: isi}` untuk file yang dibuat di workspace sebelum agent dijalankan), `expect` (dict rubrik), `source_path`.
+
+### Dataclass: `EvalResult`
+
+`case_name`, `passed`, `failures` (list pesan kegagalan, SEMUA dilaporkan bukan cuma yang pertama), `tool_calls` (nama tool yang dipanggil), `answer_preview` (dipotong 200 karakter).
+
+### Konstanta: `SUPPORTED_EXPECT_KEYS`
+
+`contains`, `not_contains`, `tool_called`, `tool_not_called`, `min_length` — dikunci test agar tak diam-diam divergen dari yang benar-benar dicek `evaluate_rubric()`.
+
+**`load_eval_cases(path) → list[EvalCase]`**  
+Muat dari satu file YAML atau semua `*.yaml` di satu direktori. `role` diambil dari NAMA FOLDER induk (`evals/dev/x.yaml` → role `"dev"`), bukan field eksplisit — menghindari duplikasi/typo. Satu file YAML = satu LIST kasus (bukan satu kasus per file), memudahkan pengelompokan tematik. Raise `ValueError` bila isi file bukan list.
+
+**`evaluate_rubric(case, answer, tool_calls) → EvalResult`**  
+Pure function — cek `answer`/`tool_calls` terhadap `case.expect`. `contains`/`not_contains` case-insensitive. Tanpa `expect` sama sekali → selalu lolos (tak ada kriteria = tak ada yang bisa gagal).
+
+---
+
 ## `core/crystallizer.py` — Inovasi 3
 
 Agent menilai kualitas solusinya sendiri sebelum menyimpan sebagai skill.

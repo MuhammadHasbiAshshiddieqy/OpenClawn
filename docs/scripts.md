@@ -110,6 +110,58 @@ rancang strategi migrasi database ...         7  critical critical  complex   �
 
 ---
 
+## `scripts/run_evals.py` — Eval Harness (TODO.md § Prioritas 8.2)
+
+Jalankan kasus uji (`evals/<role>/*.yaml`) lewat `AgentLoop` **sungguhan** — butuh Ollama nyala. Beda dari `seed_routing.py`/`route_sensitivity.py` (deterministik, tanpa LLM), skrip ini justru SENGAJA memanggil model nyata untuk mendeteksi regresi kualitas jawaban yang tak terlihat dari test dengan LLM di-mock. Logika evaluasi murni ada di [`core/eval_harness.py`](../core/eval_harness.py) (diuji lewat pytest); skrip ini hanya menjembatani ke `AgentLoop` nyata.
+
+> **Bukan CI gate** — CI tak punya akses Ollama. Alat dev/manual, dijalankan siapa pun yang punya Ollama lokal.
+
+### Cara pakai
+
+```bash
+python scripts/run_evals.py --path evals/dev                        # semua kasus role dev
+python scripts/run_evals.py --path evals                            # semua role
+python scripts/run_evals.py --path evals/dev/basic.yaml             # satu file
+python scripts/run_evals.py --path evals/dev --model ollama:qwen2.5:3b
+python scripts/run_evals.py --path evals/dev --timeout 10           # timeout approval/question (detik)
+```
+
+### Argumen
+
+| Argumen | Default | Keterangan |
+|---|---|---|
+| `--path` | `evals` | File atau direktori kasus uji |
+| `--model` | *(kosong)* | Override `provider:model` (mis. `ollama:qwen2.5:3b`). Kosong → `SmartRouter` otomatis per role |
+| `--timeout` | `5` | Timeout approval/question (detik) — pendek sengaja, lihat "Cara kerja" |
+
+### Cara kerja
+
+- Tiap kasus dijalankan di DB (`:memory:`) + workspace **temporer terpisah** — tak ada state bocor antar kasus.
+- `AgentConfig(autopilot=True)` — tool butuh-approval DIANTRI sebagai proposal (tak dieksekusi), bukan menunggu manusia yang tak akan pernah ada. `Turn.tool_calls` tetap mencatat NIAT model memanggilnya (dicek `_execute_tool` SEBELUM approval diputuskan) — rubrik `tool_called`/`tool_not_called` mengukur **pilihan** model, bukan hasil eksekusi tool.
+- **Ditemukan lewat run nyata (bukan diasumsikan):** `AgentLoop.run()` menjadwalkan `_post_turn` sebagai background task fire-and-forget (`asyncio.create_task`) yang MASIH JALAN setelah generator `run()` habis. DB berumur-pendek skrip ini (beda dari server produksi yang koneksinya tetap hidup) menutup diri terlalu cepat tanpa ini, menyebabkan `_post_turn` gagal `"Cannot operate on a closed database"` di tengah jalan. Diperbaiki: tangkap task baru yang muncul selama `run()`, tunggu (timeout 10 detik) sebelum `db.close()`.
+- Skor via `core/eval_harness.py::evaluate_rubric()` — rubrik deterministik, BUKAN LLM-judge.
+- Exit code `0` = semua lolos, `1` = ada yang gagal.
+
+### Format kasus uji (`evals/<role>/*.yaml`)
+
+```yaml
+- name: reads-file-before-answering
+  input: "Baca isi file notes.txt, lalu sebutkan angka di dalamnya."
+  setup_files:
+    notes.txt: "Catatan penting: jawabannya adalah 42."
+  expect:
+    tool_called: ["file_read"]
+    contains: ["42"]
+```
+
+`role` kasus = nama folder induk file (`evals/dev/x.yaml` → role `dev`), bukan field di YAML. Satu file = satu list kasus (boleh banyak).
+
+### Verifikasi nyata (2026-08-03)
+
+Dijalankan langsung terhadap Ollama lokal (`qwen2.5:3b`, via `uv run --python 3.12` karena mesin dev hanya punya Python 3.9): mekanisme terbukti bekerja end-to-end (setup workspace → jalankan agent nyata → skor rubrik → laporan). Kasus `does_not_call_code_run_for_simple_arithmetic` **PASS**; kasus `reads-file-before-answering` **FAIL** — model 3B sempat memanggil tool dengan nama kosong (`tool_loop_detected` — mekanisme deteksi loop yang sudah ada bekerja benar) sebelum akhirnya menjawab tanpa membaca file. Ini temuan kualitas MODEL yang sah (model kecil kadang gagal format tool-call), bukan bug harness — persis kelas masalah yang harness ini dibuat untuk menangkap.
+
+---
+
 ## Catatan untuk Maintainer
 
 - Kedua script aman dijalankan berkali-kali (idempoten untuk migration; seed pakai prefix khusus).

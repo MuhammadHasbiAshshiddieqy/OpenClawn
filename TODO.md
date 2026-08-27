@@ -577,17 +577,54 @@ konfirmasi eksplisit (pola sama item 7-8 di §4).
    menunggu approval berarti tool loop di-serialize penuh (bukan cuma
    approval), atau cukup approval state saja yang persisten — ini
    menentukan seberapa besar perubahan `agent_loop.py`.
-2. **Eval harness formal — test suite dengan scoring rubric untuk kualitas
-   jawaban agent, bukan cuma routing.** `core/crystallizer.py` (I3) menilai
-   kualitas *skill* sebelum disimpan, dan `calibration_report`/`role_report`
-   (I1, `core/audit.py`) mengukur akurasi *routing* dari koreksi user nyata
-   — tapi tak ada regression test untuk "apakah perubahan prompt/model/router
-   menurunkan kualitas jawaban" secara sistematis (mirip promptfoo/evals).
-   Kandidat desain minimal selaras CLAUDE.md §8 (sederhana dulu): file
-   YAML per role berisi `{input, expected_criteria}`, runner yang memanggil
-   `AgentLoop` dengan LLM di-mock ATAU model kecil sungguhan, skor via
-   rubric sederhana (bukan LLM-judge kompleks) — evaluator tetap tunduk
-   aturan evaluator≥generator (I3) bila dievaluasi model.
+2. **Eval harness formal — ✅ SELESAI (2026-08-03).** `core/eval_harness.py`
+   (murni logika: `EvalCase`, `load_eval_cases`, `evaluate_rubric` — dites
+   pytest tanpa LLM, konsisten CLAUDE.md §5) + `scripts/run_evals.py`
+   (jembatan ke `AgentLoop` SUNGGUHAN, di luar suite pytest, pola sama
+   `seed_routing.py`) + `evals/dev/basic.yaml` (2 kasus contoh). Skor via
+   rubrik deterministik (`contains`/`not_contains`/`tool_called`/
+   `tool_not_called`/`min_length`) — BUKAN LLM-judge, sesuai arahan; kalau
+   LLM-judge ditambah nanti WAJIB tunduk evaluator≥generator (I3).
+   `AgentConfig(autopilot=True)` dipakai supaya tool butuh-approval diantri
+   sebagai proposal (bukan menunggu manusia yang tak ada), tapi `tool_calls`
+   tetap mencatat NIAT model — rubrik mengukur pilihan, bukan eksekusi.
+>
+> Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **954
+> passed** (+22 dari 932), ruff bersih, tanpa dependency baru (`pyyaml`
+> sudah ada). **Dijalankan SUNGGUHAN terhadap Ollama lokal** (`qwen2.5:3b`,
+> via `uv run --python 3.12` karena mesin dev cuma Python 3.9) — bukan cuma
+> diasumsikan bekerja dari unit test. Mekanisme terbukti end-to-end: setup
+> workspace temporer → agent nyata jalan → tool loop → jawaban final → skor
+> rubrik → laporan PASS/FAIL dengan exit code yang benar.
+>
+> **Dua bug NYATA di `scripts/run_evals.py` ditemukan & diperbaiki lewat run
+> sungguhan** (bukan lewat review kode semata — persis metodologi "verifikasi
+> empiris" yang dipakai sepanjang minggu ini):
+> (a) `AgentLoop.run()` menjadwalkan `_post_turn` sebagai background task
+> fire-and-forget yang MASIH JALAN setelah generator `run()` habis — DB
+> berumur-pendek skrip (beda dari server produksi) ditutup terlalu cepat,
+> menyebabkan `"Cannot operate on a closed database"`. Diperbaiki: tangkap
+> task baru yang muncul selama `run()`, tunggu sebelum `db.close()`.
+> (b) `AgentLoop.__init__` diam-diam jatuh ke `CONFIG` global (bukan
+> `AppConfig` custom milik skrip) karena parameter `config=` lupa
+> diteruskan — kelas bug "diam-diam salah", bukan "jelas gagal" (skrip tetap
+> jalan, tapi `approval_timeout_sec`/dst yang dipakai BUKAN yang dimaksud).
+>
+> **Anomali DITEMUKAN tapi SENGAJA TIDAK DIKEJAR lebih jauh** (di luar scope
+> "bangun eval harness"): `_post_turn` gagal `"no such table: memory_l1"`
+> dalam kondisi spesifik — `_generate_session_title()` (`core/agent_loop.py`)
+> memakai `self.config.compaction_local_model` (default `("ollama",
+> "gemma4:e2b")`) untuk model judul chat, TERPISAH dari override model utama
+> (`SettingsStore.set_model_override`) yang dipakai turn utama — bila model
+> default itu tak ada di Ollama lokal (seperti di lingkungan uji ini),
+> title-generation gagal lewat cascade fallback panjang, dan SETELAHNYA
+> `memory.update_checkpoint()` melempar "no such table" walau migrasi penuh
+> sudah dijalankan di awal skrip. Root cause PERSIS belum ditemukan (diduga
+> terkait siklus hidup koneksi `:memory:` aiosqlite di bawah beban fallback
+> berat, belum dibuktikan) — dicatat di sini sebagai bukti nyata bahwa eval
+> harness berhasil menyingkap bug yang TAK TERLIHAT dari test dengan LLM
+> di-mock, persis tujuan fitur ini dibangun. **Investigasi lanjut = pekerjaan
+> terpisah, bukan bagian scope eval harness.**
 3. **`code_run`/`shell_run` tidak mampu menjalankan proyek nyata yang
    "lumayan besar dan kompleks"** (ditemukan saat menjelaskan alur
    coding-assistant ke owner, 2026-08-03) — batasan nyata, bukan bug, tapi
@@ -609,6 +646,17 @@ konfirmasi eksplisit (pola sama item 7-8 di §4).
    install sendiri tak jadi celah baru; (c) timeout/resource limit
    configurable per-role via `soul.toml`/`AppConfig` untuk proses yang
    memang perlu lebih lama dari 30 detik.
+4. **[Ditemukan lewat eval harness §8.2, BELUM diinvestigasi] `_post_turn`
+   melempar `"no such table: memory_l1"`** dalam kondisi spesifik: model
+   default `compaction_local_model` (dipakai `_generate_session_title`,
+   `core/agent_loop.py`) tak tersedia di Ollama lokal → cascade fallback
+   panjang → SETELAHNYA `memory.update_checkpoint()` gagal "no such table"
+   walau migrasi sudah dijalankan penuh di awal. Direproduksi 2× via
+   `scripts/run_evals.py` (bukan sekali kebetulan). Root cause BELUM
+   ditemukan (dugaan: siklus hidup koneksi `:memory:` aiosqlite di bawah
+   fallback berat — belum dibuktikan). Investigasi lanjut butuh sesi
+   terpisah yang fokus pada `_post_turn`/`memory/layers.py`, bukan dikerjakan
+   terburu-buru sebagai bagian item lain.
 
 ---
 

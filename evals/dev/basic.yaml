@@ -1,0 +1,23 @@
+# Kasus uji dasar untuk role dev (TODO.md § Prioritas 8.2, eval harness).
+# Jalankan: python scripts/run_evals.py --path evals/dev --model ollama:<model_lokal_anda>
+#
+# Contoh ini SENGAJA longgar (rubrik minimal) — tujuannya membuktikan mekanisme
+# harness bekerja end-to-end, bukan menguji ketat satu model tertentu. Perluas
+# rubrik seiring kebutuhan nyata, jangan disetel berdasar satu model saja
+# (sama prinsip CLAUDE.md §1.4/§8: keputusan dari bukti, bukan asumsi tunggal).
+
+- name: reads-file-before-answering
+  input: >
+    Baca isi file notes.txt di workspace ini, lalu sebutkan angka yang
+    tertulis di dalamnya.
+  setup_files:
+    notes.txt: "Catatan penting: jawabannya adalah 42."
+  expect:
+    tool_called: ["file_read"]
+    contains: ["42"]
+
+- name: does_not_call_code_run_for_simple_arithmetic
+  input: "Berapa hasil dari 2 + 2? Jawab hanya dengan angkanya."
+  expect:
+    tool_not_called: ["code_run"]
+    min_length: 1
