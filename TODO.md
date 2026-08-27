@@ -621,7 +621,58 @@ dikerjakan tanpa konfirmasi eksplisit (pola sama §4 item 7-8 dan §8).
 Diurutkan berdasarkan **urgensi pasar × kesiapan fondasi kode**, bukan
 kemudahan implementasi.
 
-### 9.1 Tamper-evident audit trail (hash chaining) — PALING MENDESAK
+### 9.1 Tamper-evident audit trail (hash chaining) — ✅ SELESAI (2026-08-03)
+
+> **Dikerjakan atas arahan owner eksplisit** ("utamakan tren dan market pasar,
+> buat OpenCLAWN tetap valid beberapa tahun ke depan") — dipilih dari 4 kandidat
+> §9 karena menang di KEDUA kriteria itu: regulasi sudah berlaku (bukan tren
+> opsional) dan regulasi bertahan bertahun-tahun (beda dari spesifikasi
+> framework yang bisa berubah — bandingkan §9.3 yang justru ditunda karena
+> spec-nya belum stabil).
+>
+> **Hasil:** `core/audit_chain.py` + tabel `audit_chain` (append-only,
+> SHA-256 chained) + `GET /audit/verify` (admin-only, mengembalikan `head`
+> untuk anchoring). Di-wire ke `RoutingAuditor` (decision/finalized) dan
+> `ApprovalGate` (requested/decided/**auto** — trust mode dirantai justru
+> karena MELEWATI klik manusia). Fungsi SQLite `SHA256` didaftarkan
+> `DatabaseManager` (pola sama `POWER()`) supaya penulisan rantai ATOMIK dalam
+> satu statement — mencegah rantai bercabang saat dua turn bersamaan, yang akan
+> tampak sebagai "rantai rusak" padahal tak ada manipulasi.
+>
+> **Keputusan desain kunci:** tabel TERPISAH, bukan kolom hash di
+> `routing_events`/`approval_log` — kedua tabel itu DIMUTASI setelah INSERT
+> (`finalize`, `check_correction` di turn berikutnya, `set_human_feedback`),
+> jadi hash in-place tak akan pernah verify. Append-only menghindari itu
+> sepenuhnya, dan justru membuat urutan "diputuskan→diselesaikan→dikoreksi"
+> terlihat sebagai sejarah.
+>
+> **Batas jaminan didokumentasikan JUJUR & dikunci test** (bukan diklaim lebih):
+> hash chain membuat perubahan retroaktif TERDETEKSI, bukan MUSTAHIL.
+> Penghapusan entry terakhir (truncation) dan penulisan-ulang seluruh rantai
+> TIDAK tertangkap `verify()` — hanya oleh anchoring (menyalin `head` ke luar
+> sistem). Dua test sengaja mengunci fakta ini
+> (`test_detects_deleted_last_entry_only_via_anchor`,
+> `test_rewriting_whole_chain_is_not_detected_by_verify_alone`) supaya tak ada
+> yang mengubahnya jadi klaim "immutable" yang berlebihan di README/UI.
+> Tanda tangan per-entry (ECDSA) di luar scope — butuh manajemen kunci yang
+> belum ada.
+>
+> Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **863
+> passed** (+13 baru), ruff check/format bersih, `uv.lock` tak tersentuh (tanpa
+> dependency baru — `hashlib` stdlib). Verifikasi manual end-to-end lewat jalur
+> nyata (`RoutingAuditor` + `ApprovalGate`) mengonfirmasi rantai terbentuk,
+> `verify()` hijau saat utuh, dan manipulasi entry `approval.auto` terdeteksi
+> tepat di entry ke-3 dengan alasan yang benar.
+>
+> **Follow-up yang SENGAJA belum dikerjakan** (bukan lupa): (a) `had_correction`
+> / `human_feedback` belum dirantai — itu sinyal kalibrasi, bukan bukti tindakan
+> agent; (b) retensi 6 bulan EU AI Act belum ditegakkan kode (tak ada pruning
+> sama sekali di proyek ini saat ini) — perlu keputusan terpisah apakah jadi
+> tanggung jawab kode atau operator; (c) anchoring otomatis (mis. cron menyalin
+> `head` ke file/sistem lain) — kebijakannya per-deployment, sengaja tak
+> dipaksakan dari kode.
+
+**Konteks & justifikasi asli (dipertahankan):**
 
 **Temuan riset yang mengubah prioritas:** EU AI Act Article 12 (kewajiban
 *automatic recording of events* untuk sistem AI risiko-tinggi) menjadi

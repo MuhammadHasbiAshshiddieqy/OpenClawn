@@ -458,6 +458,50 @@ Simpan override. `mapping`: `{tier_value: {model, provider}}`. Hanya tier valid 
 
 ---
 
+## `core/audit_chain.py` — Tamper-Evident Audit Trail (TODO.md § Prioritas 9.1)
+
+Rantai hash **append-only** atas titik keputusan agent + checkpoint manusia. Menjawab EU AI Act Article 12 (enforceable 2026-08-02) dan menjadikan pilar README "Immutable Audit Evidence" klaim yang **didukung implementasi** — sebelumnya `routing_events`/`approval_log` hanya baris SQLite biasa yang bisa diubah/dihapus tanpa jejak.
+
+**Kenapa tabel terpisah, bukan kolom hash di tabel audit yang ada:** `routing_events` DIMUTASI berkali-kali setelah INSERT (`finalize()`, `check_correction()` di turn berikutnya, `set_human_feedback()` kapan saja). Hash in-place akan invalid tiap mutasi → rantai tak akan pernah verify. Di sini mutasi = entry BARU; entry lama tak pernah disentuh. Efek samping yang berguna: urutan "diputuskan → diselesaikan → dikoreksi" terlihat sebagai sejarah, bukan satu baris yang ditimpa.
+
+### Konstanta: entry type
+
+`routing.decision` (sebelum LLM dipanggil) · `routing.finalized` (sesudah turn selesai) · `approval.requested` (checkpoint manusia dibuka) · `approval.decided` (manusia memutuskan / timeout) · `approval.auto` (trust mode MELEWATI klik manusia — dirantai justru karena melewatinya).
+
+Sengaja **selektif**: hanya titik keputusan relevan-compliance. Sinyal kualitas (`had_correction`, `human_feedback`) TIDAK dirantai — itu umpan balik kalibrasi router, bukan bukti tindakan agent. Bisa ditambah nanti tanpa memecah rantai lama.
+
+### Kelas: `AuditChain`
+
+**`append(entry_type, payload, ref_table="", ref_id=None) → str | None`** *(async)*
+Tambah satu entry ke ujung rantai; return `record_hash` (atau `None` bila gagal). Penulisan **ATOMIK dalam satu statement SQL** — `prev_hash` dibaca lewat subquery di dalam INSERT yang sama, sehingga dua turn bersamaan tak bisa membaca head yang sama lalu menulis rantai bercabang (yang akan tampak sebagai "rantai rusak" padahal tak ada manipulasi — alarm palsu yang merusak kepercayaan pada mekanisme ini). Hash dihitung fungsi SQLite `SHA256` yang didaftarkan `DatabaseManager` — pola sama `POWER()` untuk skill decay.
+
+**FAIL-SOFT (keputusan sadar):** kegagalan menulis rantai TIDAK menjatuhkan turn user — hanya di-log error. Alasannya: entry yang hilang tetap terdeteksi `verify()` sebagai lompatan hash (jadi kegagalan tak pernah senyap), sedangkan menggagalkan turn karena masalah audit membuat sistem berhenti melayani justru saat DB bermasalah. Konsisten pola fail-soft audit lain (`queue_proposal`, `_log_attempt`).
+
+**`verify() → dict`** *(async)*
+Return `{"ok", "checked", "broken_at", "reason"}`. Mengecek **dua** hal per entry: (1) `prev_hash` cocok `record_hash` entry sebelumnya (rantai tak terputus/tersisip), dan (2) `record_hash` benar hasil hash isi entry itu (isi tak diubah). Mengecek hanya salah satu tak cukup — (1) saja lolos bila isi diubah tanpa menyentuh hash; (2) saja lolos bila entry di tengah dihapus. `broken_at` = `id` entry pertama yang bermasalah, supaya operator tahu **sejak kapan** riwayat tak bisa dipercaya.
+
+**`head() → dict | None`** *(async)*
+Entry terakhir (`id`, `record_hash`, `created_at`) — untuk **anchoring**.
+
+### Batas jaminan (jangan diklaim lebih dari ini)
+
+Hash chain membuat perubahan retroaktif **terdeteksi**, bukan **mustahil**. Dua batasan yang dikunci test (`tests/test_audit_chain.py`) agar tak dilebih-lebihkan di dokumentasi:
+
+| Serangan | Ditangkap `verify()`? | Yang menangkapnya |
+|---|---|---|
+| Isi entry diubah | ✅ | `record_hash` tak cocok isi |
+| Entry di tengah dihapus / disisipkan / ditukar urutan | ✅ | `prev_hash` menggantung |
+| Entry **terakhir** dihapus (truncation) | ❌ | Anchoring — bandingkan `head()` dengan hash yang disalin ke luar sistem |
+| **Seluruh** rantai ditulis ulang dengan hash konsisten | ❌ | Anchoring, alasan sama |
+
+Karena itu `GET /audit/verify` mengembalikan `head` — operator perlu menyalinnya keluar secara berkala. Kebijakan anchoring di luar scope kode. Tanda tangan kriptografis per-entry (ECDSA, pola IETF `draft-sharif-agent-audit-trail`) juga di luar scope: butuh manajemen kunci yang belum ada di proyek ini.
+
+**Fungsi modul:** `canonical_payload(payload)` (JSON `sort_keys` + separator rapat), `compute_hash(body, prev_hash)` (satu-satunya definisi hash — dipakai saat menulis maupun verifikasi supaya tak bisa divergen), `_canonical_body(...)` *(private)*. Body dibangun sebagai **JSON kanonik**, bukan penggabungan berdelimiter (`a|b|c`), karena nilai yang mengandung delimiter bisa membuat dua entry berbeda menghasilkan body identik — celah tabrakan yang diuji `test_delimiter_injection_does_not_collide`.
+
+> **ASUMSI:** ini bukan RFC 8785 (JCS) penuh — cukup untuk verifikasi oleh implementasi ini sendiri (satu-satunya konsumen saat ini). Bila sistem LAIN perlu memverifikasi rantai kita, JCS penuh jadi relevan, terutama untuk float (aturan serialisasinya beda antar bahasa).
+
+---
+
 ## `core/audit.py` — Inovasi 1
 
 Mencatat setiap keputusan routing dan apakah terbukti tepat.
@@ -471,8 +515,12 @@ Daftar kata/frasa yang menandakan user mengoreksi respons sebelumnya (sinyal fee
 **`log_decision(session_id, role, query, route, user_id="default") → int`** *(async)*  
 Catat keputusan routing ke tabel `routing_events` **sebelum** LLM call. Return `lastrowid` (dipakai sebagai `event_id` untuk `finalize`). Semua 8 dimensi dicatat. `user_id` (§ Audit log format actor_is_agent, TODO.md Prioritas 2) — `AgentConfig.user_id`, default `"default"` selaras single-user design saat ini (CLAUDE.md §7). `actor_is_agent` TIDAK diparameterkan — selalu `1` via `DEFAULT` kolom (setiap baris tabel ini memang tindakan agent), pola audit log standar pasar (GitHub control plane) yang memudahkan integrasi SIEM eksternal.
 
+Juga menulis entry `routing.decision` ke rantai audit (`self.chain`, lihat `core/audit_chain.py`) — payload ringkas (model/provider/complexity/`query_preview` 200 char), bukan salinan penuh baris; `ref_id` menunjuk ke `routing_events` untuk data lengkap.
+
 **`finalize(event_id, turn, evidence=None) → None`** *(async)*  
 Update record dengan hasil aktual **setelah** turn selesai: token in/out, cost, latensi, fallback flag. `evidence` (opsional, § Evidence-Based Response TODO.md Prioritas 2) — dict `{policy, memory, guardrail}` di-serialize JSON ke kolom `evidence_json`, query-able via `GET /evidence/{event_id}` (`docs/web.md`). Dibangun di `AgentLoop.run()` dari `route`/`active_skills`/hasil guardrail OUTPUT — semua data yang SUDAH tersedia sinkron saat turn selesai, tidak menambah query baru.
+
+Juga menulis entry `routing.finalized` ke rantai audit — entry **baru**, bukan mengubah entry `routing.decision` (rantai append-only, lihat `core/audit_chain.py`).
 
 **`check_correction(user_message, session_id) → None`** *(async)*  
 Dipanggil di **awal setiap turn** (oleh `AgentLoop.run`). Jika pesan user mengandung sinyal koreksi, update record turn **sebelumnya** di session yang sama dengan `had_correction=1`. Aman dipanggil selalu — UPDATE hanya kena bila ada event sebelumnya untuk session. (Tidak boleh di-gate `self.history`: AgentLoop dibuat baru tiap request web → history selalu kosong → koreksi tak pernah terdeteksi.)

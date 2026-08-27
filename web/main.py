@@ -25,6 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from core.activity import ActivityTimeline
 from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
+from core.audit_chain import AuditChain
 from core.llm_client import close_shared_http_client, get_shared_http_client
 from core.autopilot import AutopilotScheduler, AutopilotStore
 from core.skill_pack import SkillPack
@@ -1229,6 +1230,26 @@ async def submit_human_feedback(event_id: int, request: Request):
     if not ok:
         raise StarletteHTTPException(status_code=404, detail="event not found")
     return {"ok": True, "event_id": event_id, "rating": rating}
+
+
+@app.get("/audit/verify")
+async def audit_verify(request: Request):
+    """Verifikasi integritas rantai audit (§ Prioritas 9.1, EU AI Act Article 12).
+
+    Admin-only: hasilnya mengungkap ADA/TIDAKNYA manipulasi riwayat — informasi
+    yang sendirinya sensitif (penyerang yang tahu rantai sudah rusak tahu pula
+    manipulasinya belum ketahuan). Pola sama endpoint config sistem lain.
+
+    Response menyertakan `head` (id + hash entry terakhir) supaya operator bisa
+    ANCHORING: mencatat hash itu ke luar sistem secara berkala. Tanpa anchoring,
+    penyerang dengan akses tulis DB bisa menulis ULANG seluruh rantai dan
+    verifikasi tetap hijau — batas jaminan yang didokumentasikan jujur di
+    `core/audit_chain.py`, bukan disembunyikan.
+    """
+    _require_role(request, "admin")
+    chain = AuditChain(db)
+    result = await chain.verify()
+    return {**result, "head": await chain.head()}
 
 
 @app.post("/calibration/apply")

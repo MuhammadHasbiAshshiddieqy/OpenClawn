@@ -155,6 +155,29 @@ CREATE TABLE IF NOT EXISTS approval_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- ===================== AUDIT CHAIN (tamper-evident) [§ Prioritas 9.1] =====================
+-- Rantai hash APPEND-ONLY atas titik keputusan agent + checkpoint manusia.
+-- Menjawab EU AI Act Article 12 (enforceable 2026-08-02): logging otomatis yang
+-- cukup untuk traceability, dan membuat modifikasi retroaktif TERDETEKSI.
+--
+-- Kenapa tabel sendiri, bukan kolom hash di routing_events/approval_log:
+-- kedua tabel itu DIMUTASI setelah INSERT (finalize/check_correction/
+-- set_human_feedback, resolve approval), jadi hash in-place akan invalid tiap
+-- mutasi. Di sini mutasi = entry BARU, entry lama tak pernah disentuh.
+-- JANGAN pernah UPDATE/DELETE tabel ini — itu memutus rantai (dan memang
+-- dirancang supaya ketahuan bila terjadi). Lihat core/audit_chain.py.
+CREATE TABLE IF NOT EXISTS audit_chain (
+    id INTEGER PRIMARY KEY,                 -- urutan rantai (monotonik)
+    entry_type TEXT NOT NULL,               -- routing.decision | routing.finalized | approval.requested | approval.decided | approval.auto
+    ref_table TEXT,                         -- tabel sumber (routing_events / approval_log), '' bila tak ada
+    ref_id INTEGER,                         -- id baris sumber — penghubung ke data penuh
+    payload_json TEXT NOT NULL,             -- snapshot kanonik apa yang terjadi (JSON sort_keys, separator rapat)
+    created_at TEXT NOT NULL,               -- diisi Python (BUKAN DEFAULT CURRENT_TIMESTAMP) karena ikut di-hash — harus sama persis saat verifikasi
+    prev_hash TEXT NOT NULL,                -- record_hash entry sebelumnya; '' untuk entry pertama (genesis)
+    record_hash TEXT NOT NULL               -- SHA256(canonical_body || prev_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_audit_chain_ref ON audit_chain(ref_table, ref_id);
+
 -- ===================== APP SETTINGS (runtime override) =====================
 -- Key-value sederhana untuk override yang bisa diubah lewat /settings tanpa restart.
 -- mis. model_override_provider / model_override_model (paksa semua tier ke 1 model).

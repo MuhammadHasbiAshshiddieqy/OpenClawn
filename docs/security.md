@@ -200,6 +200,8 @@ caller yang tidak memberi ID, mis. test lama).
 **`resolve(approval_id, approved) → bool`**  
 Dipanggil dari endpoint `/approve` saat user klik tombol. Set result pada Future yang menunggu di `request()`. Return `True` jika approval_id valid dan berhasil di-resolve, `False` jika tidak ditemukan atau sudah selesai. **Cek kepemilikan TIDAK dilakukan di sini secara sengaja** — dilakukan caller (`web/main.py`, via `find_pending`) SEBELUM memanggil ini, pola sama dengan `_require_role` yang digerbangi di lapisan endpoint, bukan di service layer. `resolve()` tetap mekanisme murni.
 
+**Rantai audit (§ Prioritas 9.1).** `ApprovalGate` menulis ke `audit_chain` (`core/audit_chain.py`) di tiga titik: `approval.requested` (checkpoint dibuka), `approval.decided` (manusia memutuskan / timeout), dan `approval.auto` (trust mode **melewati** klik manusia). Yang terakhir dirantai justru KARENA melewatinya — "aksi butuh-approval mana yang dijalankan tanpa persetujuan eksplisit" adalah pertanyaan pertama auditor, dan jawabannya tak boleh bisa dihapus diam-diam. Pasangan `requested`→`decided` adalah bukti bahwa checkpoint benar-benar dilalui, bukan diklaim setelah fakta.
+
 **`find_pending(approval_id) → PendingApproval | None`**  
 Cari satu pending approval by ID — dipakai `web/main.py` untuk cek kepemilikan (`owner_user_id`) SEBELUM memanggil `resolve()`.
 

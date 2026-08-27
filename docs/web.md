@@ -484,6 +484,18 @@ Response sukses: `{"ok": true, "event_id": 141, "rating": 5}`. `400` bila `ratin
 
 ---
 
+#### `GET /audit/verify`
+
+**Verifikasi integritas rantai audit (§ Prioritas 9.1, EU AI Act Article 12).**
+
+Response: `{"ok": bool, "checked": N, "broken_at": id|null, "reason": "...", "head": {"id","record_hash","created_at"}}`. `broken_at` menunjuk entry pertama yang bermasalah — operator tahu **sejak kapan** riwayat tak bisa dipercaya, bukan cuma "rusak/tidak".
+
+**RBAC:** `_require_role(request, "admin")` — hasilnya mengungkap ada/tidaknya manipulasi riwayat, informasi yang sendirinya sensitif (penyerang yang tahu rantai sudah rusak tahu pula manipulasinya belum ketahuan). Tak berlaku bila `CONFIG.auth_active` False.
+
+**`head` untuk anchoring — penting.** `verify()` sendirian TIDAK menangkap dua serangan: penghapusan entry terakhir (truncation) dan penulisan-ulang seluruh rantai. Yang menangkapnya adalah membandingkan `head` sekarang dengan `record_hash` yang disalin ke luar sistem secara berkala. Batas jaminan ini didokumentasikan jujur di [`docs/core.md`](core.md) § `core/audit_chain.py` dan dikunci test — jangan diklaim lebih di UI/marketing.
+
+---
+
 #### `POST /calibration/apply`
 
 **Terapkan rekomendasi kalibrasi — loop tertutup Inovasi 1.** Form: `delta` (dijepit ke `{-1,0,+1}`), `reason`.

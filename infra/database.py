@@ -1,3 +1,5 @@
+import hashlib
+
 import aiosqlite
 from infra.config import AppConfig
 
@@ -99,6 +101,13 @@ class DatabaseManager:
             await self._conn.execute("PRAGMA foreign_keys=ON")
             # POWER() dibutuhkan untuk exponential decay (§12)
             await self._conn.create_function("POWER", 2, lambda b, e: b**e)
+            # SHA256() dibutuhkan audit chain (TODO.md § Prioritas 9.1) — agar
+            # penulisan rantai bisa ATOMIK dalam satu statement (baca prev_hash +
+            # hitung hash + INSERT sekaligus), bukan read-then-write yang bisa
+            # bercabang saat dua turn bersamaan. Pola sama POWER() di atas.
+            await self._conn.create_function(
+                "SHA256", 1, lambda s: hashlib.sha256((s or "").encode("utf-8")).hexdigest()
+            )
         return self._conn
 
     async def execute(self, sql: str, params: tuple = ()) -> aiosqlite.Cursor:

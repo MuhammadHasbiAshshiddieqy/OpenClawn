@@ -5,6 +5,49 @@ All notable changes to OpenCLAWN are documented here. Format loosely follows
 [SemVer](https://semver.org/). Versi 0.7.0 menandai keluarnya dari fase
 pre-release (`-alpha`) menjadi rilis stabil pertama.
 
+## [Unreleased]
+
+### Added — Tamper-evident audit trail (TODO.md § Prioritas 9.1)
+
+Rantai hash **append-only** (`core/audit_chain.py`, tabel `audit_chain`) atas
+titik keputusan agent dan checkpoint manusia. Menjawab EU AI Act Article 12
+yang menjadi *enforceable* 2 Agustus 2026, sekaligus menjadikan pilar README
+**"Immutable Audit Evidence"** klaim yang benar-benar didukung implementasi —
+sebelum ini `routing_events`/`approval_log` hanyalah baris SQLite biasa yang
+bisa diubah atau dihapus tanpa meninggalkan jejak.
+
+- **Tabel terpisah, bukan kolom hash di tabel yang ada** — `routing_events`
+  dimutasi berkali-kali setelah INSERT (`finalize`, `check_correction` di turn
+  berikutnya, `set_human_feedback`), jadi hash in-place akan invalid tiap
+  mutasi dan rantai tak akan pernah verify. Append-only menghindarinya, dan
+  membuat urutan "diputuskan → diselesaikan → dikoreksi" terlihat sebagai
+  sejarah yang bisa diaudit, bukan satu baris yang ditimpa.
+- **Penulisan atomik** — fungsi SQLite kustom `SHA256` didaftarkan
+  `DatabaseManager` (pola sama `POWER()` untuk skill decay) sehingga baca
+  `prev_hash` + hitung hash + INSERT terjadi dalam SATU statement. Tanpa ini,
+  dua turn bersamaan bisa membaca head yang sama lalu menulis rantai bercabang
+  — yang akan tampak sebagai "rantai rusak" padahal tak ada manipulasi.
+- **Titik yang dirantai:** `routing.decision` (sebelum LLM dipanggil),
+  `routing.finalized` (hasil turn), `approval.requested`, `approval.decided`,
+  dan `approval.auto` — yang terakhir dirantai justru KARENA trust mode
+  melewati klik manusia; "aksi butuh-approval mana yang jalan tanpa
+  persetujuan eksplisit" adalah pertanyaan pertama auditor.
+- **`GET /audit/verify`** (admin-only) — `{ok, checked, broken_at, reason, head}`.
+  `broken_at` menunjuk entry pertama yang bermasalah, jadi operator tahu sejak
+  kapan riwayat tak bisa dipercaya, bukan cuma "rusak/tidak".
+- **Batas jaminan didokumentasikan jujur dan dikunci test:** hash chain membuat
+  perubahan retroaktif *terdeteksi*, bukan *mustahil*. Penghapusan entry
+  terakhir dan penulisan-ulang seluruh rantai TIDAK tertangkap `verify()` —
+  hanya oleh anchoring (menyalin `head` ke luar sistem secara berkala, itu
+  sebabnya endpoint mengembalikannya). Dua test sengaja mengunci keterbatasan
+  ini agar tak berubah jadi klaim "immutable" yang berlebihan.
+
+Tanpa dependency baru (`hashlib` stdlib). 13 test baru
+(`tests/test_audit_chain.py`) menguji setiap bentuk manipulasi realistis —
+ubah isi, hapus di tengah, sisipkan, tukar urutan, tabrakan delimiter —
+dengan menulis langsung ke DB di belakang punggung `AuditChain`, meniru
+penyerang berakses file DB alih-alih lewat API.
+
 ## [0.12.0] — 2026-08-02
 
 Rilis terbesar sejauh ini: dua inisiatif governance/multi-tenant penuh

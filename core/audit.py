@@ -1,6 +1,11 @@
 import json
 
 from infra.database import DatabaseManager
+from core.audit_chain import (
+    ENTRY_ROUTING_DECISION,
+    ENTRY_ROUTING_FINALIZED,
+    AuditChain,
+)
 from core.router import RouteDecision
 
 CORRECTION_SIGNALS = [
@@ -37,6 +42,9 @@ class RoutingAuditor:
 
     def __init__(self, db: DatabaseManager):
         self.db = db
+        # Tamper-evident audit trail (§ Prioritas 9.1). Fail-soft di dalam
+        # AuditChain.append — kegagalan rantai tak pernah menjatuhkan turn.
+        self.chain = AuditChain(db)
 
     async def log_decision(
         self,
@@ -91,7 +99,28 @@ class RoutingAuditor:
                 route.reason,
             ),
         )
-        return cursor.lastrowid
+        event_id = cursor.lastrowid
+        # Rantai audit: catat KEPUTUSAN sebelum LLM dipanggil. Payload sengaja
+        # ringkas (bukan salinan penuh baris) — ref_id menunjuk ke data lengkap;
+        # yang dirantai adalah fakta-fakta yang membuktikan APA yang diputuskan.
+        # query_text dipotong: rantai adalah bukti keputusan, bukan arsip kedua
+        # dari isi percakapan (yang sudah ada di routing_events/session_turns).
+        await self.chain.append(
+            ENTRY_ROUTING_DECISION,
+            {
+                "session_id": session_id,
+                "role": role,
+                "user_id": user_id,
+                "model": route.model,
+                "provider": route.provider,
+                "complexity": route.complexity.value,
+                "complexity_score": route.complexity_score,
+                "query_preview": query[:200],
+            },
+            ref_table="routing_events",
+            ref_id=event_id,
+        )
+        return event_id
 
     async def finalize(self, event_id: int, turn, evidence: dict | None = None) -> None:
         """Update tokens, cost, latency, fallback_used, dan evidence setelah turn selesai.
@@ -116,6 +145,22 @@ class RoutingAuditor:
                 json.dumps(evidence) if evidence is not None else None,
                 event_id,
             ),
+        )
+        # Rantai audit: catat HASIL turn sebagai entry BARU (bukan mengubah entry
+        # keputusan) — urutan "diputuskan → diselesaikan" jadi terlihat sebagai
+        # sejarah yang bisa diaudit, bukan satu baris yang ditimpa.
+        await self.chain.append(
+            ENTRY_ROUTING_FINALIZED,
+            {
+                "tokens_in": turn.tokens_in,
+                "tokens_out": turn.tokens_out,
+                "cost_usd": turn.cost_usd,
+                "latency_ms": turn.latency_ms,
+                "fallback_used": int(getattr(turn, "fallback_used", False)),
+                "has_evidence": evidence is not None,
+            },
+            ref_table="routing_events",
+            ref_id=event_id,
         )
 
     async def check_correction(self, user_message: str, session_id: str) -> bool:

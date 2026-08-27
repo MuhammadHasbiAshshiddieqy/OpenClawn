@@ -467,6 +467,28 @@ Regression guard untuk bug yang ditemukan di Sprint 4: `_post_turn` tidak memang
 
 ---
 
+### `tests/test_audit_chain.py`
+
+Test untuk `core/audit_chain.py` — tamper-evident audit trail (§ Prioritas 9.1). Fokusnya BUKAN "apakah entry tersimpan" (remeh), melainkan apakah rantai benar-benar **mendeteksi manipulasi**. Setiap serangan diuji dengan menulis LANGSUNG ke DB di belakang punggung `AuditChain` — meniru penyerang dengan akses file DB, bukan lewat API.
+
+| Test | Memastikan |
+|---|---|
+| `test_empty_chain_verifies_ok` | Rantai kosong utuh secara trivial, bukan error |
+| `test_append_links_entries_into_a_chain` | Tiap entry merantai ke hash sebelumnya; pertama ke genesis `''` |
+| `test_append_returns_record_hash` | Return value = hash entry itu (dipakai anchoring), 64 hex |
+| `test_head_returns_last_entry` | `head()` menunjuk entry terakhir |
+| `test_detects_modified_payload` | Isi diubah → `record_hash` tak cocok, `broken_at` tepat |
+| `test_detects_deleted_entry_in_middle` | Entry di tengah dihapus → `prev_hash` menggantung |
+| `test_detects_reordered_entries` | Urutan ditukar → rantai putus |
+| `test_detects_forged_entry_appended_without_correct_prev` | Entry disisipkan manual → ketahuan |
+| `test_detects_deleted_last_entry_only_via_anchor` | **Mengunci batas jaminan:** truncation TIDAK tertangkap `verify()`, hanya oleh anchoring |
+| `test_rewriting_whole_chain_is_not_detected_by_verify_alone` | **Mengunci batas jaminan:** rewrite penuh lolos `verify()` — agar klaim tak dilebih-lebihkan jadi "mustahil" |
+| `test_delimiter_injection_does_not_collide` | Nilai mengandung `\|` tak bisa membuat dua entry bertabrakan hash |
+| `test_append_is_fail_soft_on_db_error` | Kegagalan rantai tak melempar ke caller (turn user tetap jalan) |
+| `test_unicode_payload_roundtrips` | Payload non-ASCII konsisten antara penulisan & verifikasi |
+
+---
+
 ### `tests/test_security.py`
 
 Test untuk `security/` — Shield, Vault, ApprovalGate (HITL).

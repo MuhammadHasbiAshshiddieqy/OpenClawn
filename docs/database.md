@@ -236,6 +236,31 @@ Saat `request()` dipanggil: diinsert dengan `decision="pending"` dan `approval_i
 
 ---
 
+## Tabel Audit Chain
+
+### `audit_chain` — Rantai Hash Tamper-Evident (§ Prioritas 9.1)
+
+Append-only, hash-chained. Menjawab EU AI Act Article 12 (enforceable 2026-08-02) dan menopang klaim README "Immutable Audit Evidence". Detail mekanisme & batas jaminan: [`docs/core.md`](core.md) § `core/audit_chain.py`.
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | Urutan rantai (monotonik) |
+| `entry_type` | TEXT | `routing.decision` / `routing.finalized` / `approval.requested` / `approval.decided` / `approval.auto` |
+| `ref_table` | TEXT | Tabel sumber (`routing_events` / `approval_log`), `''` bila tak ada |
+| `ref_id` | INTEGER | `rowid` baris sumber — penghubung ke data lengkap. `NULL` untuk `approval.decided` (itu UPDATE, tak ada rowid baru; penghubungnya `approval_id` di payload) |
+| `payload_json` | TEXT | Snapshot kanonik apa yang terjadi (JSON `sort_keys`, separator rapat) |
+| `created_at` | TEXT | **Diisi Python, BUKAN `DEFAULT CURRENT_TIMESTAMP`** — ikut di-hash, jadi harus sama persis saat verifikasi |
+| `prev_hash` | TEXT | `record_hash` entry sebelumnya; `''` untuk entry pertama (genesis) |
+| `record_hash` | TEXT | `SHA256(canonical_body \|\| prev_hash)` |
+
+**Index:** `idx_audit_chain_ref` pada `(ref_table, ref_id)`.
+
+> ⚠️ **JANGAN pernah `UPDATE`/`DELETE` tabel ini.** Itu memutus rantai — dan memang dirancang supaya ketahuan bila terjadi (`GET /audit/verify`). Mutasi pada data sumber dicatat sebagai entry BARU, bukan dengan mengubah entry lama.
+
+Fungsi SQLite kustom `SHA256(text)` didaftarkan `DatabaseManager.conn()` (pola sama `POWER()`) supaya penulisan rantai atomik dalam satu statement.
+
+---
+
 ## Tabel App Settings
 
 ### `app_settings` — Override Runtime

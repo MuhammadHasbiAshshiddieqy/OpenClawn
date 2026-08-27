@@ -3,6 +3,12 @@ import json
 import uuid
 from dataclasses import dataclass, field
 
+from core.audit_chain import (
+    ENTRY_APPROVAL_AUTO,
+    ENTRY_APPROVAL_DECIDED,
+    ENTRY_APPROVAL_REQUESTED,
+    AuditChain,
+)
 from infra.database import DatabaseManager
 from infra.config import AppConfig
 from infra.logging import log
@@ -42,6 +48,11 @@ class ApprovalGate:
         self.db = db
         self.config = config
         self._pending: dict[str, PendingApproval] = {}
+        # Tamper-evident audit trail (§ Prioritas 9.1). Checkpoint manusia adalah
+        # bukti audit paling penting di produk ini — "apakah manusia benar-benar
+        # menyetujui aksi destruktif ini, atau dilewati?" harus bisa dibuktikan,
+        # bukan cuma dipercaya dari baris DB yang bisa diubah belakangan.
+        self.chain = AuditChain(db)
 
     async def request(
         self,
@@ -75,11 +86,22 @@ class ApprovalGate:
         # query-able setelah keputusan final ditulis (§ Human Approval Pipeline,
         # TODO.md Prioritas 2) — GET /approval/{approval_id} bisa melacak satu
         # approval lintas status pending→approved/rejected/timeout.
-        await self.db.execute(
+        cursor = await self.db.execute(
             """INSERT INTO approval_log
                (session_id, tool_name, tool_input, decision, approval_id, owner_user_id)
                VALUES (?,?,?,?,?,?)""",
             (session_id, tool_name, json.dumps(tool_input), "pending", approval_id, owner_user_id),
+        )
+        await self.chain.append(
+            ENTRY_APPROVAL_REQUESTED,
+            {
+                "approval_id": approval_id,
+                "session_id": session_id,
+                "tool_name": tool_name,
+                "owner_user_id": owner_user_id,
+            },
+            ref_table="approval_log",
+            ref_id=cursor.lastrowid,
         )
 
         try:
@@ -107,6 +129,18 @@ class ApprovalGate:
             "UPDATE approval_log SET decision=? WHERE approval_id=? AND decision='pending'",
             (decision, approval_id),
         )
+        # Entry BARU, bukan mengubah entry 'requested' — pasangan
+        # requested→decided inilah bukti bahwa checkpoint manusia benar-benar
+        # dilalui (dan berapa lama), bukan diklaim setelah fakta.
+        # ref_id None: ini UPDATE, tak ada lastrowid baru. Penghubung ke baris
+        # approval_log adalah `approval_id` di payload (kolom query-able di sana),
+        # bukan rowid — sama kunci yang dipakai GET /approval/{approval_id}.
+        await self.chain.append(
+            ENTRY_APPROVAL_DECIDED,
+            {"approval_id": approval_id, "decision": decision},
+            ref_table="approval_log",
+            ref_id=None,
+        )
 
     async def auto_approve(self, session_id: str, tool_name: str, tool_input: dict) -> bool:
         """Setuju otomatis untuk "Trust mode" per-sesi (§ user request otonomi).
@@ -119,10 +153,19 @@ class ApprovalGate:
         toggle trust mode. Selalu return True — caller (AgentLoop) yang memutuskan
         tool mana yang boleh lewat sini (code_run TIDAK PERNAH, CLAUDE.md §1).
         """
-        await self.db.execute(
+        cursor = await self.db.execute(
             """INSERT INTO approval_log (session_id, tool_name, tool_input, decision)
                VALUES (?,?,?,?)""",
             (session_id, tool_name, json.dumps(tool_input), "auto:trust_mode"),
+        )
+        # DIRANTAI justru karena ini MELEWATI klik manusia — "aksi butuh-approval
+        # mana yang dijalankan tanpa persetujuan eksplisit" adalah pertanyaan
+        # pertama auditor, dan jawabannya harus tak bisa dihapus diam-diam.
+        await self.chain.append(
+            ENTRY_APPROVAL_AUTO,
+            {"session_id": session_id, "tool_name": tool_name},
+            ref_table="approval_log",
+            ref_id=cursor.lastrowid,
         )
         return True
 
