@@ -7,6 +7,35 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Fixed — Root-caused the eval harness "no such table: memory_l1" anomaly (TODO.md § Prioritas 8.4)
+
+Investigasi lanjutan atas anomali yang dicatat saat eval harness dibangun.
+**Bukan bug di `core/agent_loop.py`/`memory/layers.py`** seperti diduga
+semula — murni bug timeout di `scripts/run_evals.py` sendiri.
+
+Dibuktikan lewat reproduksi bertahap: repro 1 kasus sederhana tak memicu
+bug; repro dengan `tool_loop_detected` yang persis sama juga tak memicu;
+baru reproduksi **dua kasus berurutan dalam satu proses** (persis alur
+`_main()` sungguhan) berhasil memicu secara konsisten — mengarahkan ke
+interaksi antar-kasus.
+
+**Akar masalah:** `_run_one_case` menunggu background task `_post_turn`
+HANYA 10 detik sebelum `db.close()` — tapi `_post_turn` sendiri memanggil
+`_generate_session_title()` yang bisa memicu cascade fallback hingga 4
+model × retry+backoff (>10 detik saat Ollama lambat). Timeout terlampaui →
+kode lama menutup DB TANPA mengecek task selesai atau belum → `_post_turn`
+kasus itu lanjut jalan DI BACKGROUND sementara KASUS BERIKUTNYA sudah
+mulai → menabrak DB yang sudah tertutup, muncul sebagai `"no such table"`
+(bukan `"Cannot operate on a closed database"` yang lebih jelas) karena
+closure terjadi di tengah operasi yang sudah diantre di aiosqlite.
+
+**Perbaikan:** timeout dinaikkan ke 60 detik + pengecekan eksplisit
+`pending` setelahnya — bila masih ada, DB SENGAJA TIDAK ditutup (dibiarkan
+bocor sampai proses keluar, jauh lebih aman daripada merusak task yang
+masih jalan) dan operator diberi peringatan jelas. Diverifikasi dengan
+reproduksi PERSIS SAMA yang tadinya gagal 2× berturut-turut — sekarang
+bersih tanpa error di kedua kasus.
+
 ### Added — Eval harness: regression test kualitas jawaban agent (TODO.md § Prioritas 8.2)
 
 Menjawab gap yang sebelumnya tak tertutup: `crystallizer.py` (I3) menilai

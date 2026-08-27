@@ -96,14 +96,54 @@ async def _run_one_case(case: EvalCase, provider: str | None, model: str | None,
 
         # AgentLoop.run() menjadwalkan _post_turn sebagai background task
         # fire-and-forget (asyncio.create_task, lihat core/agent_loop.py) —
-        # masih berjalan setelah generator run() habis. Ditemukan LANGSUNG
-        # lewat run nyata (bukan diasumsikan): tanpa jeda ini, db.close() di
-        # bawah membuat task itu gagal "Cannot operate on a closed database"
-        # di tengah jalan, karena DB berumur-pendek skrip ini beda dari server
-        # produksi yang koneksinya tetap hidup selama proses berjalan.
+        # masih berjalan setelah generator run() habis.
+        #
+        # ROOT CAUSE DITEMUKAN & DIKONFIRMASI (2026-08-03, bukan diasumsikan):
+        # timeout PENDEK di sini awalnya (10 detik) TIDAK CUKUP untuk
+        # _post_turn's SENDIRI menyelesaikan cascade fallback LLM-nya (title
+        # generation, _generate_session_title) — hingga 4 percobaan model ×
+        # retry+backoff bisa makan >10 detik saat Ollama lambat/model default
+        # (compaction_local_model) tak tersedia lokal. Direproduksi terisolasi:
+        # tanpa timeout mencukupi, `await db.close()` di bawah jalan SEMENTARA
+        # _post_turn case INI MASIH BERJALAN, lalu kasus BERIKUTNYA sudah mulai
+        # — _post_turn yang telat itu kemudian menabrak DB yang sudah tertutup,
+        # muncul sebagai `sqlite3.OperationalError: no such table: memory_l1`
+        # (bukan "Cannot operate on a closed database" yang lebih jelas —
+        # perilaku aiosqlite yang membingungkan saat close terjadi DI TENGAH
+        # operasi yang sudah diantre, bukan sebelum operasi dimulai). Ini
+        # murni bug skrip ini (timeout terlalu pendek + tak mengecek apakah
+        # wait benar-benar selesai), BUKAN bug di core/agent_loop.py.
+        #
+        # Perbaikan: timeout jauh lebih longgar (60 detik — melebihi worst-case
+        # realistis 4 model × ~3 percobaan × backoff), DAN cek eksplisit
+        # apakah masih ada yang pending setelahnya — kalau ya, PERINGATKAN
+        # keras alih-alih diam-diam menutup DB (yang akan mengulang bug ini).
         new_tasks = [t for t in asyncio.all_tasks() - before_tasks if not t.done()]
         if new_tasks:
-            await asyncio.wait(new_tasks, timeout=10)
+            done, pending = await asyncio.wait(new_tasks, timeout=60)
+            if pending:
+                # DB SENGAJA TIDAK ditutup di sini — persis ini yang tadinya
+                # menyebabkan "no such table" salah arah muncul di KASUS
+                # BERIKUTNYA. Konsekuensinya: koneksi :memory: ini bocor
+                # sampai proses Python keluar — dapat diterima untuk skrip
+                # dev berumur pendek, jauh lebih baik daripada merusak task
+                # yang masih berjalan. Kasus berikutnya tetap dapat db/agent
+                # BARU (tak saling memengaruhi).
+                print(
+                    f"    PERINGATAN: {len(pending)} background task (mis. title "
+                    f"generation) untuk kasus '{case.name}' belum selesai setelah "
+                    "60 detik — kemungkinan Ollama lambat/tak sehat. Hasil kasus "
+                    "ini tetap dinilai dari jawaban yang sudah ada; DB dibiarkan "
+                    "terbuka (bukan ditutup paksa) untuk mencegah merusak task "
+                    "itu — cek kesehatan Ollama sebelum melanjutkan.",
+                    file=sys.stderr,
+                )
+                last_turn = agent.history[-1] if agent.history else None
+                return evaluate_rubric(
+                    case,
+                    last_turn.content if last_turn else "",
+                    last_turn.tool_calls if last_turn else [],
+                )
 
         await db.close()
     finally:

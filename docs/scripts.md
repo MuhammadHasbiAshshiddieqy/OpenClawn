@@ -138,7 +138,8 @@ python scripts/run_evals.py --path evals/dev --timeout 10           # timeout ap
 
 - Tiap kasus dijalankan di DB (`:memory:`) + workspace **temporer terpisah** — tak ada state bocor antar kasus.
 - `AgentConfig(autopilot=True)` — tool butuh-approval DIANTRI sebagai proposal (tak dieksekusi), bukan menunggu manusia yang tak akan pernah ada. `Turn.tool_calls` tetap mencatat NIAT model memanggilnya (dicek `_execute_tool` SEBELUM approval diputuskan) — rubrik `tool_called`/`tool_not_called` mengukur **pilihan** model, bukan hasil eksekusi tool.
-- **Ditemukan lewat run nyata (bukan diasumsikan):** `AgentLoop.run()` menjadwalkan `_post_turn` sebagai background task fire-and-forget (`asyncio.create_task`) yang MASIH JALAN setelah generator `run()` habis. DB berumur-pendek skrip ini (beda dari server produksi yang koneksinya tetap hidup) menutup diri terlalu cepat tanpa ini, menyebabkan `_post_turn` gagal `"Cannot operate on a closed database"` di tengah jalan. Diperbaiki: tangkap task baru yang muncul selama `run()`, tunggu (timeout 10 detik) sebelum `db.close()`.
+- **Ditemukan lewat run nyata (bukan diasumsikan):** `AgentLoop.run()` menjadwalkan `_post_turn` sebagai background task fire-and-forget (`asyncio.create_task`) yang MASIH JALAN setelah generator `run()` habis. DB berumur-pendek skrip ini (beda dari server produksi yang koneksinya tetap hidup) menutup diri terlalu cepat tanpa ini, menyebabkan `_post_turn` gagal `"Cannot operate on a closed database"` di tengah jalan. Diperbaiki: tangkap task baru yang muncul selama `run()`, tunggu sebelum `db.close()`.
+- **Timeout tunggu task tersebut 60 detik (bukan 10)**, DAN mengecek eksplisit apakah masih `pending` setelahnya — TODO.md § Prioritas 8.4 mendokumentasikan investigasi penuh: timeout 10 detik yang lebih pendek TERBUKTI tidak cukup untuk `_post_turn`'s SENDIRI cascade fallback (`_generate_session_title` bisa mencoba 4 model), menyebabkan `db.close()` jalan sementara task itu masih berjalan DAN kasus BERIKUTNYA sudah mulai — muncul sebagai `"no such table"` yang membingungkan (bukan "closed database" yang jelas) di kasus SETELAHNYA. Kalau timeout 60 detik pun terlampaui, DB SENGAJA TIDAK ditutup (dibiarkan bocor sampai proses keluar) — jauh lebih aman daripada mengulang bug ini.
 - Skor via `core/eval_harness.py::evaluate_rubric()` — rubrik deterministik, BUKAN LLM-judge.
 - Exit code `0` = semua lolos, `1` = ada yang gagal.
 
@@ -159,6 +160,8 @@ python scripts/run_evals.py --path evals/dev --timeout 10           # timeout ap
 ### Verifikasi nyata (2026-08-03)
 
 Dijalankan langsung terhadap Ollama lokal (`qwen2.5:3b`, via `uv run --python 3.12` karena mesin dev hanya punya Python 3.9): mekanisme terbukti bekerja end-to-end (setup workspace → jalankan agent nyata → skor rubrik → laporan). Kasus `does_not_call_code_run_for_simple_arithmetic` **PASS**; kasus `reads-file-before-answering` **FAIL** — model 3B sempat memanggil tool dengan nama kosong (`tool_loop_detected` — mekanisme deteksi loop yang sudah ada bekerja benar) sebelum akhirnya menjawab tanpa membaca file. Ini temuan kualitas MODEL yang sah (model kecil kadang gagal format tool-call), bukan bug harness — persis kelas masalah yang harness ini dibuat untuk menangkap.
+
+Run nyata ini JUGA menyingkap satu bug di skrip ini sendiri (`"no such table: memory_l1"` di kasus berikutnya) — diinvestigasi & diperbaiki penuh (§ TODO.md Prioritas 8.4): timeout tunggu `_post_turn` yang tadinya 10 detik terlalu pendek untuk cascade fallback title-generation, sekarang 60 detik + pengecekan eksplisit. Diverifikasi ulang dengan reproduksi yang sama persis — bersih.
 
 ---
 

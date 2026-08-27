@@ -610,21 +610,13 @@ konfirmasi eksplisit (pola sama item 7-8 di §4).
 > diteruskan — kelas bug "diam-diam salah", bukan "jelas gagal" (skrip tetap
 > jalan, tapi `approval_timeout_sec`/dst yang dipakai BUKAN yang dimaksud).
 >
-> **Anomali DITEMUKAN tapi SENGAJA TIDAK DIKEJAR lebih jauh** (di luar scope
-> "bangun eval harness"): `_post_turn` gagal `"no such table: memory_l1"`
-> dalam kondisi spesifik — `_generate_session_title()` (`core/agent_loop.py`)
-> memakai `self.config.compaction_local_model` (default `("ollama",
-> "gemma4:e2b")`) untuk model judul chat, TERPISAH dari override model utama
-> (`SettingsStore.set_model_override`) yang dipakai turn utama — bila model
-> default itu tak ada di Ollama lokal (seperti di lingkungan uji ini),
-> title-generation gagal lewat cascade fallback panjang, dan SETELAHNYA
-> `memory.update_checkpoint()` melempar "no such table" walau migrasi penuh
-> sudah dijalankan di awal skrip. Root cause PERSIS belum ditemukan (diduga
-> terkait siklus hidup koneksi `:memory:` aiosqlite di bawah beban fallback
-> berat, belum dibuktikan) — dicatat di sini sebagai bukti nyata bahwa eval
-> harness berhasil menyingkap bug yang TAK TERLIHAT dari test dengan LLM
-> di-mock, persis tujuan fitur ini dibangun. **Investigasi lanjut = pekerjaan
-> terpisah, bukan bagian scope eval harness.**
+> **Anomali `_post_turn` "no such table: memory_l1" — lihat §8.4 di bawah
+> untuk root cause & perbaikan lengkap** (diinvestigasi terpisah atas
+> permintaan owner setelah item ini selesai — bukan bug di `core/agent_loop.py`,
+> ternyata timeout terlalu pendek di `scripts/run_evals.py` sendiri). Tetap
+> bukti nyata bahwa eval harness berhasil menyingkap bug yang TAK TERLIHAT
+> dari test dengan LLM di-mock, persis tujuan fitur ini dibangun — kali ini
+> bug di skrip pendukungnya sendiri, bukan di kode produksi.
 3. **`code_run`/`shell_run` tidak mampu menjalankan proyek nyata yang
    "lumayan besar dan kompleks"** (ditemukan saat menjelaskan alur
    coding-assistant ke owner, 2026-08-03) — batasan nyata, bukan bug, tapi
@@ -646,17 +638,38 @@ konfirmasi eksplisit (pola sama item 7-8 di §4).
    install sendiri tak jadi celah baru; (c) timeout/resource limit
    configurable per-role via `soul.toml`/`AppConfig` untuk proses yang
    memang perlu lebih lama dari 30 detik.
-4. **[Ditemukan lewat eval harness §8.2, BELUM diinvestigasi] `_post_turn`
-   melempar `"no such table: memory_l1"`** dalam kondisi spesifik: model
-   default `compaction_local_model` (dipakai `_generate_session_title`,
-   `core/agent_loop.py`) tak tersedia di Ollama lokal → cascade fallback
-   panjang → SETELAHNYA `memory.update_checkpoint()` gagal "no such table"
-   walau migrasi sudah dijalankan penuh di awal. Direproduksi 2× via
-   `scripts/run_evals.py` (bukan sekali kebetulan). Root cause BELUM
-   ditemukan (dugaan: siklus hidup koneksi `:memory:` aiosqlite di bawah
-   fallback berat — belum dibuktikan). Investigasi lanjut butuh sesi
-   terpisah yang fokus pada `_post_turn`/`memory/layers.py`, bukan dikerjakan
-   terburu-buru sebagai bagian item lain.
+4. **[Ditemukan lewat eval harness §8.2] `_post_turn` melempar `"no such
+   table: memory_l1"` — ✅ ROOT CAUSE DITEMUKAN & DIPERBAIKI (2026-08-03).**
+
+   **BUKAN bug di `core/agent_loop.py`/`memory/layers.py`** seperti diduga
+   semula — murni bug di `scripts/run_evals.py` sendiri. Dibuktikan lewat
+   reproduksi terisolasi bertahap (bukan tebakan): repro sederhana (1 kasus,
+   tanpa tool loop) TIDAK memicu bug; repro dengan `tool_loop_detected` yang
+   PERSIS sama dengan kasus gagal JUGA tidak memicu; baru reproduksi lewat
+   **dua kasus berurutan dalam satu proses** (persis alur `_main()` sungguhan)
+   berhasil memicu bug secara konsisten — mengarahkan curiga ke interaksi
+   ANTAR-kasus, bukan satu kasus tunggal.
+
+   **Akar masalah sesungguhnya:** `_run_one_case` menunggu background task
+   `_post_turn` selesai HANYA 10 detik sebelum `db.close()` — tapi
+   `_post_turn` sendiri memanggil `_generate_session_title()` yang bisa
+   memicu cascade fallback LLM hingga 4 model × retry+backoff (>10 detik
+   saat Ollama lambat/model default `compaction_local_model` tak tersedia
+   lokal). Saat timeout 10 detik itu terlampaui, kode LAMA menutup DB
+   TANPA MENGECEK apakah task benar-benar selesai — `_post_turn` KASUS INI
+   lanjut berjalan DI BACKGROUND sementara KASUS BERIKUTNYA sudah mulai,
+   lalu menabrak DB yang sudah tertutup. Muncul sebagai `"no such table"`
+   (bukan `"Cannot operate on a closed database"` yang lebih jelas) karena
+   closure terjadi di tengah operasi yang sudah diantre di aiosqlite, bukan
+   sebelum operasi dimulai.
+
+   **Perbaikan:** timeout dinaikkan ke 60 detik (melebihi worst-case
+   realistis) DAN kode sekarang MENGECEK EKSPLISIT apakah task masih
+   `pending` setelah timeout — bila ya, DB SENGAJA TIDAK ditutup (dibiarkan
+   bocor sampai proses keluar, jauh lebih aman daripada merusak task yang
+   masih jalan) dan operator diberi peringatan jelas untuk cek kesehatan
+   Ollama. Diverifikasi ulang dengan reproduksi PERSIS SAMA yang tadinya
+   gagal 2× berturut-turut — sekarang bersih, tanpa error, di kedua kasus.
 
 ---
 
