@@ -7,6 +7,39 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Added — Non-Human Identity: identitas agent sebagai first-class citizen (TODO.md § Prioritas 9.2)
+
+Melengkapi audit chain di atas: hash chaining membuktikan LOG tak diubah;
+fitur ini menjawab log itu **tentang siapa**. Sebelumnya OpenCLAWN membedakan
+"agent vs manusia" (`actor_is_agent`, selalu `1`) dan "user mana yang
+memicu" (`owner_user_id`) — tapi bukan "agent dengan KONFIGURASI mana",
+padahal `soul.toml` satu role bisa berubah kapan saja (tool allow-list,
+`[policy]`, system prompt) tanpa jejak di audit trail.
+
+- **`core/agent_identity.py`** (baru) — `agent_identity(role, soul)` menghasilkan
+  identitas stabil `"{role}@{hash12}"` dari SHA-256 seluruh `soul.toml` efektif
+  (canonical JSON, `sort_keys`) — bukan subset field pilihan tangan, supaya
+  field baru yang ditambahkan ke `soul.toml` di masa depan otomatis tercermin.
+  Config sama → identitas sama, lintas sesi/restart; config berubah (tool
+  dicabut/ditambah, policy diedit) → identitas baru otomatis, tanpa tabel
+  versioning terpisah.
+- Dihitung sekali di `AgentLoop.__init__` (setelah `soul.toml` di-cache) dan
+  diteruskan ke `RoutingAuditor.log_decision()` serta
+  `ApprovalGate.request()`/`auto_approve()` — kolom `agent_identity` baru di
+  `routing_events` dan `approval_log`, DAN ikut ke payload `audit_chain`
+  (`routing.decision`, `approval.requested`, `approval.auto`) sehingga
+  identitas juga terlindungi hash chaining, bukan cuma kolom DB biasa.
+- **`RoutingAuditor.identity_report()`** + **`GET /metrics/identities`** —
+  daftar `(role, agent_identity)` yang pernah aktif dengan rentang waktu.
+  Satu `role` dengan lebih dari satu `agent_identity` = `soul.toml` role itu
+  pernah berubah, terlihat langsung dari data tanpa tabel versioning.
+
+Tanpa dependency baru (`hashlib` stdlib). 21 test baru
+(`tests/test_agent_identity.py`, penambahan `tests/test_audit.py` dan
+`tests/test_security.py`) — termasuk simulasi nyata role yang sama dengan
+tool allow-list dicabut, memverifikasi dua identitas berbeda muncul di
+`identity_report()`.
+
 ### Added — Tamper-evident audit trail (TODO.md § Prioritas 9.1)
 
 Rantai hash **append-only** (`core/audit_chain.py`, tabel `audit_chain`) atas

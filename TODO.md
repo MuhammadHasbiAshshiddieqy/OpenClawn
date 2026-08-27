@@ -712,7 +712,40 @@ diadopsi IETF — draft `draft-sharif-*` lain dari penulis yang sama ada banyak
 field**, bukan standar yang wajib diikuti. Yang mengikat secara hukum adalah
 EU AI Act-nya, bukan draft ini.
 
-### 9.2 Identitas agent sebagai first-class citizen (Non-Human Identity)
+### 9.2 Identitas agent sebagai first-class citizen (Non-Human Identity) — ✅ SELESAI (2026-08-03)
+
+> **Hasil:** `core/agent_identity.py` — `agent_identity(role, soul)` →
+> `"{role}@{hash12}"`, hash SHA-256 dari SELURUH `soul.toml` efektif
+> (canonical JSON, bukan subset field pilihan tangan — field baru di
+> `soul.toml` masa depan otomatis ikut tercermin tanpa perlu mengingat
+> memperbarui modul ini). Dihitung sekali di `AgentLoop.__init__`, diteruskan
+> ke `RoutingAuditor.log_decision()` dan `ApprovalGate.request()`/`auto_approve()`
+> — kolom `agent_identity` baru di `routing_events` & `approval_log`, DAN ikut
+> ke payload `audit_chain` (melengkapi §9.1 secara literal, bukan cuma niat).
+> `RoutingAuditor.identity_report()` + `GET /metrics/identities` menjawab
+> pertanyaan yang diajukan di bawah: agregasi `(role, agent_identity)` dengan
+> rentang waktu — satu role dengan >1 identitas berarti config-nya pernah berubah.
+>
+> Kolom index (`idx_routing_agent_identity`) sengaja TIDAK statis di
+> `migrations/001_initial.sql` — dibuat `DatabaseManager._ensure_columns()`
+> SETELAH kolom ditambal ke DB lama, pola sama `idx_approval_id`/`idx_l2_role`
+> (bug class yang sama sudah terulang 3× sebelumnya, ditangkap sebelum jadi
+> yang ke-4).
+>
+> Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **902
+> passed** (+21 dari 881), ruff check/format bersih, `uv.lock` tak tersentuh
+> (tanpa dependency baru). Verifikasi manual dengan `soul.toml` role `dev`
+> sungguhan: mencabut `code_run` dari tool allow-list menghasilkan identitas
+> BERBEDA (`dev@66c2a14cb44c` → `dev@bb57d625a090`), `identity_report()`
+> memisahkan keduanya dengan benar, dan payload `audit_chain` untuk
+> `approval.auto` membawa identitas yang tepat.
+>
+> **Follow-up yang sengaja belum dikerjakan:** tak ada UI tabel HTML untuk
+> `identity_report` di `/metrics` (hanya JSON, pola sama `role_report` yang
+> juga JSON-only) — bisa ditambahkan kalau memang dibutuhkan, bukan
+> dikerjakan spekulatif.
+
+**Konteks & justifikasi asli (dipertahankan):**
 
 **Validasi pasar kuat:** 91% organisasi sudah memakai AI agent tapi hanya 10%
 punya strategi matang mengelola identitas agent tersebut. NHI kini melampaui

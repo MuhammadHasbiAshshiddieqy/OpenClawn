@@ -339,3 +339,57 @@ async def test_owner_user_id_persisted_to_approval_log(db, fast_config):
 
     row = await db.fetchone("SELECT owner_user_id FROM approval_log WHERE session_id='s_owner'")
     assert row["owner_user_id"] == "7"
+
+
+# ── agent_identity (§ Prioritas 9.2, Non-Human Identity) ─────────────────────
+
+
+async def test_agent_identity_persisted_to_approval_log_via_request(db, fast_config):
+    gate = ApprovalGate(db, fast_config)
+
+    t = asyncio.create_task(
+        gate.request("s_ident1", "code_run", {"code": "x"}, agent_identity="dev@abc123def456")
+    )
+    await asyncio.sleep(0.05)
+    gate.resolve(gate.pending_list()[0]["approval_id"], True)
+    await t
+
+    row = await db.fetchone("SELECT agent_identity FROM approval_log WHERE session_id='s_ident1'")
+    assert row["agent_identity"] == "dev@abc123def456"
+
+
+async def test_agent_identity_persisted_to_approval_log_via_auto_approve(db, fast_config):
+    """Trust mode juga mencatat identitas — justru di sini paling penting
+    karena tak ada klik manusia untuk dikonfirmasi."""
+    gate = ApprovalGate(db, fast_config)
+    await gate.auto_approve(
+        "s_ident2", "shell_run", {"command": "ls"}, agent_identity="dev@abc123def456"
+    )
+
+    row = await db.fetchone("SELECT agent_identity FROM approval_log WHERE session_id='s_ident2'")
+    assert row["agent_identity"] == "dev@abc123def456"
+
+
+async def test_agent_identity_defaults_to_none(db, fast_config):
+    """Caller lama yang belum menghitung identitas → NULL, bukan error."""
+    gate = ApprovalGate(db, fast_config)
+    await gate.auto_approve("s_ident3", "shell_run", {"command": "ls"})
+
+    row = await db.fetchone("SELECT agent_identity FROM approval_log WHERE session_id='s_ident3'")
+    assert row["agent_identity"] is None
+
+
+async def test_agent_identity_written_to_audit_chain_on_auto_approve(db, fast_config):
+    """Melengkapi § Prioritas 9.1: entry approval.auto (yang MELEWATI klik
+    manusia) HARUS membawa identitas agent di payload rantai, bukan cuma
+    kolom approval_log biasa."""
+    gate = ApprovalGate(db, fast_config)
+    await gate.auto_approve(
+        "s_ident4", "shell_run", {"command": "ls"}, agent_identity="dev@abc123def456"
+    )
+
+    row = await db.fetchone(
+        "SELECT payload_json FROM audit_chain WHERE entry_type='approval.auto' "
+        "ORDER BY id DESC LIMIT 1"
+    )
+    assert "dev@abc123def456" in row["payload_json"]

@@ -441,6 +441,32 @@ Test untuk `core/audit.py`.
 | `test_cost_savings_report_excludes_unpriced_models` | Model di luar tabel harga → `turns_unpriced`, BUKAN dianggap gratis |
 | `test_cost_savings_report_ignores_unfinished_turns` | Turn belum `finalize()` (token `NULL`) → tak ikut dihitung |
 | `test_cost_savings_report_aggregates_across_multiple_turns` | Agregasi benar lintas turn dengan model campuran (gratis + berbayar) |
+| `test_log_decision_stores_agent_identity_when_given` | `agent_identity` tersimpan ke kolom `routing_events.agent_identity` |
+| `test_log_decision_agent_identity_defaults_to_none` | Caller lama tanpa `agent_identity` → `NULL`, bukan error |
+| `test_log_decision_writes_agent_identity_to_audit_chain` | Identitas ikut ke payload `audit_chain` (melengkapi § Prioritas 9.1), bukan cuma kolom DB |
+| `test_identity_report_empty` | Tanpa data → list kosong |
+| `test_identity_report_excludes_null_identity` | Baris tanpa `agent_identity` TIDAK muncul sebagai grup "None" |
+| `test_identity_report_groups_by_role_and_identity` | Agregasi benar per `(role, agent_identity)` |
+| `test_identity_report_config_change_shows_as_two_identities` | Simulasi nyata: role sama, config berubah → dua identitas terpisah di laporan |
+
+---
+
+### `tests/test_agent_identity.py`
+
+Test untuk `core/agent_identity.py` — Non-Human Identity (§ Prioritas 9.2).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_same_config_produces_same_hash` | Determinisme: config identik → hash identik |
+| `test_different_content_produces_different_hash` | Prompt berbeda → hash berbeda |
+| `test_tool_allowlist_change_produces_different_hash` | **Inti fitur:** perubahan permission (bukan cuma prompt) mengubah identitas |
+| `test_policy_section_change_produces_different_hash` | Perubahan `[policy]` mengubah identitas |
+| `test_key_order_does_not_affect_hash` | Urutan key dict berbeda → hash SAMA (canonical JSON `sort_keys`) |
+| `test_config_hash_is_sha256_hex` | Output valid hex 64 karakter |
+| `test_agent_identity_format` | Format `"{role}@{hash12}"` benar |
+| `test_agent_identity_stable_across_calls` | Panggilan berulang dengan config sama → identitas sama |
+| `test_agent_identity_differs_by_role_even_with_same_config` | Role beda + config sama → identitas TETAP beda (role bagian identitas) |
+| `test_agent_identity_changes_when_config_changes` | Config berubah → identitas berubah |
 
 ---
 
@@ -545,6 +571,11 @@ Test untuk `security/` — Shield, Vault, ApprovalGate (HITL).
 | `test_approval_id_stored_in_own_column` | Human Approval Pipeline (§ Prioritas 2): `approval_id` di kolom sendiri, query-able setelah `decision` berubah jadi final — bukan lagi tersirat di substring `pending:{id}` yang hilang |
 | `test_approval_id_preserved_with_explicit_pre_generated_id` | `request(approval_id=...)` eksplisit (pola pre-generate `AgentLoop`) tersimpan utuh |
 | `test_pending_list_scoped_by_session` | `pending_list(session_id)` hanya approval sesi itu |
+| `test_owner_user_id_persisted_to_approval_log` | `owner_user_id` tersimpan ke DB (audit produksi 2026-07-29) |
+| `test_agent_identity_persisted_to_approval_log_via_request` | `agent_identity` tersimpan lewat `request()` (§ Prioritas 9.2) |
+| `test_agent_identity_persisted_to_approval_log_via_auto_approve` | `agent_identity` tersimpan lewat `auto_approve()` — trust mode, paling penting karena tak ada klik manusia |
+| `test_agent_identity_defaults_to_none` | Caller lama tanpa `agent_identity` → `NULL`, bukan error |
+| `test_agent_identity_written_to_audit_chain_on_auto_approve` | Identitas ikut ke payload `audit_chain` entry `approval.auto` (melengkapi § Prioritas 9.1) |
 
 ---
 

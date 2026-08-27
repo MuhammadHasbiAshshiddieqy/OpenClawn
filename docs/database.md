@@ -185,10 +185,11 @@ Setiap keputusan routing dicatat sebelum LLM call dan diupdate setelah selesai.
 | `correction_detail` | TEXT | Pesan koreksi user |
 | `evidence_json` | TEXT | Evidence-Based Response (§ Prioritas 2): snapshot JSON `{policy, memory, guardrail}` yang berlaku turn ini, diisi `RoutingAuditor.finalize(evidence=...)`. `NULL` bila turn belum selesai atau dari versi lama tanpa evidence. Query-able via `GET /evidence/{id}` |
 | `human_feedback` | INTEGER | Runtime Evaluation Engine (§ Prioritas 2): rating eksplisit user 1-5, diisi `RoutingAuditor.set_human_feedback()` via `POST /feedback/{id}`. `NULL` = belum diberi rating (beda dari `had_correction` yang implisit dari teks pesan berikutnya) |
+| `agent_identity` | TEXT | **[§ Prioritas 9.2, Non-Human Identity]** `"{role}@{hash12}"` dari `core/agent_identity.py` — hash SELURUH `soul.toml` efektif saat turn ini, bukan cuma nama role. Config berubah → identitas baru otomatis. `NULL` = dibuat sebelum kolom ini ada. Diagregasi via `RoutingAuditor.identity_report()`, `GET /metrics/identities` |
 | `tenant_id` | TEXT | Multi-Tenant (TODO.md § Prioritas 5), default `'default'`. Kolom pasif — belum di-filter di kode query |
 | `created_at` | TIMESTAMP | |
 
-**Index:** `idx_routing_label` pada `(complexity_label, had_correction)` — untuk `calibration_report`.
+**Index:** `idx_routing_label` pada `(complexity_label, had_correction)` — untuk `calibration_report`. `idx_routing_agent_identity` pada `(role, agent_identity)` — untuk `identity_report()` (§ Prioritas 9.2); dibuat `DatabaseManager._ensure_columns()` SETELAH kolom `agent_identity` ditambal ke DB lama, bukan statis di migration file (pola sama `idx_approval_id`/`idx_l2_role`).
 
 ---
 
@@ -227,6 +228,7 @@ Semua permintaan approval tool destruktif.
 | `decision` | TEXT | `pending` / `approved` / `rejected` / `timeout` / `auto:trust_mode` / `proposal:pending` |
 | `approval_id` | TEXT | Human Approval Pipeline (§ Prioritas 2): ID approval di kolom SENDIRI — SEBELUMNYA hanya tersirat sebagai substring `pending:{id}` di `decision`, hilang begitu decision ditimpa jadi keputusan final. Query-able lintas status via `GET /approval/{approval_id}`. `NULL` untuk baris dari `auto_approve()`/`queue_proposal()` (tak ada manusia menunggu ID untuk di-resolve) |
 | `owner_user_id` | TEXT | **[Audit produksi 2026-07-29]** User yang memicu approval ini (dari `AgentConfig.user_id`, sebelumnya ada tapi tak pernah di-wire ke sini). `GET /approvals` & `POST /approve` digerbangi kolom ini (`docs/security.md` § `ApprovalGate`) agar user lain tak bisa lihat/putuskan approval milik orang lain — sebelumnya IDOR PALING SERIUS temuan minggu ini: siapa pun login (termasuk role rendah) bisa approve/reject aksi destruktif (`code_run` dst) milik user lain, melumpuhkan gate HITL sepenuhnya. `NULL` = tak tercatat (auth nonaktif) |
+| `agent_identity` | TEXT | **[§ Prioritas 9.2, Non-Human Identity]** Sama kolom & makna dengan `routing_events.agent_identity` — identitas agent (role + hash konfigurasi) yang memicu approval ini. Melengkapi `owner_user_id` (siapa MANUSIA-nya) dengan "agent versi mana". `NULL` = dibuat sebelum kolom ini ada |
 | `tenant_id` | TEXT | Multi-Tenant (TODO.md § Prioritas 5), default `'default'`. Kolom pasif — belum di-filter di kode query |
 | `created_at` | TIMESTAMP | |
 

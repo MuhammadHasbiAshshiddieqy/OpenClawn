@@ -524,3 +524,96 @@ async def test_cost_savings_report_aggregates_across_multiple_turns(auditor):
     assert report["actual_cost_usd"] == 0.150  # hanya turn kedua yang berbayar
     # Baseline: kedua turn dihitung SEOLAH gemini-2.5-pro (1.25/1M input)
     assert report["counterfactual_cost_usd"] == 2.50
+
+
+# ── agent_identity / identity_report (§ Prioritas 9.2) ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_log_decision_stores_agent_identity_when_given(auditor, db):
+    route = _fake_route()
+    eid = await auditor.log_decision("s_id1", "dev", "q", route, agent_identity="dev@abc123def456")
+
+    row = await db.fetchone("SELECT agent_identity FROM routing_events WHERE id=?", (eid,))
+    assert row["agent_identity"] == "dev@abc123def456"
+
+
+@pytest.mark.asyncio
+async def test_log_decision_agent_identity_defaults_to_none(auditor, db):
+    """Caller lama yang belum menghitung identitas → NULL, bukan error
+    (backward-compat)."""
+    route = _fake_route()
+    eid = await auditor.log_decision("s_id2", "dev", "q", route)
+
+    row = await db.fetchone("SELECT agent_identity FROM routing_events WHERE id=?", (eid,))
+    assert row["agent_identity"] is None
+
+
+@pytest.mark.asyncio
+async def test_log_decision_writes_agent_identity_to_audit_chain(auditor, db):
+    """Melengkapi § Prioritas 9.1: identitas HARUS ikut ke payload rantai, bukan
+    cuma kolom DB biasa — supaya bisa dijawab lintas hash chain juga."""
+    route = _fake_route()
+    await auditor.log_decision("s_id3", "dev", "q", route, agent_identity="dev@abc123def456")
+
+    row = await db.fetchone(
+        "SELECT payload_json FROM audit_chain WHERE entry_type='routing.decision' "
+        "ORDER BY id DESC LIMIT 1"
+    )
+    assert "dev@abc123def456" in row["payload_json"]
+
+
+@pytest.mark.asyncio
+async def test_identity_report_empty(auditor):
+    assert await auditor.identity_report() == []
+
+
+@pytest.mark.asyncio
+async def test_identity_report_excludes_null_identity(auditor):
+    """Baris tanpa agent_identity (caller lama) TIDAK boleh muncul sebagai satu
+    grup 'None' — laporan ini soal identitas yang DIKETAHUI."""
+    route = _fake_route()
+    await auditor.log_decision("s_id4", "dev", "q", route)  # tanpa agent_identity
+
+    assert await auditor.identity_report() == []
+
+
+@pytest.mark.asyncio
+async def test_identity_report_groups_by_role_and_identity(auditor):
+    route = _fake_route()
+    await auditor.log_decision("s_id5", "dev", "q1", route, agent_identity="dev@aaa111")
+    await auditor.log_decision("s_id6", "dev", "q2", route, agent_identity="dev@aaa111")
+    await auditor.log_decision("s_id7", "dev", "q3", route, agent_identity="dev@bbb222")
+
+    report = await auditor.identity_report()
+    by_identity = {r["agent_identity"]: r["total"] for r in report}
+    assert by_identity == {"dev@aaa111": 2, "dev@bbb222": 1}
+
+
+@pytest.mark.asyncio
+async def test_identity_report_config_change_shows_as_two_identities():
+    """Simulasi nyata: role sama, soul.toml berubah di tengah → dua identitas
+    berbeda untuk role yang sama, persis pertanyaan yang dijawab fitur ini."""
+    from core.agent_identity import agent_identity as make_identity
+
+    db = DatabaseManager(AppConfig(db_path=":memory:"))
+    with open("migrations/001_initial.sql") as f:
+        sql = f.read()
+    conn = await db.conn()
+    await conn.executescript(sql)
+    await conn.commit()
+    auditor = RoutingAuditor(db=db)
+
+    soul_v1 = {"tools": {"allowed": ["file_read"]}}
+    soul_v2 = {"tools": {"allowed": ["file_read", "shell_run"]}}  # permission ditambah
+    identity_v1 = make_identity("dev", soul_v1)
+    identity_v2 = make_identity("dev", soul_v2)
+
+    route = _fake_route()
+    await auditor.log_decision("s_id8", "dev", "before change", route, agent_identity=identity_v1)
+    await auditor.log_decision("s_id9", "dev", "after change", route, agent_identity=identity_v2)
+
+    report = await auditor.identity_report()
+    identities = {r["agent_identity"] for r in report}
+    assert identities == {identity_v1, identity_v2}
+    await db.close()

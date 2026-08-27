@@ -449,6 +449,24 @@ Untuk konsumsi programatik (dashboard SIEM eksternal, laporan terjadwal) tanpa p
 
 ---
 
+#### `GET /metrics/identities`
+
+**Non-Human Identity (§ Prioritas 9.2) — daftar `(role, agent_identity)` yang pernah aktif.**
+
+Response:
+```json
+{"identities": [
+  {"role": "dev", "agent_identity": "dev@66c2a14cb44c", "total": 42,
+   "first_seen": "2026-08-01 09:00:00", "last_seen": "2026-08-27 07:36:31"},
+  {"role": "dev", "agent_identity": "dev@bb57d625a090", "total": 5,
+   "first_seen": "2026-08-27 07:35:00", "last_seen": "2026-08-27 07:36:31"}
+]}
+```
+
+Dua baris `role` sama dengan `agent_identity` berbeda (seperti contoh di atas) berarti `soul.toml` role itu **berubah** di antara `last_seen` yang lebih lama dan `first_seen` yang lebih baru — misalnya tool allow-list dicabut/ditambah. Baris dengan `agent_identity` yang tak pernah tercatat (data lama sebelum kolom ini ada) TIDAK muncul di sini — lihat `docs/core.md` § `identity_report()`.
+
+---
+
 #### `GET /metrics/cost-savings`
 
 **Estimasi penghematan biaya dari hybrid routing (§ Prioritas 9.4) — varian JSON murni dari kartu di `/metrics`.**

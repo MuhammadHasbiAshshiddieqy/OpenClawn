@@ -125,9 +125,14 @@ CREATE TABLE IF NOT EXISTS routing_events (
     had_correction INTEGER DEFAULT 0, correction_detail TEXT,
     evidence_json TEXT,                    -- [Evidence-Based Response] snapshot policy/skill/guardrail, query-able via GET /evidence/{id}
     human_feedback INTEGER,                -- [Runtime Evaluation Engine] rating eksplisit user 1-5 via POST /feedback/{id}, NULL = belum diberi. Beda dari had_correction (sinyal implisit dari teks pesan berikutnya)
+    agent_identity TEXT,                   -- [§ Prioritas 9.2, Non-Human Identity] "{role}@{hash12}" dari core/agent_identity.py — hash SELURUH soul.toml efektif saat turn ini, BUKAN cuma nama role. Config berubah → identitas baru otomatis. NULL = dibuat sebelum kolom ini ada.
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_routing_label ON routing_events(complexity_label, had_correction);
+-- idx_routing_agent_identity SENGAJA TAK DI SINI: dibuat DatabaseManager._ensure_columns()
+-- SETELAH kolom agent_identity ditambal ke DB lama — pola yang sama seperti
+-- idx_approval_id/idx_l2_role/idx_skills_active (index statis untuk kolom yang
+-- ditambahkan setelah rilis awal akan gagal "no such column" di DB lama).
 
 -- ===================== ROLE HANDOFFS [#4] =====================
 CREATE TABLE IF NOT EXISTS role_handoffs (
@@ -152,6 +157,7 @@ CREATE TABLE IF NOT EXISTS approval_log (
     decision TEXT,                          -- pending | approved | rejected | timeout | auto:trust_mode | proposal:pending
     approval_id TEXT,                       -- [Human Approval Pipeline] kolom eksplisit — SEBELUMNYA hanya tersirat sebagai substring "pending:{id}" di decision, hilang setelah resolve. Query-able via GET /approval/{approval_id}
     owner_user_id TEXT,                     -- [Audit produksi 2026-07-29] user yang memicu approval ini — GET /approvals & POST /approve digerbangi ini agar user lain tak bisa lihat/putuskan approval milik orang lain. NULL = tak tercatat (auth nonaktif).
+    agent_identity TEXT,                    -- [§ Prioritas 9.2, Non-Human Identity] lihat routing_events — sama kolom, sama makna, di tabel checkpoint manusia. NULL = dibuat sebelum kolom ini ada.
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

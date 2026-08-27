@@ -54,30 +54,37 @@ class RoutingAuditor:
         query: str,
         route: RouteDecision,
         user_id: str = "default",
+        agent_identity: str | None = None,
     ) -> int:
         """`user_id` (§ Audit log format actor_is_agent, TODO.md Prioritas 2):
         AgentConfig.user_id — default 'default' selaras single-user design saat
         ini (CLAUDE.md §7). `actor_is_agent` tidak diparameterkan — SELALU 1 di
         tabel ini (setiap baris routing_events adalah tindakan agent), memakai
         DEFAULT kolom (lihat migrations/001_initial.sql) alih-alih dikirim tiap
-        panggilan."""
+        panggilan.
+
+        `agent_identity` (§ Prioritas 9.2, Non-Human Identity): `"{role}@{hash12}"`
+        dari `core/agent_identity.py` — identitas agent yang menyertakan versi
+        KONFIGURASI (`soul.toml` efektif), bukan cuma nama role. `None` (default)
+        untuk caller yang belum menghitungnya (backward-compat)."""
         d = route.dimensions
         cursor = await self.db.execute(
             """
             INSERT INTO routing_events (
-                session_id, role, user_id, query_text,
+                session_id, role, user_id, agent_identity, query_text,
                 dim_query_tokens, dim_has_tech_kw, dim_needs_multistep,
                 dim_history_len, dim_role, dim_has_urgency,
                 dim_needs_stream, dim_is_continuation, dim_soul_upgrade_hit,
                 dim_has_code_signal, dim_query_script, dim_language_bumped,
                 complexity_score, complexity_label,
                 model_chosen, provider, routing_reason
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 session_id,
                 role,
                 user_id,
+                agent_identity,
                 query,
                 d["query_tokens"],
                 d["has_tech_kw"],
@@ -112,6 +119,7 @@ class RoutingAuditor:
                 "session_id": session_id,
                 "role": role,
                 "user_id": user_id,
+                "agent_identity": agent_identity,
                 "model": route.model,
                 "provider": route.provider,
                 "complexity": route.complexity.value,
@@ -292,3 +300,32 @@ class RoutingAuditor:
             "estimated_savings_pct": round(savings_pct, 1),
             "pricing_verified_on": PRICING_VERIFIED_ON.isoformat(),
         }
+
+    async def identity_report(self) -> list[dict]:
+        """Non-Human Identity (§ Prioritas 9.2): daftar `(role, agent_identity)`
+        yang pernah aktif, dengan rentang waktu masing-masing.
+
+        Menjawab pertanyaan audit "agent dengan konfigurasi mana yang aktif
+        pada tanggal Y" langsung dari data yang sudah ada — TANPA tabel
+        versioning terpisah. Baris dengan `agent_identity IS NULL` (dicatat
+        sebelum kolom ini ada, atau caller lama yang belum menghitungnya)
+        DIKELUARKAN — laporan ini soal identitas yang DIKETAHUI, bukan
+        menyamarkan yang tak diketahui sebagai satu grup "None".
+
+        Bila satu role muncul dengan LEBIH DARI SATU `agent_identity` yang
+        `last_seen`-nya tumpang tindih dekat, itu sinyal `soul.toml` role
+        tersebut baru saja diubah — persis pertanyaan yang ingin dijawab
+        fitur ini.
+        """
+        return await self.db.fetchall(
+            """
+            SELECT role, agent_identity,
+                   COUNT(*) as total,
+                   MIN(created_at) as first_seen,
+                   MAX(created_at) as last_seen
+            FROM routing_events
+            WHERE agent_identity IS NOT NULL
+            GROUP BY role, agent_identity
+            ORDER BY last_seen DESC
+            """
+        )

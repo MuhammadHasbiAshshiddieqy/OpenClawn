@@ -1197,6 +1197,18 @@ async def metrics_roles_json():
     return {"roles": await RoutingAuditor(db).role_report()}
 
 
+@app.get("/metrics/identities")
+async def metrics_identities_json():
+    """Non-Human Identity (TODO.md § Prioritas 9.2) — daftar `(role, agent_identity)`
+    yang pernah aktif, dengan rentang waktu masing-masing.
+
+    Menjawab pertanyaan audit "agent dengan KONFIGURASI mana yang aktif pada
+    tanggal Y", bukan cuma "role apa" — dua baris `role` yang sama dengan
+    `agent_identity` berbeda berarti `soul.toml` role itu berubah di antara
+    keduanya. Lihat `core/agent_identity.py` untuk bagaimana identitas dihitung."""
+    return {"identities": await RoutingAuditor(db).identity_report()}
+
+
 @app.get("/metrics/cost-savings")
 async def metrics_cost_savings_json():
     """Estimasi penghematan biaya dari hybrid routing (TODO.md § Prioritas 9.4),

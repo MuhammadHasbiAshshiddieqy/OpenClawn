@@ -30,6 +30,10 @@ class PendingApproval:
     # terlihat semua (graceful, bukan fail-closed total untuk kasus ini),
     # enforcement ownership sungguhan ada di web/main.py (lapisan endpoint).
     owner_user_id: str | None = None
+    # Non-Human Identity (§ Prioritas 9.2): "{role}@{hash12}" — identitas agent
+    # yang menyertakan versi KONFIGURASI (soul.toml efektif) saat approval ini
+    # dibuat, bukan cuma nama role. None = caller belum menghitungnya.
+    agent_identity: str | None = None
     future: asyncio.Future = field(default_factory=lambda: asyncio.get_event_loop().create_future())
 
 
@@ -61,6 +65,7 @@ class ApprovalGate:
         tool_input: dict,
         approval_id: str | None = None,
         owner_user_id: str | None = None,
+        agent_identity: str | None = None,
     ) -> bool:
         """`approval_id` opsional — caller (AgentLoop) bisa pre-generate & emit ke UI
         SEBELUM memanggil ini, agar user tahu ID-nya sementara request() masih menunggu
@@ -70,7 +75,11 @@ class ApprovalGate:
         `owner_user_id` (audit produksi 2026-07-29): identitas user yang memicu
         approval ini, dipakai web/main.py untuk menggerbangi GET /approvals dan
         POST /approve agar user lain tak bisa lihat/putuskan approval ini.
-        None (default) bila auth nonaktif atau caller tak menyertakan."""
+        None (default) bila auth nonaktif atau caller tak menyertakan.
+
+        `agent_identity` (§ Prioritas 9.2, Non-Human Identity): identitas agent
+        (role + hash konfigurasi) yang memicu approval ini — melengkapi
+        `owner_user_id` (siapa MANUSIA-nya) dengan "agent versi mana"."""
         approval_id = approval_id or uuid.uuid4().hex
         pending = PendingApproval(
             approval_id=approval_id,
@@ -78,6 +87,7 @@ class ApprovalGate:
             tool_name=tool_name,
             tool_input=tool_input,
             owner_user_id=owner_user_id,
+            agent_identity=agent_identity,
         )
         self._pending[approval_id] = pending
 
@@ -88,9 +98,17 @@ class ApprovalGate:
         # approval lintas status pending→approved/rejected/timeout.
         cursor = await self.db.execute(
             """INSERT INTO approval_log
-               (session_id, tool_name, tool_input, decision, approval_id, owner_user_id)
-               VALUES (?,?,?,?,?,?)""",
-            (session_id, tool_name, json.dumps(tool_input), "pending", approval_id, owner_user_id),
+               (session_id, tool_name, tool_input, decision, approval_id, owner_user_id, agent_identity)
+               VALUES (?,?,?,?,?,?,?)""",
+            (
+                session_id,
+                tool_name,
+                json.dumps(tool_input),
+                "pending",
+                approval_id,
+                owner_user_id,
+                agent_identity,
+            ),
         )
         await self.chain.append(
             ENTRY_APPROVAL_REQUESTED,
@@ -98,6 +116,7 @@ class ApprovalGate:
                 "approval_id": approval_id,
                 "session_id": session_id,
                 "tool_name": tool_name,
+                "agent_identity": agent_identity,
                 "owner_user_id": owner_user_id,
             },
             ref_table="approval_log",
@@ -142,7 +161,13 @@ class ApprovalGate:
             ref_id=None,
         )
 
-    async def auto_approve(self, session_id: str, tool_name: str, tool_input: dict) -> bool:
+    async def auto_approve(
+        self,
+        session_id: str,
+        tool_name: str,
+        tool_input: dict,
+        agent_identity: str | None = None,
+    ) -> bool:
         """Setuju otomatis untuk "Trust mode" per-sesi (§ user request otonomi).
 
         BEDA dari `queue_proposal` (autopilot — tanpa manusia, TIDAK dieksekusi,
@@ -152,18 +177,22 @@ class ApprovalGate:
         bukan "approved" biasa) agar audit trail membedakan keputusan manual vs
         toggle trust mode. Selalu return True — caller (AgentLoop) yang memutuskan
         tool mana yang boleh lewat sini (code_run TIDAK PERNAH, CLAUDE.md §1).
+
+        `agent_identity` (§ Prioritas 9.2) — dicatat SEKALIGUS penting di jalur ini:
+        approval yang MELEWATI klik manusia adalah tepat jalur yang paling perlu
+        bisa dijawab "agent versi mana yang melakukannya".
         """
         cursor = await self.db.execute(
-            """INSERT INTO approval_log (session_id, tool_name, tool_input, decision)
-               VALUES (?,?,?,?)""",
-            (session_id, tool_name, json.dumps(tool_input), "auto:trust_mode"),
+            """INSERT INTO approval_log (session_id, tool_name, tool_input, decision, agent_identity)
+               VALUES (?,?,?,?,?)""",
+            (session_id, tool_name, json.dumps(tool_input), "auto:trust_mode", agent_identity),
         )
         # DIRANTAI justru karena ini MELEWATI klik manusia — "aksi butuh-approval
         # mana yang dijalankan tanpa persetujuan eksplisit" adalah pertanyaan
         # pertama auditor, dan jawabannya harus tak bisa dihapus diam-diam.
         await self.chain.append(
             ENTRY_APPROVAL_AUTO,
-            {"session_id": session_id, "tool_name": tool_name},
+            {"session_id": session_id, "tool_name": tool_name, "agent_identity": agent_identity},
             ref_table="approval_log",
             ref_id=cursor.lastrowid,
         )

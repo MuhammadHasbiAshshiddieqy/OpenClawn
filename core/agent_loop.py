@@ -12,6 +12,7 @@ from infra.logging import log
 from infra.settings import SettingsStore
 from infra.workspace import CURRENT_WORKSPACE_ROOT, SessionWorkspaceStore
 from core.router import SmartRouter
+from core.agent_identity import agent_identity
 from core.audit import RoutingAuditor
 from core.calibration import CalibrationStore
 from core.router_config import RouterConfigStore
@@ -236,6 +237,13 @@ class AgentLoop:
 
         # nit #2: cache soul.toml sekali, jangan baca tiap turn
         self._soul = self._load_soul_once()
+        # Non-Human Identity (TODO.md § Prioritas 9.2): "{role}@{hash12}" dari
+        # SELURUH soul.toml efektif — dihitung sekali di sini (soul sudah
+        # di-cache), sama pola dengan self._soul di atas. Config berubah →
+        # AgentLoop instance BERIKUTNYA (soul.toml dibaca ulang) otomatis
+        # dapat identitas baru; instance yang sedang berjalan tetap konsisten
+        # dengan identitas yang dihitung di awal, bukan berubah di tengah turn.
+        self.agent_identity = agent_identity(self.cfg.role, self._soul)
         # Policy Engine (TODO.md § Prioritas 3): lapisan kondisi TAMBAHAN di atas
         # allow-list [tools] dan Tool.requires_approval statis — dibaca dari
         # soul.toml [policy.<tool_name>]. Section opsional; role tanpa [policy]
@@ -404,7 +412,12 @@ class AgentLoop:
             route.model = ov_model
             route.cost_per_1k = 0.0  # biaya nyata model override tak dipetakan; jangan tebak
         event_id = await self.auditor.log_decision(
-            self.cfg.session_id, self.cfg.role, user_message, route, user_id=self.cfg.user_id
+            self.cfg.session_id,
+            self.cfg.role,
+            user_message,
+            route,
+            user_id=self.cfg.user_id,
+            agent_identity=self.agent_identity,
         )
         # Status: beri tahu UI model/provider yang dipilih sebelum LLM dipanggil.
         yield AgentEvent(type="status", text="routing", detail=f"{route.provider}:{route.model}")
@@ -802,7 +815,9 @@ class AgentLoop:
             # jalur ini tetap menolak bypass — policy tak boleh bergantung SEMATA
             # pada caller menghitung dengan benar.
             if bypass_approval and name not in _TRUST_MODE_EXEMPT and not policy_forces_approval:
-                approved = await self.approval.auto_approve(self.cfg.session_id, name, input_data)
+                approved = await self.approval.auto_approve(
+                    self.cfg.session_id, name, input_data, agent_identity=self.agent_identity
+                )
             else:
                 # Audit produksi 2026-07-29: teruskan identitas user (bila ada,
                 # "default" = auth nonaktif/tak ada user login) agar web/main.py
@@ -813,6 +828,7 @@ class AgentLoop:
                     input_data,
                     approval_id=approval_id,
                     owner_user_id=self.cfg.user_id if self.cfg.user_id != "default" else None,
+                    agent_identity=self.agent_identity,
                 )
             if not approved:
                 return {"error": f"Tool '{name}' ditolak oleh user"}

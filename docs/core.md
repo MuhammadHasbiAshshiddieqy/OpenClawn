@@ -458,6 +458,22 @@ Simpan override. `mapping`: `{tier_value: {model, provider}}`. Hanya tier valid 
 
 ---
 
+## `core/agent_identity.py` — Non-Human Identity (TODO.md § Prioritas 9.2)
+
+OpenCLAWN sudah membedakan "agent vs manusia" (`actor_is_agent`, selalu `1`) dan "user mana yang memicu" (`owner_user_id`) — tapi keduanya belum menjawab pertanyaan audit yang lebih tajam: **agent dengan KONFIGURASI mana** yang melakukan tindakan ini? `soul.toml` satu role bisa berubah kapan saja (tool allow-list, `[policy]`, system prompt); tanpa identitas per-versi, dua tindakan role yang sama dengan PERMISSION BERBEDA terlihat identik di audit trail.
+
+Melengkapi § Prioritas 9.1 (`core/audit_chain.py`): hash chaining membuktikan LOG tak diubah; identitas di sini menjawab log itu **tentang siapa**.
+
+**`config_hash(soul) → str`**  
+SHA-256 hex penuh dari **seluruh** isi `soul.toml` yang dimuat, di-canonical-kan sebagai JSON `sort_keys` (urutan key TOML tak bermakna semantik, tak boleh memengaruhi hash). Deterministik: konten sama → hash sama, di proses/mesin/waktu mana pun.
+
+**`agent_identity(role, soul) → str`**  
+Identitas stabil `"{role}@{hash12}"`. Sengaja menghash **seluruh** dict `soul` (bukan subset field pilihan tangan) — supaya field baru yang ditambahkan ke `soul.toml` di masa depan otomatis ikut tercermin tanpa perlu mengingat memperbarui modul ini. Role sama + config PERSIS sama → identitas sama, lintas sesi/restart. Config berubah (tool dicabut/ditambah, policy diedit, prompt diubah) → identitas baru otomatis, tanpa tabel versioning terpisah.
+
+Dihitung sekali oleh `AgentLoop.__init__` (`self.agent_identity`, setelah `self._soul` di-cache) dan diteruskan ke `RoutingAuditor.log_decision()` dan `ApprovalGate.request()`/`auto_approve()`.
+
+---
+
 ## `core/audit_chain.py` — Tamper-Evident Audit Trail (TODO.md § Prioritas 9.1)
 
 Rantai hash **append-only** atas titik keputusan agent + checkpoint manusia. Menjawab EU AI Act Article 12 (enforceable 2026-08-02) dan menjadikan pilar README "Immutable Audit Evidence" klaim yang **didukung implementasi** — sebelumnya `routing_events`/`approval_log` hanya baris SQLite biasa yang bisa diubah/dihapus tanpa jejak.
@@ -512,8 +528,8 @@ Daftar kata/frasa yang menandakan user mengoreksi respons sebelumnya (sinyal fee
 
 ### Kelas: `RoutingAuditor`
 
-**`log_decision(session_id, role, query, route, user_id="default") → int`** *(async)*  
-Catat keputusan routing ke tabel `routing_events` **sebelum** LLM call. Return `lastrowid` (dipakai sebagai `event_id` untuk `finalize`). Semua 8 dimensi dicatat. `user_id` (§ Audit log format actor_is_agent, TODO.md Prioritas 2) — `AgentConfig.user_id`, default `"default"` selaras single-user design saat ini (CLAUDE.md §7). `actor_is_agent` TIDAK diparameterkan — selalu `1` via `DEFAULT` kolom (setiap baris tabel ini memang tindakan agent), pola audit log standar pasar (GitHub control plane) yang memudahkan integrasi SIEM eksternal.
+**`log_decision(session_id, role, query, route, user_id="default", agent_identity=None) → int`** *(async)*  
+Catat keputusan routing ke tabel `routing_events` **sebelum** LLM call. Return `lastrowid` (dipakai sebagai `event_id` untuk `finalize`). Semua 8 dimensi dicatat. `user_id` (§ Audit log format actor_is_agent, TODO.md Prioritas 2) — `AgentConfig.user_id`, default `"default"` selaras single-user design saat ini (CLAUDE.md §7). `actor_is_agent` TIDAK diparameterkan — selalu `1` via `DEFAULT` kolom (setiap baris tabel ini memang tindakan agent), pola audit log standar pasar (GitHub control plane) yang memudahkan integrasi SIEM eksternal. `agent_identity` (§ Prioritas 9.2, `core/agent_identity.py`) — `None` untuk caller lama yang belum menghitungnya (backward-compat).
 
 Juga menulis entry `routing.decision` ke rantai audit (`self.chain`, lihat `core/audit_chain.py`) — payload ringkas (model/provider/complexity/`query_preview` 200 char), bukan salinan penuh baris; `ref_id` menunjuk ke `routing_events` untuk data lengkap.
 
@@ -540,6 +556,9 @@ Estimasi penghematan biaya dari hybrid routing (§ Prioritas 9.4). **TIDAK memak
 *Counterfactual* = biaya seandainya token yang sama diproses model tier `Complexity.CRITICAL` **default** (`SmartRouter.MODELS`, bukan peta yang mungkin di-override via `/router`) — baseline tetap, supaya angka penghematan tak bergeser di bawah kaki hanya karena operator mengubah konfigurasi model.
 
 Baris dengan `model_chosen` di luar tabel harga (`turns_unpriced`) DIKELUARKAN dari agregat, bukan dianggap gratis. Return dict: `is_estimate` (selalu `True`), `turns_counted`, `turns_unpriced`, `baseline_model`, `actual_cost_usd`, `counterfactual_cost_usd`, `estimated_savings_usd`, `estimated_savings_pct`, `pricing_verified_on`. Dipakai `/metrics` (kartu HTML) dan `GET /metrics/cost-savings` (JSON, `docs/web.md`).
+
+**`identity_report() → list[dict]`** *(async)*  
+Non-Human Identity (§ Prioritas 9.2): daftar `(role, agent_identity)` yang pernah aktif, dengan `total`, `first_seen`, `last_seen`. Menjawab pertanyaan audit "agent dengan konfigurasi mana yang aktif pada tanggal Y" langsung dari data yang ada, TANPA tabel versioning terpisah. Baris `agent_identity IS NULL` (dicatat sebelum kolom ini ada, atau caller lama) DIKELUARKAN — laporan ini soal identitas yang **diketahui**. Satu `role` dengan **lebih dari satu** `agent_identity` berarti `soul.toml` role itu pernah berubah. Dipakai `GET /metrics/identities` (`docs/web.md`).
 
 ---
 

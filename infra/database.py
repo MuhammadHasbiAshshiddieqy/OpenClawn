@@ -44,6 +44,10 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("dim_has_code_signal", "INTEGER"),
         ("dim_query_script", "TEXT"),
         ("dim_language_bumped", "INTEGER"),
+        # Non-Human Identity (TODO.md § Prioritas 9.2): "{role}@{hash12}" dari
+        # core/agent_identity.py — sudah di CREATE TABLE untuk DB baru, baris
+        # ini menambal DB LAMA.
+        ("agent_identity", "TEXT"),
     ],
     "approval_log": [
         # Human Approval Pipeline (TODO.md § Prioritas 2): approval_id SEBELUMNYA
@@ -59,6 +63,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # Audit produksi 2026-07-29: sudah di CREATE TABLE untuk DB baru — baris
         # ini menambal DB LAMA (dibuat sebelum kolom ini ada).
         ("owner_user_id", "TEXT"),
+        # Non-Human Identity (TODO.md § Prioritas 9.2) — sama kolom & alasan
+        # seperti routing_events di atas.
+        ("agent_identity", "TEXT"),
     ],
     "tool_invocations": [
         # Audit log format actor_is_agent (TODO.md § Prioritas 2) — sama seperti
@@ -175,6 +182,13 @@ class DatabaseManager:
         # untuk DB lama bila dibuat lebih dulu).
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_l2_role ON memory_l2(tenant_id, role, importance DESC)"
+        )
+        # Non-Human Identity (TODO.md § Prioritas 9.2): agent_identity ditambal
+        # via _ADDED_COLUMNS di atas — index yang mereferensikannya menunggu
+        # sampai baris ini, pola sama idx_approval_id/idx_l2_role.
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_routing_agent_identity "
+            "ON routing_events(role, agent_identity)"
         )
         await db.commit()
         # Rebuild tabel (skills, memory_l1) — DILAKUKAN SETELAH semua ALTER TABLE
