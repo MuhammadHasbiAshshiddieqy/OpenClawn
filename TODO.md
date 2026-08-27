@@ -681,11 +681,47 @@ kemudahan implementasi.
 > sungguhan (bukan cuma unit test): seed 2 entry → anchor → verify OK → hapus
 > 1 entry (simulasi truncation) → verify GAGAL dengan exit code 1.
 >
+> **Follow-up (b) retensi 6 bulan — ✅ SELESAI (2026-08-03), keputusan owner:
+> pagar kode.** Ditanya eksplisit ("pagar kode" vs "dokumentasi saja"), owner
+> pilih pagar kode. Temuan sebelum eksekusi: proyek ini TIDAK punya pruning
+> sama sekali untuk 3 tabel ini — jadi retensi terpenuhi trivial hari ini;
+> gapnya adalah TIDAK ADA PAGAR untuk kode pruning masa depan.
+>
+> `infra/retention.py` (`MIN_RETENTION_DAYS = 180`, satu sumber kebenaran
+> untuk dokumentasi/test) + 3 trigger SQLite (`trg_retention_routing_events`,
+> `trg_retention_approval_log`, `trg_retention_audit_chain`) di
+> `migrations/001_initial.sql` — `BEFORE DELETE ... WHEN (umur < 180 hari)
+> RAISE(ABORT)`. Penegakan di level DATABASE (bukan fungsi Python yang bisa
+> lupa dipanggil) — tak bisa dilewati jalur kode mana pun. Diverifikasi
+> LANGSUNG sebelum dipakai: `RAISE(ABORT)` tembus sebagai `sqlite3.IntegrityError`
+> lewat aiosqlite; batch DELETE campuran tua+muda di-rollback SELURUHNYA
+> (fail-closed — baris tua yang boleh dihapus pun ikut bertahan).
+>
+> **Efek samping berharga yang ditemukan saat implementasi:** untuk data
+> < 180 hari, trigger ini membuat serangan truncation/rewrite-lewat-delete
+> terhadap `audit_chain` (batas jaminan follow-up (c) di atas) **mustahil
+> secara struktural**, bukan cuma terdeteksi anchoring.
+>
+> **Regresi yang ditemukan & diperbaiki SEBELUM commit:** `scripts/seed_routing.py --clear`
+> akan gagal (trigger memblokir DELETE data seed yang baru diinsert) — dan 5
+> test lama (`test_audit_chain.py`, `test_audit_anchor.py`) yang men-DELETE
+> entry segar untuk simulasi tampering ikut gagal. Diperbaiki: seed data
+> di-backdate `MIN_RETENTION_DAYS + 5` hari (bukan pengecualian di trigger —
+> trigger tetap berlaku sama untuk semua baris); test lama pakai helper
+> `_append_backdated` untuk tetap menguji skenario yang sama pada data tua.
+>
+> Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **926
+> passed** (+9 baru, +0 regresi bersih setelah perbaikan), ruff bersih, tanpa
+> dependency baru. Migrasi dikonfirmasi idempoten (executescript dijalankan
+> 2× berturut-turut, simulasi restart server, tak error).
+>
+> **Batas yang sengaja belum diselesaikan:** tegangan dengan permintaan
+> penghapusan GDPR (PII di `query_text`/`tool_input`) — butuh desain redaksi
+> konten, kelas masalah berbeda, di luar scope perubahan ini.
+>
 > **Follow-up yang MASIH sengaja belum dikerjakan** (bukan lupa): (a)
-> `had_correction`/`human_feedback` belum dirantai — itu sinyal kalibrasi,
-> bukan bukti tindakan agent; (b) retensi 6 bulan EU AI Act belum ditegakkan
-> kode (tak ada pruning sama sekali di proyek ini saat ini) — perlu keputusan
-> terpisah apakah jadi tanggung jawab kode atau operator.
+> `had_correction`/`human_feedback` belum dirantai ke `audit_chain` — itu
+> sinyal kalibrasi, bukan bukti tindakan agent.
 
 **Konteks & justifikasi asli (dipertahankan):**
 

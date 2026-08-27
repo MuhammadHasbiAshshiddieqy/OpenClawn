@@ -130,6 +130,24 @@ Tutup koneksi. Dipanggil saat shutdown.
 
 ---
 
+## `infra/retention.py` — Retensi Minimum (TODO.md § Prioritas 9.1 follow-up, EU AI Act Article 12)
+
+Article 12 mewajibkan retensi minimum 6 bulan untuk log sistem AI risiko-tinggi. Proyek ini tidak punya mekanisme pruning apa pun untuk tabel audit — jadi syarat itu terpenuhi trivial hari ini. Gapnya bukan pelanggaran yang terjadi sekarang, melainkan tidak adanya pagar yang mencegah kode masa depan (mis. skrip pruning untuk alasan ruang disk) melanggarnya tanpa disadari.
+
+**`MIN_RETENTION_DAYS = 180`** — satu-satunya konstanta modul ini, dipakai dokumentasi & test. **Penegakan sungguhan ADA DI TRIGGER SQLite** (`migrations/001_initial.sql`: `trg_retention_routing_events`, `trg_retention_approval_log`, `trg_retention_audit_chain`), BUKAN di modul Python ini — sengaja, supaya tak bisa dilewati jalur kode mana pun (termasuk raw SQL maintainer masa depan). Trigger `BEFORE DELETE ... WHEN julianday('now') - julianday(OLD.created_at) < 180` me-`RAISE(ABORT, ...)` — SQLite melempar `sqlite3.IntegrityError` yang menembus `aiosqlite` apa adanya (diverifikasi langsung, bukan diasumsikan).
+
+**Perilaku fail-closed pada batch DELETE:** satu statement `DELETE ... WHERE` yang mengenai baris tua DAN muda sekaligus di-**ROLLBACK SELURUHNYA** — termasuk baris tua yang sebenarnya boleh dihapus. Diverifikasi langsung (`tests/test_retention.py::test_batch_delete_mixing_old_and_young_rolls_back_entirely`) — bukan asumsi dari perilaku SQLite yang didokumentasikan, karena semantik `RAISE(ABORT)` per-baris dalam batch statement tidak selalu intuitif.
+
+**Trigger hanya `BEFORE DELETE`** — UPDATE (dipakai `finalize()`/`check_correction()`/`resolve()` dst) sama sekali tidak tersentuh, alur normal tak terpengaruh.
+
+**Kenapa `migrations/001_initial.sql` statis (bukan pola `_ensure_columns()` seperti index lain):** trigger ini hanya mereferensikan `created_at`, kolom yang SUDAH ADA sejak tabel-tabel itu dibuat pertama kali — bukan kolom baru yang butuh migrasi DB lama, jadi aman `CREATE TRIGGER IF NOT EXISTS` statis di `executescript`.
+
+**Efek samping yang berguna (bukan tujuan awal):** karena trigger memblokir DELETE apa pun pada baris < 180 hari, serangan "truncation"/"rewrite lewat delete" terhadap `audit_chain` (§ `core/audit_anchor.py`, batas jaminan `AuditChain.verify()`) kini **mustahil secara struktural untuk data segar** — bukan cuma terdeteksi lewat anchoring. Anchoring tetap relevan untuk data yang sudah di luar jendela retensi, atau manipulasi lewat jalur di luar SQL (mis. edit file mentah).
+
+**Batas yang belum diselesaikan, sengaja:** trigger ini tidak menyentuh tegangan dengan permintaan penghapusan GDPR (hak dihapus) untuk PII yang mungkin ikut tersimpan di `query_text`/`tool_input` — itu butuh desain redaksi konten, kelas masalah berbeda, di luar scope perubahan ini.
+
+---
+
 ## `infra/backup.py`
 
 Backup/restore SQLite (§ production-readiness — gap dicatat di `PRODUCTION-READINESS.md` §0 & `TODO.md` § Prioritas 1.5). Dipakai lewat `scripts/backup_db.py` (cron/systemd timer) atau dipanggil langsung. Bukan `DatabaseManager` — file ini murni operasi filesystem/sqlite3 stdlib, tidak butuh koneksi shared aplikasi.

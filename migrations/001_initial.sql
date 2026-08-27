@@ -134,6 +134,25 @@ CREATE INDEX IF NOT EXISTS idx_routing_label ON routing_events(complexity_label,
 -- idx_approval_id/idx_l2_role/idx_skills_active (index statis untuk kolom yang
 -- ditambahkan setelah rilis awal akan gagal "no such column" di DB lama).
 
+-- Retensi minimum 180 hari (§ Prioritas 9.1 follow-up, EU AI Act Article 12,
+-- infra/retention.py::MIN_RETENTION_DAYS — UBAH KEDUANYA BERSAMAAN bila
+-- angka ini berubah, SQL tak bisa import konstanta Python). Aman statis di
+-- sini (beda dari index di atas) karena hanya mereferensikan `created_at`,
+-- kolom yang SUDAH ADA sejak tabel ini dibuat pertama kali — bukan kolom
+-- baru yang butuh migrasi DB lama. Trigger memblokir SELURUH statement DELETE
+-- (bukan cuma baris yang melanggar) bila ADA satu baris yang lebih muda dari
+-- 180 hari — fail-closed, diverifikasi langsung: batch DELETE campuran
+-- baris tua+muda di-rollback SELURUHNYA, baris tua yang seharusnya boleh
+-- dihapus pun ikut bertahan (CLAUDE.md §1: keamanan/kepatuhan dulu, bukan
+-- "hapus sebisanya").
+CREATE TRIGGER IF NOT EXISTS trg_retention_routing_events
+BEFORE DELETE ON routing_events
+FOR EACH ROW
+WHEN julianday('now') - julianday(OLD.created_at) < 180
+BEGIN
+    SELECT RAISE(ABORT, 'retention: routing_events baris ini < 180 hari (EU AI Act Article 12, retensi minimum)');
+END;
+
 -- ===================== ROLE HANDOFFS [#4] =====================
 CREATE TABLE IF NOT EXISTS role_handoffs (
     id INTEGER PRIMARY KEY, session_id TEXT NOT NULL,
@@ -161,6 +180,16 @@ CREATE TABLE IF NOT EXISTS approval_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Retensi minimum 180 hari — sama alasan & perilaku dengan trigger
+-- routing_events di atas (infra/retention.py::MIN_RETENTION_DAYS).
+CREATE TRIGGER IF NOT EXISTS trg_retention_approval_log
+BEFORE DELETE ON approval_log
+FOR EACH ROW
+WHEN julianday('now') - julianday(OLD.created_at) < 180
+BEGIN
+    SELECT RAISE(ABORT, 'retention: approval_log baris ini < 180 hari (EU AI Act Article 12, retensi minimum)');
+END;
+
 -- ===================== AUDIT CHAIN (tamper-evident) [§ Prioritas 9.1] =====================
 -- Rantai hash APPEND-ONLY atas titik keputusan agent + checkpoint manusia.
 -- Menjawab EU AI Act Article 12 (enforceable 2026-08-02): logging otomatis yang
@@ -183,6 +212,23 @@ CREATE TABLE IF NOT EXISTS audit_chain (
     record_hash TEXT NOT NULL               -- SHA256(canonical_body || prev_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_audit_chain_ref ON audit_chain(ref_table, ref_id);
+
+-- Retensi minimum 180 hari — sama alasan dengan trigger routing_events di
+-- atas (infra/retention.py::MIN_RETENTION_DAYS). Di tabel ini KEDUA ALASAN
+-- berlaku sekaligus: komentar "JANGAN pernah UPDATE/DELETE tabel ini" di atas
+-- sudah menyatakan niat append-only, trigger ini yang MENEGAKKANNYA sungguhan
+-- (bukan cuma komentar yang bisa diabaikan maintainer masa depan) — sekaligus
+-- retensi minimum EU AI Act. `julianday()` diverifikasi langsung bisa
+-- mem-parse `created_at` di sini walau formatnya ISO8601 Python
+-- (`datetime.now(UTC).isoformat()`, ada 'T' & offset +00:00), BEDA dari
+-- format `CURRENT_TIMESTAMP` SQLite di tabel lain — tidak diasumsikan.
+CREATE TRIGGER IF NOT EXISTS trg_retention_audit_chain
+BEFORE DELETE ON audit_chain
+FOR EACH ROW
+WHEN julianday('now') - julianday(OLD.created_at) < 180
+BEGIN
+    SELECT RAISE(ABORT, 'retention: audit_chain baris ini < 180 hari (EU AI Act Article 12, retensi minimum; tabel ini juga sengaja append-only)');
+END;
 
 -- ===================== APP SETTINGS (runtime override) =====================
 -- Key-value sederhana untuk override yang bisa diubah lewat /settings tanpa restart.

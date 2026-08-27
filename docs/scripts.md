@@ -34,6 +34,7 @@ python scripts/seed_routing.py --seed 7   # RNG seed berbeda (reproducible)
 ### Cara kerja
 
 - Semua baris diberi `session_id` berprefix `seed-` agar mudah dibedakan dari data nyata dan dihapus bersih via `--clear`.
+- **`created_at` sengaja di-backdate** `MIN_RETENTION_DAYS + 5` hari (§ Prioritas 9.1 follow-up, `infra/retention.py`) — trigger retensi EU AI Act di `routing_events` menolak DELETE untuk baris < 180 hari, jadi tanpa ini `--clear` akan gagal `sqlite3.IntegrityError` untuk data seed yang baru diinsert. Bukan pengecualian di trigger (trigger tetap berlaku SAMA untuk semua baris, termasuk data uji) — solusinya di sisi script, bukan melubangi mekanisme kepatuhan.
 - `PROFILES` mendefinisikan bobot kemunculan, correction rate target, dan biaya per label. Sengaja dirancang agar memunculkan **kedua** jenis rekomendasi `RoutingCalibrator`:
   - `complex` → correction rate tinggi (~28%) → **under_provisioned**
   - `critical` → correction rate rendah (~2%) + berbiaya → **over_provisioned**

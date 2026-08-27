@@ -7,6 +7,46 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Added — Retensi minimum 180 hari, ditegakkan trigger DB (TODO.md § Prioritas 9.1 follow-up)
+
+Audit: proyek ini tidak punya mekanisme pruning apa pun untuk `routing_events`/
+`approval_log`/`audit_chain` — jadi syarat retensi minimum EU AI Act Article 12
+terpenuhi trivial hari ini. Gapnya bukan pelanggaran yang terjadi sekarang,
+melainkan tidak adanya pagar yang mencegah kode masa depan (skrip pruning
+untuk alasan ruang disk, mis.) melanggarnya tanpa disadari.
+
+- **`infra/retention.py`** (baru) — `MIN_RETENTION_DAYS = 180`, satu sumber
+  kebenaran untuk dokumentasi & test.
+- **Tiga trigger SQLite** (`trg_retention_routing_events`,
+  `trg_retention_approval_log`, `trg_retention_audit_chain`) di
+  `migrations/001_initial.sql` — `BEFORE DELETE ... WHEN (umur < 180 hari)
+  RAISE(ABORT, ...)`. Penegakan SUNGGUHAN di level database, bukan konvensi
+  "panggil fungsi ini dulu" yang bisa dilupakan — tak bisa dilewati jalur kode
+  mana pun, termasuk raw SQL. Diverifikasi langsung (bukan diasumsikan):
+  `RAISE(ABORT)` menembus `aiosqlite` sebagai `sqlite3.IntegrityError`; batch
+  `DELETE` yang mengenai baris tua+muda sekaligus di-**rollback seluruhnya**
+  (fail-closed) — baris tua yang sebenarnya boleh dihapus pun ikut bertahan.
+- **Efek samping berharga:** untuk data < 180 hari, trigger ini membuat
+  serangan truncation/rewrite-lewat-delete terhadap `audit_chain` (batas
+  jaminan yang didokumentasikan saat fitur itu dibangun) **mustahil secara
+  struktural**, bukan cuma terdeteksi anchoring — anchoring tetap relevan
+  untuk data ≥ 180 hari atau manipulasi lewat jalur non-SQL.
+- **`scripts/seed_routing.py` disesuaikan** — data sintetis sekarang
+  di-backdate `MIN_RETENTION_DAYS + 5` hari supaya `--clear` tetap berfungsi
+  tanpa perlu pengecualian khusus di trigger (trigger tetap berlaku SAMA
+  untuk semua baris, termasuk data uji).
+- **Batas yang sengaja belum diselesaikan:** tegangan dengan permintaan
+  penghapusan GDPR (PII yang mungkin ikut tersimpan di `query_text`/
+  `tool_input`) — butuh desain redaksi konten, kelas masalah berbeda, di
+  luar scope perubahan ini.
+
+Tanpa dependency baru. 9 test baru (`tests/test_retention.py`) + 5 test lama
+(`test_audit_chain.py`, `test_audit_anchor.py`) disesuaikan — trigger ini
+memblokir DELETE yang sebelumnya dipakai test-test itu untuk mensimulasikan
+tampering pada data segar, jadi entry yang di-DELETE dalam skenario uji kini
+sengaja dibuat tua (`_append_backdated`) agar tetap bisa menguji skenario
+yang sama.
+
 ### Added — Audit chain anchoring (TODO.md § Prioritas 9.1 follow-up)
 
 Menutup gap yang didokumentasikan jujur sendiri saat audit chain dibangun:

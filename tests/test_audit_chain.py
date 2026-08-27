@@ -7,6 +7,8 @@ dengan menulis LANGSUNG ke DB di belakang punggung AuditChain — meniru penyera
 yang punya akses file DB, bukan yang lewat API.
 """
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from core.audit_chain import (
@@ -22,6 +24,37 @@ from core.audit_chain import (
 )
 from infra.config import AppConfig
 from infra.database import DatabaseManager
+from infra.retention import MIN_RETENTION_DAYS
+
+
+async def _append_backdated(
+    db, entry_type: str, payload: dict, days_old: int, ref_table: str = "", ref_id=None
+) -> str:
+    """Sisipkan entry rantai dengan `created_at` TUA (di luar jendela retensi
+    § Prioritas 9.1 follow-up, infra/retention.py) — dibutuhkan test yang
+    men-DELETE sebuah entry untuk mensimulasikan tampering: trigger retensi
+    SEKARANG memblokir DELETE baris < MIN_RETENTION_DAYS, jadi entry yang
+    hendak dihapus dalam skenario uji harus dibuat tua dari awal.
+
+    Ini SATU-SATUNYA cara membuat entry tua yang hash-nya tetap valid — sekadar
+    UPDATE created_at pada entry existing akan membuat record_hash-nya sendiri
+    tak lagi cocok (hash dihitung dari created_at ASLI), memicu deteksi "isi
+    diubah" yang tak diinginkan untuk skenario ini. Hash dihitung dengan cara
+    PERSIS SAMA seperti `AuditChain.append()`, hanya `created_at`-nya di-override.
+    """
+    created_at = (datetime.now(UTC) - timedelta(days=days_old)).isoformat()
+    payload_json = canonical_payload(payload)
+    prev_row = await db.fetchone("SELECT record_hash FROM audit_chain ORDER BY id DESC LIMIT 1")
+    prev_hash = prev_row["record_hash"] if prev_row else ""
+    body = _canonical_body(entry_type, ref_table, ref_id, payload_json, created_at)
+    record_hash = compute_hash(body, prev_hash)
+    await db.execute(
+        """INSERT INTO audit_chain
+           (entry_type, ref_table, ref_id, payload_json, created_at, prev_hash, record_hash)
+           VALUES (?,?,?,?,?,?,?)""",
+        (entry_type, ref_table, ref_id, payload_json, created_at, prev_hash, record_hash),
+    )
+    return record_hash
 
 
 @pytest.fixture
@@ -103,10 +136,21 @@ async def test_detects_modified_payload(db):
 
 
 async def test_detects_deleted_entry_in_middle(db):
-    """Entry di tengah dihapus → prev_hash entry berikutnya menggantung."""
+    """Entry di tengah dihapus → prev_hash entry berikutnya menggantung.
+
+    Entry id=2 sengaja dibuat TUA (`_append_backdated`, § Prioritas 9.1
+    follow-up) — trigger retensi (infra/retention.py) memblokir DELETE baris
+    muda, jadi entry yang mau dihapus dalam skenario uji ini harus di luar
+    jendela retensi sejak awal, terlepas dari apakah tampering-nya nyata."""
     chain = AuditChain(db)
     await chain.append(ENTRY_APPROVAL_REQUESTED, {"approval_id": "x"}, "approval_log", None)
-    await chain.append(ENTRY_APPROVAL_DECIDED, {"decision": "rejected"}, "approval_log", None)
+    await _append_backdated(
+        db,
+        ENTRY_APPROVAL_DECIDED,
+        {"decision": "rejected"},
+        days_old=MIN_RETENTION_DAYS + 5,
+        ref_table="approval_log",
+    )
     await chain.append(ENTRY_ROUTING_DECISION, {"a": 1}, "routing_events", 2)
 
     # Menghapus jejak bahwa sebuah approval DITOLAK.
@@ -126,10 +170,18 @@ async def test_detects_deleted_last_entry_only_via_anchor(db):
     adalah ANCHORING (membandingkan head tersimpan di luar sistem dengan head
     sekarang), bukan verify() internal. Test ini mengunci fakta itu supaya
     tak ada yang salah mengira verify() sendirian sudah cukup.
+
+    Entry yang dihapus dibuat TUA (`_append_backdated`) supaya lolos trigger
+    retensi — lihat catatan `test_detects_deleted_entry_in_middle` di atas.
+    Catatan tambahan: trigger retensi (§ Prioritas 9.1 follow-up) berarti
+    truncation SEPERTI INI kini MUSTAHIL untuk data < 180 hari — batas
+    jaminan ini hanya relevan untuk data yang SUDAH di luar jendela retensi.
     """
     chain = AuditChain(db)
     await chain.append(ENTRY_ROUTING_DECISION, {"a": 1})
-    anchored = await chain.append(ENTRY_APPROVAL_AUTO, {"tool_name": "shell_run"})
+    anchored = await _append_backdated(
+        db, ENTRY_APPROVAL_AUTO, {"tool_name": "shell_run"}, days_old=MIN_RETENTION_DAYS + 5
+    )
 
     await db.execute("DELETE FROM audit_chain WHERE id=2")
 
@@ -183,9 +235,18 @@ async def test_rewriting_whole_chain_is_not_detected_by_verify_alone(db):
     """BATAS JAMINAN kedua: penyerang yang menulis ULANG seluruh rantai dengan
     hash yang benar akan lolos verify(). Didokumentasikan eksplisit di
     core/audit_chain.py; test ini mengunci klaim itu agar tidak dilebih-lebihkan
-    di dokumentasi/README ("terdeteksi", bukan "mustahil")."""
+    di dokumentasi/README ("terdeteksi", bukan "mustahil").
+
+    Entry awal dibuat TUA (`_append_backdated`) supaya `DELETE FROM audit_chain`
+    di bawah lolos trigger retensi (§ Prioritas 9.1 follow-up) — batas jaminan
+    ini (rewrite penuh lolos verify()) HANYA relevan untuk data yang sudah di
+    luar jendela retensi; untuk data < 180 hari, trigger retensi sendiri sudah
+    mencegah `DELETE`-nya sama sekali, jadi skenario rewrite-lewat-delete ini
+    kini mustahil terjadi pada data segar."""
     chain = AuditChain(db)
-    await chain.append(ENTRY_ROUTING_DECISION, {"model": "mahal"})
+    await _append_backdated(
+        db, ENTRY_ROUTING_DECISION, {"model": "mahal"}, days_old=MIN_RETENTION_DAYS + 5
+    )
     original_head = (await chain.head())["record_hash"]
 
     # Penyerang membangun ulang rantai dari nol dengan isi palsu, hash konsisten.

@@ -191,6 +191,8 @@ Setiap keputusan routing dicatat sebelum LLM call dan diupdate setelah selesai.
 
 **Index:** `idx_routing_label` pada `(complexity_label, had_correction)` — untuk `calibration_report`. `idx_routing_agent_identity` pada `(role, agent_identity)` — untuk `identity_report()` (§ Prioritas 9.2); dibuat `DatabaseManager._ensure_columns()` SETELAH kolom `agent_identity` ditambal ke DB lama, bukan statis di migration file (pola sama `idx_approval_id`/`idx_l2_role`).
 
+**Trigger:** `trg_retention_routing_events` (§ Prioritas 9.1 follow-up, `infra/retention.py`) — `BEFORE DELETE`, menolak (`RAISE ABORT`) penghapusan baris `created_at` < 180 hari (EU AI Act Article 12). Statis di migration file (aman — hanya mereferensikan `created_at`, kolom sejak awal).
+
 ---
 
 ## Tabel Role Handoffs
@@ -234,6 +236,8 @@ Semua permintaan approval tool destruktif.
 
 **Index:** `idx_approval_id` pada `approval_id` — dibuat oleh `DatabaseManager._ensure_columns()` SETELAH kolom ditambal (bukan statis di migration script), karena DB lama baru mendapat kolom ini via `ALTER TABLE`; index yang dibuat lebih dulu akan gagal `no such column` untuk DB lama.
 
+**Trigger:** `trg_retention_approval_log` (§ Prioritas 9.1 follow-up) — sama mekanisme & alasan `trg_retention_routing_events` di atas.
+
 Saat `request()` dipanggil: diinsert dengan `decision="pending"` dan `approval_id` di kolomnya. Setelah user memutuskan: diupdate ke `"approved"`, `"rejected"`, atau `"timeout"` (dicari via `approval_id`, bukan lagi pola string).
 
 ---
@@ -257,7 +261,9 @@ Append-only, hash-chained. Menjawab EU AI Act Article 12 (enforceable 2026-08-02
 
 **Index:** `idx_audit_chain_ref` pada `(ref_table, ref_id)`.
 
-> ⚠️ **JANGAN pernah `UPDATE`/`DELETE` tabel ini.** Itu memutus rantai — dan memang dirancang supaya ketahuan bila terjadi (`GET /audit/verify`). Mutasi pada data sumber dicatat sebagai entry BARU, bukan dengan mengubah entry lama.
+**Trigger:** `trg_retention_audit_chain` (§ Prioritas 9.1 follow-up) — sama mekanisme `trg_retention_routing_events`, TAPI di tabel ini alasannya dobel: menegakkan SUNGGUHAN peringatan "jangan DELETE" di bawah (bukan cuma komentar), sekaligus retensi minimum EU AI Act. Efek samping berguna: untuk data < 180 hari, serangan truncation/rewrite-lewat-delete terhadap rantai ini kini **mustahil secara struktural**, bukan cuma terdeteksi anchoring (`core/audit_anchor.py`).
+
+> ⚠️ **JANGAN pernah `UPDATE`/`DELETE` tabel ini.** Itu memutus rantai — dan memang dirancang supaya ketahuan bila terjadi (`GET /audit/verify`), DAN (untuk `DELETE` pada data < 180 hari) ditolak langsung oleh trigger di atas. Mutasi pada data sumber dicatat sebagai entry BARU, bukan dengan mengubah entry lama.
 
 Fungsi SQLite kustom `SHA256(text)` didaftarkan `DatabaseManager.conn()` (pola sama `POWER()`) supaya penulisan rantai atomik dalam satu statement.
 

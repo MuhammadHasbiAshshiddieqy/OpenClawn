@@ -507,8 +507,10 @@ Hash chain membuat perubahan retroaktif **terdeteksi**, bukan **mustahil**. Dua 
 |---|---|---|
 | Isi entry diubah | ✅ | `record_hash` tak cocok isi |
 | Entry di tengah dihapus / disisipkan / ditukar urutan | ✅ | `prev_hash` menggantung |
-| Entry **terakhir** dihapus (truncation) | ❌ (`verify()` sendirian) | ✅ oleh `core/audit_anchor.py` (§ Prioritas 9.1 follow-up) |
-| **Seluruh** rantai ditulis ulang dengan hash konsisten | ❌ (`verify()` sendirian) | ✅ oleh `core/audit_anchor.py`, alasan sama |
+| Entry **terakhir** dihapus (truncation) — data < 180 hari | ❌ (`verify()` sendirian) | ✅ **mustahil secara struktural** — trigger retensi (`infra/retention.py`) menolak DELETE-nya sama sekali |
+| Entry **terakhir** dihapus (truncation) — data ≥ 180 hari | ❌ (`verify()` sendirian) | ✅ oleh `core/audit_anchor.py` (§ Prioritas 9.1 follow-up) |
+| **Seluruh** rantai ditulis ulang dengan hash konsisten — data < 180 hari | ❌ (`verify()` sendirian) | ✅ **mustahil secara struktural**, alasan sama |
+| **Seluruh** rantai ditulis ulang — data ≥ 180 hari | ❌ (`verify()` sendirian) | ✅ oleh `core/audit_anchor.py`, alasan sama |
 
 Karena itu `GET /audit/verify` mengembalikan `head` DAN `anchors` (lihat `core/audit_anchor.py` di bawah) — mekanisme anchoring lokal SUDAH ADA, tapi kebijakan "salin file anchor ke mana" tetap di luar scope kode (lihat batas jaminan anchoring sendiri di bawah). Tanda tangan kriptografis per-entry (ECDSA, pola IETF `draft-sharif-agent-audit-trail`) tetap di luar scope: butuh manajemen kunci yang belum ada di proyek ini.
 

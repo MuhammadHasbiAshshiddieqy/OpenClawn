@@ -24,6 +24,7 @@ import argparse
 import asyncio
 import random
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 # scripts/ tidak masuk package (lihat pyproject packages.find) → tambah root proyek
@@ -32,8 +33,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from infra.config import AppConfig  # noqa: E402
 from infra.database import DatabaseManager  # noqa: E402
+from infra.retention import MIN_RETENTION_DAYS  # noqa: E402
 
 SEED_PREFIX = "seed-"
+# § Prioritas 9.1 follow-up (retensi minimum EU AI Act, infra/retention.py):
+# trigger DB memblokir DELETE untuk baris < MIN_RETENTION_DAYS. Seed data
+# BUKAN audit sungguhan (§ peringatan modul di atas) — backdate SEDIKIT DI
+# LUAR jendela retensi (bukan tepat di batas, hindari kondisi lomba
+# pembulatan julianday()) supaya `--clear` tetap bisa menghapusnya bersih,
+# tanpa perlu pengecualian khusus di trigger itu sendiri (trigger tetap
+# berlaku SAMA untuk semua baris, termasuk data uji — lebih kuat daripada
+# menaruh string 'seed-' di dalam mekanisme kepatuhan).
+_SEED_CREATED_AT = (datetime.now(UTC) - timedelta(days=MIN_RETENTION_DAYS + 5)).strftime(
+    "%Y-%m-%d %H:%M:%S"
+)
 
 # Profil sintetis per label: (bobot kemunculan, correction_rate target, biaya/turn).
 # Angka ini SENGAJA dibuat untuk menampilkan beragam kondisi di /metrics —
@@ -119,6 +132,7 @@ def _row_for_label(label: str, idx: int, rng: random.Random) -> tuple:
         rng.randint(80, 4000),  # latency_ms
         had_correction,
         "salah, bukan itu" if had_correction else None,  # correction_detail
+        _SEED_CREATED_AT,
     )
 
 
@@ -131,8 +145,8 @@ INSERT INTO routing_events (
     complexity_score, complexity_label,
     model_chosen, provider, routing_reason, fallback_used,
     tokens_in, tokens_out, cost_usd, latency_ms,
-    had_correction, correction_detail
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    had_correction, correction_detail, created_at
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 
 

@@ -529,6 +529,22 @@ Test untuk `GET /audit/verify` (field `anchors` baru) dan `POST /audit/anchor` (
 
 ---
 
+### `tests/test_retention.py`
+
+Test untuk trigger retensi minimum 180 hari (§ Prioritas 9.1 follow-up, `infra/retention.py`, EU AI Act Article 12) di `routing_events`/`approval_log`/`audit_chain`. Penegakan sungguhan ada di trigger SQLite, jadi test fokus membuktikan perilaku lewat DB langsung, bukan lewat fungsi Python.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_routing_events_young_row_cannot_be_deleted` | Baris baru (`created_at` = sekarang) → DELETE ditolak `sqlite3.IntegrityError` |
+| `test_routing_events_old_row_can_be_deleted` | Baris > 180 hari → DELETE berhasil normal |
+| `test_routing_events_row_exactly_at_boundary_is_still_protected` | 179 hari (di bawah ambang) TETAP diblokir — fail-closed, bukan off-by-one longgar |
+| `test_approval_log_young_row_cannot_be_deleted` / `test_approval_log_old_row_can_be_deleted` | Sama perilaku untuk `approval_log` |
+| `test_audit_chain_young_row_cannot_be_deleted` / `test_audit_chain_old_row_can_be_deleted` | Sama perilaku untuk `audit_chain` |
+| `test_batch_delete_mixing_old_and_young_rolls_back_entirely` | **Kunci fail-closed:** DELETE batch campuran tua+muda → SELURUH statement rollback, baris tua yang seharusnya boleh dihapus pun ikut bertahan |
+| `test_update_is_not_blocked_by_retention_trigger` | Trigger hanya `BEFORE DELETE` — UPDATE (alur normal `finalize`/`resolve` dst) tidak terpengaruh |
+
+---
+
 ### `tests/test_memory.py`
 
 Test untuk `memory/layers.py` dan `memory/search.py`.
