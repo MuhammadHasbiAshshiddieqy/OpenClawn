@@ -719,9 +719,34 @@ kemudahan implementasi.
 > penghapusan GDPR (PII di `query_text`/`tool_input`) — butuh desain redaksi
 > konten, kelas masalah berbeda, di luar scope perubahan ini.
 >
-> **Follow-up yang MASIH sengaja belum dikerjakan** (bukan lupa): (a)
-> `had_correction`/`human_feedback` belum dirantai ke `audit_chain` — itu
-> sinyal kalibrasi, bukan bukti tindakan agent.
+> **Follow-up (a) chain had_correction/human_feedback — ✅ SELESAI
+> (2026-08-03), DIREVISI dari keputusan awal.** Ditinjau ulang atas
+> permintaan owner: keduanya BUKAN cuma sinyal kalibrasi — mereka bukti
+> tindakan agent ternyata bermasalah menurut user, relevan-langsung EU AI
+> Act Article 12. Menyimpannya HANYA sebagai UPDATE biasa (bukan rantai)
+> berarti siapa pun dengan akses tulis DB bisa diam-diam menghapus jejak
+> user pernah mengoreksi/memberi rating buruk — celah yang seharusnya
+> ditutup fitur ini.
+>
+> Dua entry type baru (`routing.corrected`, `routing.human_feedback`).
+> `check_correction()` di-refactor SELECT-id-dulu → UPDATE-by-id (supaya
+> `ref_id` benar tersedia untuk chain, DAN entry rantai hanya ditulis bila
+> BENAR ADA event sebelumnya — turn pertama tak menulis entry palsu).
+> Kontrak return value **tak berubah** (dikunci test eksplisit) — tak
+> mengganggu `SkillFeedback.resolve_previous` yang sudah bergantung
+> padanya. `set_human_feedback()` hanya chain bila rating valid & event
+> ditemukan.
+>
+> Diverifikasi manual end-to-end skenario paling relevan: user mengoreksi
+> jawaban → penyerang coba hapus jejak koreksi → **ditolak ganda** oleh
+> append-only design DAN trigger retensi 180 hari (follow-up (b) di atas —
+> dua follow-up ini sekarang saling menguatkan).
+>
+> Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **932
+> passed** (+6), ruff bersih, tanpa dependency baru, 0 regresi.
+>
+> **Dengan ini, SEMUA follow-up § Prioritas 9.1 sudah selesai** — tak ada
+> lagi item terbuka di bawah entry ini.
 
 **Konteks & justifikasi asli (dipertahankan):**
 

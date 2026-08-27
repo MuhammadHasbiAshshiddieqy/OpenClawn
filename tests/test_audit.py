@@ -246,6 +246,43 @@ async def test_correction_targets_most_recent_event(auditor, db):
     assert row2["had_correction"] == 1  # e2 yang dikoreksi (paling baru)
 
 
+@pytest.mark.asyncio
+async def test_correction_writes_to_audit_chain(auditor, db):
+    """§ Prioritas 9.1 follow-up (a): koreksi user HARUS dirantai — bukan cuma
+    sinyal kalibrasi, itu bukti tindakan agent bermasalah."""
+    route = _fake_route()
+    event_id = await auditor.log_decision("s_corr_chain", "pm", "q", route)
+    await auditor.finalize(event_id, _FakeTurn())
+
+    await auditor.check_correction("salah, coba lagi", "s_corr_chain")
+
+    row = await db.fetchone(
+        "SELECT entry_type, ref_id, payload_json FROM audit_chain "
+        "WHERE entry_type='routing.corrected' ORDER BY id DESC LIMIT 1"
+    )
+    assert row is not None
+    assert row["ref_id"] == event_id
+    assert "salah" in row["payload_json"]
+
+
+@pytest.mark.asyncio
+async def test_correction_with_no_prior_event_does_not_write_to_chain(auditor, db):
+    """Sinyal koreksi tanpa event sebelumnya di sesi (mis. turn pertama) TIDAK
+    boleh menulis entry rantai palsu — tak ada yang benar-benar dikoreksi."""
+    await auditor.check_correction("salah, coba lagi", "s_corr_no_prior")
+
+    row = await db.fetchone("SELECT id FROM audit_chain WHERE entry_type='routing.corrected'")
+    assert row is None
+
+
+@pytest.mark.asyncio
+async def test_correction_return_value_unchanged_regardless_of_prior_event(auditor):
+    """Kontrak return value TAK BERUBAH oleh penambahan chain-append: True
+    murni berdasar sinyal teks, terpakai SkillFeedback untuk resolve_previous."""
+    assert await auditor.check_correction("salah, coba lagi", "s_no_such_session") is True
+    assert await auditor.check_correction("lanjutkan pekerjaan", "s_no_such_session") is False
+
+
 # ── calibration_report ──────────────────────────────────────────────────────
 
 
@@ -395,6 +432,45 @@ async def test_set_human_feedback_rejects_out_of_range(auditor):
 @pytest.mark.asyncio
 async def test_set_human_feedback_unknown_event_returns_false(auditor):
     assert await auditor.set_human_feedback(999999, 5) is False
+
+
+@pytest.mark.asyncio
+async def test_set_human_feedback_writes_to_audit_chain(auditor, db):
+    """§ Prioritas 9.1 follow-up (a): rating eksplisit HARUS dirantai — bukti
+    kualitas tindakan agent, bukan cuma sinyal kalibrasi."""
+    route = _fake_route()
+    eid = await auditor.log_decision("s_fb_chain", "pm", "q", route)
+    await auditor.finalize(eid, _FakeTurn())
+
+    await auditor.set_human_feedback(eid, 2)
+
+    row = await db.fetchone(
+        "SELECT ref_id, payload_json FROM audit_chain "
+        "WHERE entry_type='routing.human_feedback' ORDER BY id DESC LIMIT 1"
+    )
+    assert row is not None
+    assert row["ref_id"] == eid
+    assert '"rating":2' in row["payload_json"]
+
+
+@pytest.mark.asyncio
+async def test_set_human_feedback_out_of_range_does_not_write_to_chain(auditor, db):
+    route = _fake_route()
+    eid = await auditor.log_decision("s_fb_bad", "pm", "q", route)
+    await auditor.finalize(eid, _FakeTurn())
+
+    await auditor.set_human_feedback(eid, 99)
+
+    row = await db.fetchone("SELECT id FROM audit_chain WHERE entry_type='routing.human_feedback'")
+    assert row is None
+
+
+@pytest.mark.asyncio
+async def test_set_human_feedback_unknown_event_does_not_write_to_chain(auditor, db):
+    await auditor.set_human_feedback(999999, 5)
+
+    row = await db.fetchone("SELECT id FROM audit_chain WHERE entry_type='routing.human_feedback'")
+    assert row is None
 
 
 @pytest.mark.asyncio

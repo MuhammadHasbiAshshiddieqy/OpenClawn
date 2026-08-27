@@ -2,6 +2,8 @@ import json
 
 from infra.database import DatabaseManager
 from core.audit_chain import (
+    ENTRY_HUMAN_FEEDBACK,
+    ENTRY_ROUTING_CORRECTED,
     ENTRY_ROUTING_DECISION,
     ENTRY_ROUTING_FINALIZED,
     AuditChain,
@@ -178,18 +180,32 @@ class RoutingAuditor:
 
         Return True bila pesan ini mengoreksi turn sebelumnya (dipakai SkillFeedback
         untuk memutuskan outcome skill turn lalu: refine/reset vs revive/promote).
+        Kontrak return value TAK BERUBAH dari sebelumnya (murni berdasar sinyal
+        di teks pesan) — SELECT id eksplisit di bawah ini cuma dibutuhkan untuk
+        `ref_id` rantai audit, bukan mengubah kapan fungsi ini return True/False.
         """
         msg = user_message.lower()
         if not any(sig in msg for sig in CORRECTION_SIGNALS):
             return False
-        await self.db.execute(
-            """
-            UPDATE routing_events SET had_correction=1, correction_detail=?
-            WHERE id = (SELECT id FROM routing_events
-                        WHERE session_id=? ORDER BY id DESC LIMIT 1)
-            """,
-            (user_message[:200], session_id),
+        row = await self.db.fetchone(
+            "SELECT id FROM routing_events WHERE session_id=? ORDER BY id DESC LIMIT 1",
+            (session_id,),
         )
+        if row is not None:
+            event_id = row["id"]
+            await self.db.execute(
+                "UPDATE routing_events SET had_correction=1, correction_detail=? WHERE id=?",
+                (user_message[:200], event_id),
+            )
+            # § Prioritas 9.1 follow-up (a): dirantai karena ini BUKTI bahwa
+            # tindakan agent di event_id ternyata bermasalah menurut user —
+            # bukan cuma sinyal kalibrasi (lihat core/audit_chain.py).
+            await self.chain.append(
+                ENTRY_ROUTING_CORRECTED,
+                {"session_id": session_id, "correction_detail": user_message[:200]},
+                ref_table="routing_events",
+                ref_id=event_id,
+            )
         return True
 
     async def calibration_report(self) -> list[dict]:
@@ -244,7 +260,17 @@ class RoutingAuditor:
             "UPDATE routing_events SET human_feedback=? WHERE id=?",
             (rating, event_id),
         )
-        return cursor.rowcount > 0
+        if cursor.rowcount == 0:
+            return False
+        # § Prioritas 9.1 follow-up (a): dirantai — rating eksplisit user
+        # adalah bukti kualitas tindakan agent, bukan cuma sinyal kalibrasi.
+        await self.chain.append(
+            ENTRY_HUMAN_FEEDBACK,
+            {"rating": rating},
+            ref_table="routing_events",
+            ref_id=event_id,
+        )
+        return True
 
     async def cost_savings_report(self) -> dict:
         """Estimasi penghematan dari hybrid routing (§ Prioritas 9.4).

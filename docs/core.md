@@ -482,9 +482,11 @@ Rantai hash **append-only** atas titik keputusan agent + checkpoint manusia. Men
 
 ### Konstanta: entry type
 
-`routing.decision` (sebelum LLM dipanggil) · `routing.finalized` (sesudah turn selesai) · `approval.requested` (checkpoint manusia dibuka) · `approval.decided` (manusia memutuskan / timeout) · `approval.auto` (trust mode MELEWATI klik manusia — dirantai justru karena melewatinya).
+`routing.decision` (sebelum LLM dipanggil) · `routing.finalized` (sesudah turn selesai) · `approval.requested` (checkpoint manusia dibuka) · `approval.decided` (manusia memutuskan / timeout) · `approval.auto` (trust mode MELEWATI klik manusia — dirantai justru karena melewatinya) · `routing.corrected` (user mengoreksi turn sebelumnya) · `routing.human_feedback` (rating eksplisit 1-5).
 
-Sengaja **selektif**: hanya titik keputusan relevan-compliance. Sinyal kualitas (`had_correction`, `human_feedback`) TIDAK dirantai — itu umpan balik kalibrasi router, bukan bukti tindakan agent. Bisa ditambah nanti tanpa memecah rantai lama.
+Sengaja **selektif**: hanya titik keputusan relevan-compliance. Bisa ditambah nanti tanpa memecah rantai lama.
+
+**`routing.corrected`/`routing.human_feedback` DIRANTAI** (§ Prioritas 9.1 follow-up (a), direvisi dari keputusan awal "tak dirantai — sinyal kalibrasi, bukan bukti tindakan agent"): keduanya BUKAN cuma umpan balik kalibrasi router — mereka bukti bahwa satu tindakan agent ternyata bermasalah menurut user, relevan-langsung untuk traceability EU AI Act Article 12. Tanpa dirantai, siapa pun dengan akses tulis DB bisa diam-diam menghapus jejak bahwa user pernah mengoreksi/memberi rating buruk. Diwire di `RoutingAuditor.check_correction()` (hanya bila ADA event sebelumnya untuk sesi — turn pertama tak menulis entry palsu) dan `RoutingAuditor.set_human_feedback()` (hanya bila rating valid & `event_id` ditemukan). Kontrak return value KEDUA fungsi **tidak berubah** oleh penambahan ini.
 
 ### Kelas: `AuditChain`
 
@@ -560,8 +562,10 @@ Update record dengan hasil aktual **setelah** turn selesai: token in/out, cost, 
 
 Juga menulis entry `routing.finalized` ke rantai audit — entry **baru**, bukan mengubah entry `routing.decision` (rantai append-only, lihat `core/audit_chain.py`).
 
-**`check_correction(user_message, session_id) → None`** *(async)*  
-Dipanggil di **awal setiap turn** (oleh `AgentLoop.run`). Jika pesan user mengandung sinyal koreksi, update record turn **sebelumnya** di session yang sama dengan `had_correction=1`. Aman dipanggil selalu — UPDATE hanya kena bila ada event sebelumnya untuk session. (Tidak boleh di-gate `self.history`: AgentLoop dibuat baru tiap request web → history selalu kosong → koreksi tak pernah terdeteksi.)
+**`check_correction(user_message, session_id) → bool`** *(async)*  
+Dipanggil di **awal setiap turn** (oleh `AgentLoop.run`). Jika pesan user mengandung sinyal koreksi, update record turn **sebelumnya** di session yang sama dengan `had_correction=1`. Aman dipanggil selalu — UPDATE hanya kena bila ada event sebelumnya untuk session. (Tidak boleh di-gate `self.history`: AgentLoop dibuat baru tiap request web → history selalu kosong → koreksi tak pernah terdeteksi.) Return `True` murni berdasar sinyal di teks pesan (dipakai `SkillFeedback.resolve_previous`) — **kontrak ini tak berubah** oleh penambahan chain di bawah.
+
+Juga menulis entry `routing.corrected` ke rantai audit (§ Prioritas 9.1 follow-up (a)) — **HANYA bila ada event sebelumnya untuk session ini** (di-SELECT eksplisit dulu sebelum UPDATE, supaya turn pertama dengan kata "salah" di dalamnya tidak menulis entry rantai palsu yang menunjuk ke event yang tak pernah ada).
 
 **`calibration_report() → list[dict]`** *(async)*  
 Agregasi per `complexity_label`: total event, jumlah koreksi, correction rate (%), avg cost. Dipakai oleh `/metrics` dan `RoutingCalibrator`.
@@ -571,6 +575,8 @@ Runtime Evaluation Engine (§ Prioritas 2 TODO.md): agregasi per **role/agent** 
 
 **`set_human_feedback(event_id, rating) → bool`** *(async)*  
 Simpan rating eksplisit 1-5 user untuk satu turn ke `routing_events.human_feedback` — sinyal **eksplisit**, beda dari `had_correction` (disimpulkan implisit dari kata di pesan berikutnya via `check_correction`). Return `False` (tanpa menulis) bila `rating` di luar 1-5 atau `event_id` tidak ditemukan (`cursor.rowcount == 0`) — caller (`POST /feedback/{event_id}`, `docs/web.md`) yang menerjemahkan ini jadi HTTP 400/404.
+
+Juga menulis entry `routing.human_feedback` ke rantai audit (§ Prioritas 9.1 follow-up (a)) — hanya bila rating valid **dan** `event_id` benar-benar ter-update (`cursor.rowcount > 0`), supaya rating tak valid/event tak dikenal tidak ikut menulis entry rantai.
 
 **`cost_savings_report() → dict`** *(async)*  
 Estimasi penghematan biaya dari hybrid routing (§ Prioritas 9.4). **TIDAK memakai kolom `routing_events.cost_usd`** — kolom itu SELALU `0.0` untuk setiap baris, karena `SmartRouter.MODELS` dan `RouterConfigStore.get_map()` sengaja menyetel `cost_per_1k=0.0` untuk semua tier ("cost nyata tak dipetakan; jangan tebak" — keputusan yang benar untuk keputusan routing LIVE, tapi berarti tak ada data biaya nyata untuk diagregasi). Method ini menghitung ULANG dari `model_chosen` + token aktual via tarif publik `core/cost_pricing.py::estimate_cost_usd`.

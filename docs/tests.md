@@ -424,6 +424,9 @@ Test untuk `core/audit.py`.
 | `test_correction_detected_english` | Sinyal koreksi (EN) juga terdeteksi (locale-neutral §1.5) |
 | `test_no_correction_on_normal_query` | Query normal → `had_correction` tetap `0` |
 | `test_correction_targets_most_recent_event` | Koreksi menandai event PALING TERAKHIR di sesi, bukan yang pertama |
+| `test_correction_writes_to_audit_chain` | § Prioritas 9.1 follow-up (a): koreksi ditulis ke `audit_chain` entry `routing.corrected` |
+| `test_correction_with_no_prior_event_does_not_write_to_chain` | Sinyal koreksi tanpa event sebelumnya (turn pertama) → TIDAK menulis entry rantai palsu |
+| `test_correction_return_value_unchanged_regardless_of_prior_event` | Kontrak return value (`bool` murni dari sinyal teks) tak berubah oleh penambahan chain |
 | `test_calibration_report_empty` | Tanpa data → list kosong, tidak crash |
 | `test_calibration_report_with_data` | Report mengelompokkan per `complexity_label` |
 | `test_role_report_empty` | Tanpa data → list kosong, tidak crash (§ Runtime Evaluation Engine) |
@@ -434,6 +437,9 @@ Test untuk `core/audit.py`.
 | `test_set_human_feedback_stores_rating` | `set_human_feedback()` menyimpan rating ke kolom `human_feedback` |
 | `test_set_human_feedback_rejects_out_of_range` | Rating di luar 1-5 → `False`, tidak menulis apa pun |
 | `test_set_human_feedback_unknown_event_returns_false` | `event_id` tak ditemukan → `False` |
+| `test_set_human_feedback_writes_to_audit_chain` | § Prioritas 9.1 follow-up (a): rating ditulis ke `audit_chain` entry `routing.human_feedback` |
+| `test_set_human_feedback_out_of_range_does_not_write_to_chain` | Rating tak valid → TIDAK menulis entry rantai |
+| `test_set_human_feedback_unknown_event_does_not_write_to_chain` | `event_id` tak ditemukan → TIDAK menulis entry rantai |
 | `test_all_correction_signals` | Semua `CORRECTION_SIGNALS` terdeteksi satu per satu |
 | `test_cost_savings_report_empty` | Tanpa data → semua angka 0, `is_estimate=True`, tidak crash |
 | `test_cost_savings_report_does_not_use_stored_cost_usd_column` | **Regresi kunci:** report HARUS hitung ulang dari `model_chosen`+token, BUKAN baca kolom `cost_usd` (yang selalu `0.0`) |

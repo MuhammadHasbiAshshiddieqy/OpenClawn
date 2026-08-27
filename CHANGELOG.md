@@ -7,6 +7,37 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Added — Sinyal koreksi & human feedback ikut dirantai (TODO.md § Prioritas 9.1 follow-up (a))
+
+Merevisi keputusan awal saat audit chain dibangun ("`had_correction`/
+`human_feedback` tak dirantai — itu sinyal kalibrasi, bukan bukti tindakan
+agent"). Ditinjau ulang: keduanya BUKAN cuma umpan balik kalibrasi router —
+mereka bukti bahwa satu tindakan agent ternyata bermasalah menurut user,
+relevan-langsung untuk traceability EU AI Act Article 12. Tanpa dirantai,
+siapa pun dengan akses tulis DB bisa diam-diam menghapus jejak bahwa user
+pernah mengoreksi jawaban atau memberi rating buruk — persis kelas
+manipulasi yang seharusnya ditutup fitur ini, bukan dikecualikan darinya.
+
+- **Dua entry type baru:** `routing.corrected` (`RoutingAuditor.check_correction`)
+  dan `routing.human_feedback` (`RoutingAuditor.set_human_feedback`).
+- `check_correction()` di-refactor dari UPDATE-via-subquery jadi SELECT-id-dulu
+  → UPDATE-by-id, supaya `ref_id` yang benar tersedia untuk `chain.append()`
+  DAN entry rantai hanya ditulis bila benar-benar ADA event sebelumnya untuk
+  sesi itu (turn pertama dengan kata "salah" di dalamnya tidak menulis entry
+  palsu yang menunjuk event yang tak pernah ada). **Kontrak return value
+  fungsi ini tidak berubah** — masih murni berdasar sinyal di teks pesan,
+  dipakai `SkillFeedback.resolve_previous` apa adanya.
+- `set_human_feedback()` menulis entry rantai hanya bila rating valid **dan**
+  `event_id` benar-benar ter-update (`cursor.rowcount > 0`).
+- Diverifikasi manual end-to-end: skenario "user mengoreksi jawaban →
+  penyerang mencoba menghapus jejak koreksi itu" — percobaan `DELETE FROM
+  audit_chain WHERE entry_type='routing.corrected'` ditolak GANDA oleh
+  append-only design DAN trigger retensi 180 hari (follow-up sebelumnya).
+
+Tanpa dependency baru. 6 test baru (`tests/test_audit.py`), 0 regresi.
+Diverifikasi via Docker (`python:3.12-slim` + `uv sync --frozen`, sama CI):
+**932 passed**, ruff bersih.
+
 ### Added — Retensi minimum 180 hari, ditegakkan trigger DB (TODO.md § Prioritas 9.1 follow-up)
 
 Audit: proyek ini tidak punya mekanisme pruning apa pun untuk `routing_events`/

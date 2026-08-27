@@ -38,16 +38,27 @@ from infra.database import DatabaseManager
 from infra.logging import log
 
 # Entry type yang dicatat. Sengaja SELEKTIF — hanya titik keputusan yang relevan
-# untuk traceability compliance (apa yang diputuskan, hasilnya, dan setiap titik
-# pengawasan manusia), bukan setiap perubahan kolom. Sinyal kualitas
-# (had_correction, human_feedback) TIDAK dirantai: itu umpan balik untuk
-# kalibrasi router, bukan bukti tindakan agent. Bisa ditambah nanti tanpa
-# memecah rantai lama (entry_type baru = entry baru, bukan format baru).
+# untuk traceability compliance (apa yang diputuskan, hasilnya, setiap titik
+# pengawasan manusia, DAN sinyal bahwa suatu tindakan ternyata salah), bukan
+# setiap perubahan kolom. Bisa ditambah nanti tanpa memecah rantai lama
+# (entry_type baru = entry baru, bukan format baru).
+#
+# `had_correction`/`human_feedback` DIRANTAI (§ Prioritas 9.1 follow-up (a),
+# direvisi dari keputusan awal "tak dirantai — itu sinyal kalibrasi, bukan
+# bukti tindakan agent"): keduanya BUKAN cuma sinyal kalibrasi router — mereka
+# BUKTI bahwa satu tindakan agent ternyata bermasalah menurut user, yang
+# relevan-langsung untuk traceability EU AI Act Article 12 ("situasi yang
+# mungkin menghadirkan risiko"). Tanpa dirantai, siapa pun dengan akses tulis
+# DB bisa diam-diam menghapus jejak bahwa user pernah mengoreksi/memberi
+# rating buruk pada satu tindakan — persis kelas manipulasi yang seharusnya
+# ditutup fitur ini, bukan dikecualikan darinya.
 ENTRY_ROUTING_DECISION = "routing.decision"  # SEBELUM LLM dipanggil
 ENTRY_ROUTING_FINALIZED = "routing.finalized"  # SESUDAH turn selesai
 ENTRY_APPROVAL_REQUESTED = "approval.requested"  # checkpoint manusia dibuka
 ENTRY_APPROVAL_DECIDED = "approval.decided"  # manusia memutuskan / timeout
 ENTRY_APPROVAL_AUTO = "approval.auto"  # trust mode MELEWATI klik manusia
+ENTRY_ROUTING_CORRECTED = "routing.corrected"  # user mengoreksi turn sebelumnya (sinyal implisit)
+ENTRY_HUMAN_FEEDBACK = "routing.human_feedback"  # rating eksplisit 1-5 user untuk satu turn
 
 # Hash entry pertama merantai ke string kosong — penanda awal rantai yang
 # eksplisit, bukan NULL (NULL menyulitkan verifikasi: "belum diisi" vs "awal").
