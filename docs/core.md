@@ -507,14 +507,34 @@ Hash chain membuat perubahan retroaktif **terdeteksi**, bukan **mustahil**. Dua 
 |---|---|---|
 | Isi entry diubah | ✅ | `record_hash` tak cocok isi |
 | Entry di tengah dihapus / disisipkan / ditukar urutan | ✅ | `prev_hash` menggantung |
-| Entry **terakhir** dihapus (truncation) | ❌ | Anchoring — bandingkan `head()` dengan hash yang disalin ke luar sistem |
-| **Seluruh** rantai ditulis ulang dengan hash konsisten | ❌ | Anchoring, alasan sama |
+| Entry **terakhir** dihapus (truncation) | ❌ (`verify()` sendirian) | ✅ oleh `core/audit_anchor.py` (§ Prioritas 9.1 follow-up) |
+| **Seluruh** rantai ditulis ulang dengan hash konsisten | ❌ (`verify()` sendirian) | ✅ oleh `core/audit_anchor.py`, alasan sama |
 
-Karena itu `GET /audit/verify` mengembalikan `head` — operator perlu menyalinnya keluar secara berkala. Kebijakan anchoring di luar scope kode. Tanda tangan kriptografis per-entry (ECDSA, pola IETF `draft-sharif-agent-audit-trail`) juga di luar scope: butuh manajemen kunci yang belum ada di proyek ini.
+Karena itu `GET /audit/verify` mengembalikan `head` DAN `anchors` (lihat `core/audit_anchor.py` di bawah) — mekanisme anchoring lokal SUDAH ADA, tapi kebijakan "salin file anchor ke mana" tetap di luar scope kode (lihat batas jaminan anchoring sendiri di bawah). Tanda tangan kriptografis per-entry (ECDSA, pola IETF `draft-sharif-agent-audit-trail`) tetap di luar scope: butuh manajemen kunci yang belum ada di proyek ini.
 
 **Fungsi modul:** `canonical_payload(payload)` (JSON `sort_keys` + separator rapat), `compute_hash(body, prev_hash)` (satu-satunya definisi hash — dipakai saat menulis maupun verifikasi supaya tak bisa divergen), `_canonical_body(...)` *(private)*. Body dibangun sebagai **JSON kanonik**, bukan penggabungan berdelimiter (`a|b|c`), karena nilai yang mengandung delimiter bisa membuat dua entry berbeda menghasilkan body identik — celah tabrakan yang diuji `test_delimiter_injection_does_not_collide`.
 
 > **ASUMSI:** ini bukan RFC 8785 (JCS) penuh — cukup untuk verifikasi oleh implementasi ini sendiri (satu-satunya konsumen saat ini). Bila sistem LAIN perlu memverifikasi rantai kita, JCS penuh jadi relevan, terutama untuk float (aturan serialisasinya beda antar bahasa).
+
+---
+
+## `core/audit_anchor.py` — Anchoring (TODO.md § Prioritas 9.1 follow-up)
+
+Menutup DUA batas jaminan `AuditChain.verify()` di atas (truncation, rewrite penuh) dengan menyimpan snapshot `(id, record_hash)` ke **file terpisah** dari database (JSON Lines, append-only) secara berkala, lalu memverifikasi titik yang pernah di-anchor masih ada di tabel dengan hash yang sama persis.
+
+**`write_anchor(db, anchor_path) → dict | None`** *(async)*  
+Tulis satu baris anchor baru bila `head()` rantai berbeda dari anchor terakhir tersimpan. **Idempoten** — dipanggil berulang (cron) tanpa aktivitas baru tidak menumpuk baris duplikat. Return `None` bila rantai kosong atau tak ada perubahan sejak anchor terakhir.
+
+**`verify_against_anchors(db, anchor_path) → dict`** *(async)*  
+Untuk tiap anchor tersimpan: baris `id` itu HARUS masih ada di `audit_chain` dengan `record_hash` yang SAMA. Baris hilang → truncation/rewrite (§ SQLite menggunakan kembali id terkecil kosong untuk `INTEGER PRIMARY KEY` biasa setelah tabel dikosongkan, jadi rewrite penuh bisa membuat `id` yang sama muncul lagi dengan hash BERBEDA — tetap tertangkap perbandingan hash). Return `{"ok", "anchors_checked", "failed", "reason"}`. `anchors_checked=0` (file belum ada) BUKAN kegagalan — belum pernah di-anchor.
+
+### Batas jaminan anchoring itu sendiri (jujur, sama semangat di atas)
+
+File anchor **by default di disk yang sama** dengan database — penyerang dengan akses tulis penuh ke filesystem bisa mengubah keduanya secara konsisten. Nilai mekanisme ini SEBELUM disalin off-host: (1) menangkap korupsi/bug, bukan cuma serangan sengaja; (2) format berbeda (JSONL vs tabel SQL) berarti penyerang harus tahu dan mengubah DUA representasi. Nilai **sungguhan** (independen dari mesin yang dijaga) baru didapat kalau operator menyalin file ini off-host secara berkala — kebijakan "disalin ke mana" tetap di luar scope kode, sama seperti `scripts/backup_db.py` tak mengatur ke mana backup disalin.
+
+**Konfigurasi:** `AppConfig.audit_anchor_path` (default `data/audit_anchors.jsonl`, env `OPENCLAWN_AUDIT_ANCHOR_PATH`) — file terpisah dari `db_path` secara sengaja.
+
+**Pemicu:** `scripts/anchor_audit_chain.py` (dijalankan cron/systemd timer, exit code 1 bila `--verify` gagal — untuk alerting) ATAU `POST /audit/anchor` (manual dari Web UI, `docs/web.md`).
 
 ---
 

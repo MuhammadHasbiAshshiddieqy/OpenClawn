@@ -328,6 +328,29 @@ def test_member_forbidden_from_calibration_revert(client_oidc):
     assert resp.status_code == 403
 
 
+def test_member_forbidden_from_audit_verify(client_oidc):
+    """§ Prioritas 9.1: verifikasi rantai audit mengungkap ada/tidaknya
+    manipulasi riwayat — informasi sensitif, admin-only."""
+    import asyncio
+
+    asyncio.run(_bootstrap_first_user_directly())
+    _login_via_oidc(client_oidc, "user-bob")
+    resp = client_oidc.get("/audit/verify")
+    assert resp.status_code == 403
+
+
+def test_member_forbidden_from_audit_anchor(client_oidc):
+    """§ Prioritas 9.1 follow-up: menulis anchor adalah config sistem sensitif
+    (mengubah file di luar database), admin-only."""
+    import asyncio
+
+    asyncio.run(_bootstrap_first_user_directly())
+    _login_via_oidc(client_oidc, "user-bob")
+    csrf = client_oidc.cookies.get("openclawn_csrf")
+    resp = client_oidc.post("/audit/anchor", data={"csrf_token": csrf}, follow_redirects=False)
+    assert resp.status_code == 403
+
+
 def test_member_forbidden_from_skills_set_visibility(client_oidc):
     import asyncio
 

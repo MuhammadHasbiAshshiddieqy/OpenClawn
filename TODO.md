@@ -664,13 +664,28 @@ kemudahan implementasi.
 > `verify()` hijau saat utuh, dan manipulasi entry `approval.auto` terdeteksi
 > tepat di entry ke-3 dengan alasan yang benar.
 >
-> **Follow-up yang SENGAJA belum dikerjakan** (bukan lupa): (a) `had_correction`
-> / `human_feedback` belum dirantai — itu sinyal kalibrasi, bukan bukti tindakan
-> agent; (b) retensi 6 bulan EU AI Act belum ditegakkan kode (tak ada pruning
-> sama sekali di proyek ini saat ini) — perlu keputusan terpisah apakah jadi
-> tanggung jawab kode atau operator; (c) anchoring otomatis (mis. cron menyalin
-> `head` ke file/sistem lain) — kebijakannya per-deployment, sengaja tak
-> dipaksakan dari kode.
+> **Follow-up (c) anchoring — ✅ SELESAI (2026-08-03).** `core/audit_anchor.py`
+> (`write_anchor`/`verify_against_anchors`) + `scripts/anchor_audit_chain.py`
+> (cron/systemd, pola sama `backup_db.py`, exit code 1 bila `--verify` gagal
+> untuk alerting) + `GET /audit/verify` diperluas field `anchors` + `POST
+> /audit/anchor` (trigger manual). Terverifikasi menangkap KEDUA serangan yang
+> `verify()` sendirian TAK bisa (truncation & rewrite penuh) — dua test
+> mereproduksi persis skenario itu dan konfirmasi tertangkap. Batas jaminan
+> anchoring ITU SENDIRI didokumentasikan jujur (file lokal baru jadi anchor
+> sungguhan setelah disalin off-host — kebijakan penyalinan tetap di luar
+> scope kode, README § Self-hosting menjelaskan cara pakainya).
+>
+> Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **917
+> passed** (+22 dari 902 — termasuk 6 dari §9.4/§9.2 sebelumnya), ruff bersih,
+> tanpa dependency baru, `uv.lock` tak tersentuh. Skrip CLI dieksekusi
+> sungguhan (bukan cuma unit test): seed 2 entry → anchor → verify OK → hapus
+> 1 entry (simulasi truncation) → verify GAGAL dengan exit code 1.
+>
+> **Follow-up yang MASIH sengaja belum dikerjakan** (bukan lupa): (a)
+> `had_correction`/`human_feedback` belum dirantai — itu sinyal kalibrasi,
+> bukan bukti tindakan agent; (b) retensi 6 bulan EU AI Act belum ditegakkan
+> kode (tak ada pruning sama sekali di proyek ini saat ini) — perlu keputusan
+> terpisah apakah jadi tanggung jawab kode atau operator.
 
 **Konteks & justifikasi asli (dipertahankan):**
 

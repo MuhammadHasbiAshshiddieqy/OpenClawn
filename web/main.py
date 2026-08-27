@@ -26,6 +26,7 @@ from core.activity import ActivityTimeline
 from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
 from core.audit_chain import AuditChain
+from core.audit_anchor import verify_against_anchors, write_anchor
 from core.llm_client import close_shared_http_client, get_shared_http_client
 from core.autopilot import AutopilotScheduler, AutopilotStore
 from core.skill_pack import SkillPack
@@ -1268,16 +1269,33 @@ async def audit_verify(request: Request):
     yang sendirinya sensitif (penyerang yang tahu rantai sudah rusak tahu pula
     manipulasinya belum ketahuan). Pola sama endpoint config sistem lain.
 
-    Response menyertakan `head` (id + hash entry terakhir) supaya operator bisa
-    ANCHORING: mencatat hash itu ke luar sistem secara berkala. Tanpa anchoring,
-    penyerang dengan akses tulis DB bisa menulis ULANG seluruh rantai dan
-    verifikasi tetap hijau — batas jaminan yang didokumentasikan jujur di
-    `core/audit_chain.py`, bukan disembunyikan.
+    Response menyertakan `head` (id + hash entry terakhir) DAN `anchors`
+    (§ Prioritas 9.1 follow-up, `core/audit_anchor.py`) — `verify()` sendirian
+    TIDAK menangkap truncation/rewrite penuh rantai (batas jaminan yang
+    didokumentasikan jujur di `core/audit_chain.py`); `anchors` menutupnya
+    dengan mengecek snapshot yang tersimpan di file terpisah
+    (`CONFIG.audit_anchor_path`) terhadap tabel sekarang. `anchors.anchors_checked
+    == 0` berarti belum pernah di-anchor (lihat `scripts/anchor_audit_chain.py`),
+    BUKAN indikasi masalah.
     """
     _require_role(request, "admin")
     chain = AuditChain(db)
     result = await chain.verify()
-    return {**result, "head": await chain.head()}
+    anchors = await verify_against_anchors(db, CONFIG.audit_anchor_path)
+    return {**result, "head": await chain.head(), "anchors": anchors}
+
+
+@app.post("/audit/anchor")
+async def audit_anchor_now(request: Request):
+    """Tulis anchor BARU sekarang (§ Prioritas 9.1 follow-up) — pemicu manual
+    dari Web UI, pelengkap `scripts/anchor_audit_chain.py` yang dijalankan cron.
+
+    Admin-only (config sistem sensitif — mengubah file di luar database).
+    Idempoten: bila tak ada aktivitas baru sejak anchor terakhir, tidak
+    menulis apa pun (`written: false`), bukan menumpuk baris duplikat."""
+    _require_role(request, "admin")
+    entry = await write_anchor(db, CONFIG.audit_anchor_path)
+    return {"written": entry is not None, "anchor": entry}
 
 
 @app.post("/calibration/apply")

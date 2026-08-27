@@ -19,6 +19,7 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | Field | Default | Keterangan |
 |---|---|---|
 | `db_path` | `data/openclawn.db` | Path file SQLite |
+| `audit_anchor_path` | `data/audit_anchors.jsonl` | § Prioritas 9.1 follow-up (Non-Human Identity/audit chain anchoring) — file TERPISAH dari `db_path`, sengaja: menutup batas jaminan `AuditChain.verify()` (truncation/rewrite penuh tak tertangkap verify() sendirian). Lihat `core/audit_anchor.py`. Isi via `OPENCLAWN_AUDIT_ANCHOR_PATH` |
 | `ollama_base` | `http://localhost:11434` | URL base Ollama |
 | `anthropic_base` | `https://api.anthropic.com` | URL base Anthropic API |
 | `gemini_base` | `https://generativelanguage.googleapis.com` | URL base Google AI Studio (Gemini) |
@@ -66,6 +67,7 @@ gemma4:e4b (ollama) → deepseek-r1:latest (ollama) → neural-chat:latest (olla
 **`from_env() → AppConfig`** *(classmethod)*  
 Baca konfigurasi dari environment variables. Variabel yang dibaca:
 - `OPENCLAWN_DB` → `db_path`
+- `OPENCLAWN_AUDIT_ANCHOR_PATH` → `audit_anchor_path`
 - `OLLAMA_BASE` → `ollama_base`
 - `ANTHROPIC_BASE` → `anthropic_base`
 - `GEMINI_BASE` → `gemini_base`

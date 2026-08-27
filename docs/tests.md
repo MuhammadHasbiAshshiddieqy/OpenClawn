@@ -498,6 +498,37 @@ Test untuk `GET /metrics/cost-savings` dan kartu penghematan di `GET /metrics` (
 
 ---
 
+### `tests/test_audit_anchor.py`
+
+Test untuk `core/audit_anchor.py` — anchoring audit chain (§ Prioritas 9.1 follow-up). Fokus: membuktikan anchoring menangkap DUA serangan yang `AuditChain.verify()` sendirian tidak bisa (dikunci di `tests/test_audit_chain.py`).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_write_anchor_returns_none_for_empty_chain` | Rantai kosong → tidak menulis file |
+| `test_write_anchor_creates_file_and_entry` | Anchor pertama membuat file + entry benar |
+| `test_write_anchor_idempotent_without_new_activity` | Panggilan berulang tanpa aktivitas baru TIDAK menumpuk baris duplikat |
+| `test_write_anchor_writes_new_entry_after_new_activity` | Aktivitas baru → anchor baru ditulis |
+| `test_verify_against_anchors_no_file_is_ok` | File belum ada = belum pernah di-anchor, BUKAN indikasi rusak |
+| `test_verify_against_anchors_passes_when_chain_untouched` | Rantai utuh → semua anchor cocok |
+| `test_verify_against_anchors_catches_truncation` | **Kunci fitur:** entry terakhir dihapus → tertangkap anchoring (padahal lolos `verify()` sendirian) |
+| `test_verify_against_anchors_catches_full_chain_rewrite` | **Kunci fitur:** rantai ditulis ulang total → tertangkap anchoring (padahal lolos `verify()` sendirian) |
+| `test_multiple_anchors_all_checked` | Semua anchor tersimpan dicek, bukan cuma yang terakhir |
+
+---
+
+### `tests/test_audit_anchor_web.py`
+
+Test untuk `GET /audit/verify` (field `anchors` baru) dan `POST /audit/anchor` (§ Prioritas 9.1 follow-up).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_audit_verify_includes_anchors_field` | Response `/audit/verify` menyertakan hasil verifikasi anchor |
+| `test_audit_anchor_post_writes_when_activity_exists` | `POST /audit/anchor` menulis anchor baru |
+| `test_audit_anchor_post_no_op_without_new_activity` | Panggilan kedua tanpa aktivitas baru → `written: false` |
+| `test_audit_verify_reflects_anchor_after_posting` | Anchor yang ditulis langsung tercermin di `/audit/verify` |
+
+---
+
 ### `tests/test_memory.py`
 
 Test untuk `memory/layers.py` dan `memory/search.py`.
@@ -992,6 +1023,10 @@ config sistem (`/settings`, `/skills/import`, `/mcp/*`, `/router`,
 | `test_oidc_second_user_member_forbidden_from_admin_users_page` | Member GET `/admin/users` → 403 |
 | `test_admin_can_promote_member_to_admin` | `set_access_role` via DB langsung → user yang di-promote langsung dapat akses admin di request BERIKUTNYA (role dimuat ulang tiap request, bukan cache) |
 | `test_no_auth_settings_accessible_without_rbac` | Auth nonaktif sepenuhnya → RBAC tak berlaku, `/settings` tetap 200 (perilaku lama) |
+| `test_member_forbidden_from_audit_verify` | Member GET `/audit/verify` → 403 (§ Prioritas 9.1) |
+| `test_member_forbidden_from_audit_anchor` | Member POST `/audit/anchor` → 403 (§ Prioritas 9.1 follow-up) |
+
+> **Catatan:** tabel di atas belum mencakup semua test di file ini (mis. `test_member_forbidden_from_calibration_apply/revert`, `test_member_forbidden_from_skills_set_visibility`, `test_member_forbidden_from_autopilots_*`, dan test kepemilikan chat-session/approval) — gap dokumentasi dari sesi sebelumnya, dicatat di sini agar tak disalahartikan sebagai test yang hilang, bukan cuma belum terdaftar.
 
 ---
 

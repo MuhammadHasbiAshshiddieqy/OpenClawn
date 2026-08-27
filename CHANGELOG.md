@@ -7,6 +7,40 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Added — Audit chain anchoring (TODO.md § Prioritas 9.1 follow-up)
+
+Menutup gap yang didokumentasikan jujur sendiri saat audit chain dibangun:
+`AuditChain.verify()` mendeteksi isi yang diubah dan entry yang dihapus/
+disisipkan/ditukar urutan, TAPI tidak mendeteksi truncation (entry TERAKHIR
+dihapus) atau penulisan-ulang SELURUH rantai dengan hash konsisten — dua
+serangan itu menghasilkan rantai yang secara internal tetap valid.
+
+- **`core/audit_anchor.py`** (baru) — `write_anchor()` menyimpan snapshot
+  `(id, record_hash)` rantai ke file JSON Lines TERPISAH dari database secara
+  berkala, idempoten (tanpa aktivitas baru → tidak menulis duplikat).
+  `verify_against_anchors()` mengecek tiap titik yang pernah di-anchor masih
+  ada di tabel dengan hash yang SAMA PERSIS — truncation membuatnya hilang,
+  rewrite penuh membuatnya hilang atau berubah (SQLite menggunakan kembali id
+  terkecil kosong setelah tabel dikosongkan, jadi id yang sama bisa muncul
+  lagi dengan hash berbeda; tetap tertangkap perbandingan hash sederhana).
+- **`scripts/anchor_audit_chain.py`** (baru) — CLI untuk cron/systemd timer,
+  pola sama `scripts/backup_db.py`. `--verify` keluar dengan exit code 1 bila
+  ada anchor yang tak cocok, untuk alerting otomatis.
+- **`GET /audit/verify`** diperluas dengan field `anchors`; **`POST /audit/anchor`**
+  (baru) untuk trigger manual dari Web UI. Keduanya admin-only.
+- **Batas jaminan didokumentasikan jujur, sama disiplin dengan audit chain
+  itu sendiri:** file anchor lokal (default `data/audit_anchors.jsonl`) BARU
+  jadi anchor yang independen dari mesin yang dijaga setelah disalin off-host
+  secara berkala — penyerang dengan akses tulis filesystem penuh tetap bisa
+  mengubah keduanya. Kebijakan "disalin ke mana" tetap di luar scope kode,
+  sama seperti `backup_db.py` tak mengatur ke mana backup disalin.
+
+Tanpa dependency baru. 22 test baru (`tests/test_audit_anchor.py`,
+`tests/test_audit_anchor_web.py`, 2 penambahan `tests/test_rbac_web.py`) —
+termasuk dua test yang secara eksplisit mereproduksi skenario truncation dan
+rewrite penuh yang TIDAK tertangkap `verify()` sendirian, membuktikan
+anchoring benar-benar menutupnya.
+
 ### Added — Non-Human Identity: identitas agent sebagai first-class citizen (TODO.md § Prioritas 9.2)
 
 Melengkapi audit chain di atas: hash chaining membuktikan LOG tak diubah;

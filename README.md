@@ -710,6 +710,22 @@ If you expose it on a public IP, enable the built-in hardening first:
    scripts/backup_db.py --keep 14`) or a systemd timer — an example unit is documented at the
    bottom of the script. Restore is a straight file copy: stop the server, replace
    `data/openclawn.db` with the chosen backup file, restart.
+7. **Anchor the audit chain on a schedule, if you need EU AI Act-grade tamper-evidence** —
+   the audit chain (`core/audit_chain.py`) makes retroactive edits *detectable*, not
+   *impossible*, on its own: truncating the last entry or rewriting the whole chain with
+   consistent hashes both pass `GET /audit/verify` unaided. Closing that gap needs a
+   snapshot recorded somewhere the chain itself doesn't control. Use
+   `scripts/anchor_audit_chain.py` (writes to a separate JSONL file, `data/audit_anchors.jsonl`
+   by default) alongside your backup cron:
+   ```bash
+   python scripts/anchor_audit_chain.py            # record a new anchor if there's new activity
+   python scripts/anchor_audit_chain.py --verify    # exits 1 if any anchor no longer matches
+   ```
+   This alone only raises the bar (an attacker with full filesystem access could still edit
+   both files consistently) — it becomes a real independent anchor only once you copy that
+   file off-host periodically, the same way you'd copy a database backup. `docs/core.md` §
+   `core/audit_anchor.py` documents this limit in full; don't oversell it as making the chain
+   immutable.
 
 This hardening still doesn't turn OpenCLAWN into a managed multi-tenant SaaS platform — one
 self-hosted instance can now serve multiple accounts with real access control, but it's

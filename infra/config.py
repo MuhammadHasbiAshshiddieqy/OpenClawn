@@ -13,6 +13,12 @@ class AppConfig:
     """Semua konfigurasi global. frozen=True agar tidak bisa diubah setelah init."""
 
     db_path: str = "data/openclawn.db"
+    # Anchoring untuk audit chain (TODO.md § Prioritas 9.1 follow-up) — file
+    # TERPISAH dari db_path, sengaja: verify() rantai sendirian tak menangkap
+    # truncation/rewrite penuh (lihat core/audit_chain.py); anchor di file lain
+    # (JSON Lines, append-only) yang bisa disalin off-host operator menutup
+    # celah itu. Lihat core/audit_anchor.py + scripts/anchor_audit_chain.py.
+    audit_anchor_path: str = "data/audit_anchors.jsonl"
     ollama_base: str = "http://localhost:11434"
     anthropic_base: str = "https://api.anthropic.com"
     gemini_base: str = "https://generativelanguage.googleapis.com"
@@ -222,6 +228,9 @@ class AppConfig:
         explicit_session_secret = os.environ.get("OPENCLAWN_SESSION_SECRET", "")
         kwargs = dict(
             db_path=os.environ.get("OPENCLAWN_DB", "data/openclawn.db"),
+            audit_anchor_path=os.environ.get(
+                "OPENCLAWN_AUDIT_ANCHOR_PATH", "data/audit_anchors.jsonl"
+            ),
             ollama_base=os.environ.get("OLLAMA_BASE", "http://localhost:11434"),
             anthropic_base=os.environ.get("ANTHROPIC_BASE", "https://api.anthropic.com"),
             gemini_base=os.environ.get("GEMINI_BASE", "https://generativelanguage.googleapis.com"),
