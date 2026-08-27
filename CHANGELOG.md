@@ -48,6 +48,38 @@ ubah isi, hapus di tengah, sisipkan, tukar urutan, tabrakan delimiter —
 dengan menulis langsung ke DB di belakang punggung `AuditChain`, meniru
 penyerang berakses file DB alih-alih lewat API.
 
+### Added — Estimasi penghematan biaya hybrid routing (TODO.md § Prioritas 9.4)
+
+**Temuan yang mengubah pendekatan:** rencana awal ("agregasi `cost_usd` yang
+sudah tersimpan") ternyata tak bisa dieksekusi apa adanya — `cost_per_1k` di
+`SmartRouter.MODELS` dan `RouterConfigStore.get_map()` SENGAJA selalu `0.0`
+("cost nyata tak dipetakan; jangan tebak", keputusan lama untuk keputusan
+routing live), sehingga `routing_events.cost_usd` SELALU nol untuk setiap
+baris — tak ada data biaya nyata untuk diagregasi.
+
+- **`core/cost_pricing.py`** (baru) — tabel harga publik bertanggal-verifikasi
+  untuk model yang aktif dipakai (Ollama gratis; Gemini Flash/Pro; Claude
+  Haiku/Sonnet), dengan `estimate_cost_usd()` yang mengembalikan `None`
+  (bukan `0.0`) untuk model tak dikenal — konsisten prinsip "jangan tebak"
+  yang sama, diterapkan ke pelaporan retrospektif, bukan keputusan live.
+- **`RoutingAuditor.cost_savings_report()`** — menghitung ULANG biaya dari
+  `model_chosen` + token aktual (bukan kolom `cost_usd`), dibandingkan
+  counterfactual "seandainya semua dikirim ke tier CRITICAL default"
+  (`SmartRouter.MODELS`, tak terpengaruh override `/router` — baseline
+  stabil). Baris dengan model tak dikenal dikeluarkan dari agregat
+  (`turns_unpriced`), bukan dianggap gratis.
+- **`GET /metrics/cost-savings`** (JSON) + kartu ringkasan di `/metrics` —
+  keduanya SELALU menandai hasil `is_estimate: true` dan menyertakan tanggal
+  verifikasi harga serta disclaimer eksplisit (tak memperhitungkan prompt
+  caching/batch discount/kontrak kustom) — keputusan desain yang sama
+  persis dengan batas-jaminan hash chain di atas: jangan klaim lebih dari
+  yang bisa dibuktikan.
+
+Tanpa dependency baru. 18 test baru (`tests/test_cost_pricing.py`,
+penambahan `tests/test_audit.py`, `tests/test_cost_savings_web.py`) —
+termasuk satu regresi kunci yang mengunci bahwa report TIDAK BOLEH kembali
+membaca kolom `cost_usd` yang selalu nol itu.
+
 ## [0.12.0] — 2026-08-02
 
 Rilis terbesar sejauh ini: dua inisiatif governance/multi-tenant penuh

@@ -6,7 +6,8 @@ from core.audit_chain import (
     ENTRY_ROUTING_FINALIZED,
     AuditChain,
 )
-from core.router import RouteDecision
+from core.cost_pricing import PRICING_VERIFIED_ON, estimate_cost_usd
+from core.router import Complexity, RouteDecision, SmartRouter
 
 CORRECTION_SIGNALS = [
     # Indonesia
@@ -236,3 +237,58 @@ class RoutingAuditor:
             (rating, event_id),
         )
         return cursor.rowcount > 0
+
+    async def cost_savings_report(self) -> dict:
+        """Estimasi penghematan dari hybrid routing (§ Prioritas 9.4).
+
+        TIDAK memakai kolom `routing_events.cost_usd` — kolom itu SELALU 0.0
+        untuk setiap baris (lihat `core/router.py::MODELS` dan
+        `core/router_config.py::get_map`, keduanya sengaja "cost nyata tak
+        dipetakan; jangan tebak" untuk keputusan routing LIVE). Di sini kita
+        hitung ulang dari `model_chosen` + token aktual via tarif publik
+        (`core/cost_pricing.py`) — jelas dilabeli estimasi, bukan tagihan.
+
+        Counterfactual = biaya seandainya token yang SAMA diproses model tier
+        CRITICAL default (`SmartRouter.MODELS`, BUKAN peta yang mungkin
+        di-override lewat `/router`) — baseline tetap, supaya angka
+        penghematan tak bergeser di bawah kaki hanya karena operator mengubah
+        konfigurasi model tanpa ada turn baru.
+
+        Baris dengan `model_chosen` di luar tabel harga DIKELUARKAN dari
+        agregat (`turns_unpriced`), bukan dianggap gratis — konsisten prinsip
+        "jangan tebak" yang sama.
+        """
+        rows = await self.db.fetchall(
+            "SELECT model_chosen, tokens_in, tokens_out FROM routing_events "
+            "WHERE tokens_in IS NOT NULL AND tokens_out IS NOT NULL"
+        )
+        baseline_model = SmartRouter.MODELS[Complexity.CRITICAL][0]
+
+        actual_total = 0.0
+        counterfactual_total = 0.0
+        counted = 0
+        unpriced = 0
+        for row in rows:
+            actual = estimate_cost_usd(row["model_chosen"], row["tokens_in"], row["tokens_out"])
+            counterfactual = estimate_cost_usd(baseline_model, row["tokens_in"], row["tokens_out"])
+            if actual is None or counterfactual is None:
+                unpriced += 1
+                continue
+            actual_total += actual
+            counterfactual_total += counterfactual
+            counted += 1
+
+        savings = counterfactual_total - actual_total
+        savings_pct = (savings / counterfactual_total * 100) if counterfactual_total > 0 else 0.0
+
+        return {
+            "is_estimate": True,  # selalu True — flag eksplisit, cegah UI merender sebagai angka pasti
+            "turns_counted": counted,
+            "turns_unpriced": unpriced,
+            "baseline_model": baseline_model,
+            "actual_cost_usd": round(actual_total, 4),
+            "counterfactual_cost_usd": round(counterfactual_total, 4),
+            "estimated_savings_usd": round(savings, 4),
+            "estimated_savings_pct": round(savings_pct, 1),
+            "pricing_verified_on": PRICING_VERIFIED_ON.isoformat(),
+        }

@@ -427,6 +427,7 @@ Context yang dikirim:
 - `role_report` — Runtime Evaluation Engine (§ Prioritas 2 TODO.md): list data per **role/agent** (total, corrections, correction_rate, avg_cost, avg_latency_ms, avg_human_feedback) — `RoutingAuditor.role_report()`, `docs/core.md`. Dikirim ke template context tapi belum ada tabel HTML untuk ini (scope backend+API, bukan UI) — konsumsi via `GET /metrics/roles` di bawah
 - `calibration` — dict `{total_events, has_enough_data, net_offset_delta, recommendations, current_offset, history}`
 - `tool_stats` — list per tool `{tool_name, total, errors, timeouts, fail_rate, avg_latency_ms}`
+- `cost_savings` — Estimasi penghematan hybrid routing (§ Prioritas 9.4): `RoutingAuditor.cost_savings_report()`, `docs/core.md`. Dirender sebagai kartu ringkasan (bukan tabel) — lihat `GET /metrics/cost-savings` di bawah untuk skema lengkap. **Selalu berlabel estimasi** (`is_estimate: true`) di UI, tidak pernah ditampilkan seolah tagihan nyata.
 
 > **Demo tanpa traffic:** dashboard ini kosong sampai ada `routing_events`. Untuk mengisinya dengan data **sintetis** (demo saja, bukan untuk tuning), jalankan `python scripts/seed_routing.py` — lihat [scripts.md](scripts.md).
 
@@ -445,6 +446,29 @@ Untuk konsumsi programatik (dashboard SIEM eksternal, laporan terjadwal) tanpa p
 ]}
 ```
 `avg_human_feedback: null` berarti belum ada turn di role itu yang diberi rating lewat `POST /feedback/{event_id}` di bawah — bukan berarti dinilai buruk.
+
+---
+
+#### `GET /metrics/cost-savings`
+
+**Estimasi penghematan biaya dari hybrid routing (§ Prioritas 9.4) — varian JSON murni dari kartu di `/metrics`.**
+
+Response:
+```json
+{
+  "is_estimate": true,
+  "turns_counted": 42,
+  "turns_unpriced": 0,
+  "baseline_model": "gemini-2.5-pro",
+  "actual_cost_usd": 7.5,
+  "counterfactual_cost_usd": 21.25,
+  "estimated_savings_usd": 13.75,
+  "estimated_savings_pct": 64.7,
+  "pricing_verified_on": "2026-08-27"
+}
+```
+
+**`is_estimate` selalu `true`** — dihitung dari tarif publik (`core/cost_pricing.py`), BUKAN dari kolom `routing_events.cost_usd` (yang selalu `0.0`, lihat `docs/core.md` § `RoutingAuditor.cost_savings_report`) dan bukan tagihan nyata (tak memperhitungkan prompt caching/batch discount/kontrak kustom). `baseline_model` = model tier `CRITICAL` **default** (`SmartRouter.MODELS`, tak terpengaruh override `/router`) — dipakai sebagai patokan "seandainya semua query dikirim ke model paling mahal". `turns_unpriced` = jumlah turn yang dikeluarkan dari agregat karena `model_chosen`-nya tak ada di tabel harga (dikeluarkan, bukan dianggap gratis).
 
 ---
 

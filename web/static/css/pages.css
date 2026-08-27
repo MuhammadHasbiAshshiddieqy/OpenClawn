@@ -70,6 +70,18 @@ ul { list-style: none; }
 .tag.active { background: var(--green); }
 tr.active-row td { background: rgba(80,200,120,.07); }
 
+/* Cost savings (§ Prioritas 9.4) — estimasi, bukan tagihan; lihat disclaimer di template */
+.cost-savings-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px; margin-bottom: 10px;
+}
+.stat {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 14px 16px;
+}
+.stat-value { font-size: 1.5rem; font-weight: 700; color: var(--text); letter-spacing: -.01em; }
+.stat-label { font-size: .78rem; color: var(--text-faint); margin-top: 4px; }
+
 /* Editor peta tier→model (/router) */
 .router-actions { display: flex; gap: 12px; align-items: center; margin-top: 16px; }
 .page td select { width: 100%; max-width: 360px; margin-bottom: 0; }

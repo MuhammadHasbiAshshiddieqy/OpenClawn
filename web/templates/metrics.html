@@ -153,6 +153,34 @@
                 </table>
                 {% endif %}
             </section>
+
+            <section>
+                <h2>{{ t('metrics.cost_savings') }}</h2>
+                {% if cost_savings.turns_counted == 0 %}
+                <p class="muted">{{ t('metrics.no_data') }}</p>
+                {% else %}
+                <div class="cost-savings-grid">
+                    <div class="stat">
+                        <div class="stat-value">${{ cost_savings.estimated_savings_usd }}</div>
+                        <div class="stat-label">{{ t('metrics.est_savings') }} ({{ cost_savings.estimated_savings_pct }}%)</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">${{ cost_savings.actual_cost_usd }}</div>
+                        <div class="stat-label">{{ t('metrics.actual_cost') }}</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">${{ cost_savings.counterfactual_cost_usd }}</div>
+                        <div class="stat-label">{{ t('metrics.baseline_cost', model=cost_savings.baseline_model) }}</div>
+                    </div>
+                </div>
+                <p class="muted">
+                    {{ t('metrics.cost_estimate_disclaimer', date=cost_savings.pricing_verified_on) }}
+                    {% if cost_savings.turns_unpriced > 0 %}
+                    {{ t('metrics.turns_unpriced', n=cost_savings.turns_unpriced) }}
+                    {% endif %}
+                </p>
+                {% endif %}
+            </section>
         </div>
     </main>
 </div>

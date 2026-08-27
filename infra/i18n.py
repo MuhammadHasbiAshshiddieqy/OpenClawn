@@ -334,6 +334,28 @@ STRINGS: dict[str, dict[str, str]] = {
     "metrics.timeout": {"en": "Timeout", "id": "Timeout"},
     "metrics.fail_rate": {"en": "Fail Rate", "id": "Fail Rate"},
     "metrics.avg_latency": {"en": "Avg Latency", "id": "Avg Latency"},
+    # ── Cost savings (§ Prioritas 9.4) ──────────────────────────────────────────
+    "metrics.cost_savings": {
+        "en": "Hybrid Routing Cost Savings (Estimate)",
+        "id": "Estimasi Penghematan Hybrid Routing",
+    },
+    "metrics.est_savings": {"en": "Estimated Savings", "id": "Estimasi Penghematan"},
+    "metrics.actual_cost": {"en": "Actual Cost (est.)", "id": "Biaya Aktual (est.)"},
+    "metrics.baseline_cost": {
+        "en": "If all sent to {model}",
+        "id": "Jika semua dikirim ke {model}",
+    },
+    "metrics.cost_estimate_disclaimer": {
+        "en": "Estimate based on public list pricing verified {date} — not an actual invoice. "
+        "Does not account for prompt caching, batch discounts, or custom contract rates.",
+        "id": "Estimasi berdasarkan tarif publik yang diverifikasi {date} — bukan tagihan "
+        "nyata. Tidak memperhitungkan prompt caching, diskon batch, atau tarif kontrak "
+        "khusus.",
+    },
+    "metrics.turns_unpriced": {
+        "en": "{n} turn(s) excluded — model pricing unknown.",
+        "id": "{n} turn dikeluarkan — harga model tidak diketahui.",
+    },
     # ── Router ────────────────────────────────────────────────────────────────
     "router.title": {"en": "Router Model Map", "id": "Router Model Map"},
     "router.subtitle": {

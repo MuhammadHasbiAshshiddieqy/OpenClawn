@@ -534,6 +534,22 @@ Runtime Evaluation Engine (§ Prioritas 2 TODO.md): agregasi per **role/agent** 
 **`set_human_feedback(event_id, rating) → bool`** *(async)*  
 Simpan rating eksplisit 1-5 user untuk satu turn ke `routing_events.human_feedback` — sinyal **eksplisit**, beda dari `had_correction` (disimpulkan implisit dari kata di pesan berikutnya via `check_correction`). Return `False` (tanpa menulis) bila `rating` di luar 1-5 atau `event_id` tidak ditemukan (`cursor.rowcount == 0`) — caller (`POST /feedback/{event_id}`, `docs/web.md`) yang menerjemahkan ini jadi HTTP 400/404.
 
+**`cost_savings_report() → dict`** *(async)*  
+Estimasi penghematan biaya dari hybrid routing (§ Prioritas 9.4). **TIDAK memakai kolom `routing_events.cost_usd`** — kolom itu SELALU `0.0` untuk setiap baris, karena `SmartRouter.MODELS` dan `RouterConfigStore.get_map()` sengaja menyetel `cost_per_1k=0.0` untuk semua tier ("cost nyata tak dipetakan; jangan tebak" — keputusan yang benar untuk keputusan routing LIVE, tapi berarti tak ada data biaya nyata untuk diagregasi). Method ini menghitung ULANG dari `model_chosen` + token aktual via tarif publik `core/cost_pricing.py::estimate_cost_usd`.
+
+*Counterfactual* = biaya seandainya token yang sama diproses model tier `Complexity.CRITICAL` **default** (`SmartRouter.MODELS`, bukan peta yang mungkin di-override via `/router`) — baseline tetap, supaya angka penghematan tak bergeser di bawah kaki hanya karena operator mengubah konfigurasi model.
+
+Baris dengan `model_chosen` di luar tabel harga (`turns_unpriced`) DIKELUARKAN dari agregat, bukan dianggap gratis. Return dict: `is_estimate` (selalu `True`), `turns_counted`, `turns_unpriced`, `baseline_model`, `actual_cost_usd`, `counterfactual_cost_usd`, `estimated_savings_usd`, `estimated_savings_pct`, `pricing_verified_on`. Dipakai `/metrics` (kartu HTML) dan `GET /metrics/cost-savings` (JSON, `docs/web.md`).
+
+---
+
+## `core/cost_pricing.py` — Referensi Harga Model (§ Prioritas 9.4)
+
+Tabel harga publik untuk **estimasi retrospektif**, bukan untuk keputusan routing live (itu tetap "jangan tebak", lihat `core/router_config.py`). Setiap baris `MODEL_PRICING_USD_PER_1M` diberi sumber & tanggal verifikasi (`PRICING_VERIFIED_ON`) di komentar modul — jangan tambah model tanpa sumber terverifikasi.
+
+**`estimate_cost_usd(model, tokens_in, tokens_out) → float | None`**  
+`(tokens_in × tarif_input + tokens_out × tarif_output) / 1_000_000`. Return `None` bila `model` tak ada di tabel — caller **wajib** mengeluarkan baris ini dari agregat, bukan memperlakukan `None` sebagai `0` (biaya tak diketahui ≠ biaya nol). Tidak memperhitungkan prompt caching, batch discount, atau tarif kontrak kustom — hasil selalu estimasi, bukan tagihan nyata.
+
 ---
 
 ## `core/crystallizer.py` — Inovasi 3

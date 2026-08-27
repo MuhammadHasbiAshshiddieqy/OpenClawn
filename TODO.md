@@ -763,7 +763,47 @@ sudah ada — satu titik pemetaan nama field, sehingga saat konvensi stabil
 ulang status "Stable" sebelum investasi lebih besar. Dicatat di sini
 justru supaya **tidak** dikerjakan prematur karena terdengar modern.
 
-### 9.4 Dashboard penghematan biaya dari hybrid routing — effort terendah
+### 9.4 Dashboard penghematan biaya dari hybrid routing — ✅ SELESAI (2026-08-03)
+
+> **Temuan yang mengubah rencana saat dikerjakan:** premis "semua data mentah
+> sudah tersimpan (`cost_usd`)" di bawah ini **TERNYATA SALAH**. `SmartRouter.MODELS`
+> dan `RouterConfigStore.get_map()` menyetel `cost_per_1k=0.0` untuk SEMUA
+> tier secara sengaja ("cost nyata tak dipetakan; jangan tebak" — untuk
+> keputusan routing live) — akibatnya `routing_events.cost_usd` SELALU 0.0,
+> bukan cuma kadang. Kalau dikerjakan persis sesuai rencana awal (agregasi
+> `cost_usd`), hasilnya "$0 hemat dari $0" — fitur kosong yang terlihat jalan.
+>
+> **Solusi:** `core/cost_pricing.py` (baru) — tabel harga publik
+> bertanggal-verifikasi (Ollama gratis, Gemini Flash/Pro, Claude Haiku/Sonnet
+> — diverifikasi via web search, sumber dicatat di modul), dipakai untuk
+> menghitung ULANG biaya dari `model_chosen`+token, BUKAN membaca `cost_usd`.
+> `estimate_cost_usd()` mengembalikan `None` (bukan `0.0`) untuk model tak
+> dikenal — prinsip "jangan tebak" yang sama, diterapkan ke pelaporan
+> retrospektif alih-alih keputusan live.
+>
+> **Hasil:** `RoutingAuditor.cost_savings_report()`, `GET /metrics/cost-savings`
+> (JSON), kartu ringkasan di `/metrics` (HTML) — 3 angka (estimasi hemat,
+> biaya aktual, biaya counterfactual "jika semua ke `gemini-2.5-pro`") + label
+> `is_estimate: true` SELALU ditampilkan + disclaimer eksplisit (tak
+> memperhitungkan prompt caching/batch discount/kontrak kustom). Titik desain
+> di bawah ("apakah counterfactual ditampilkan sebagai estimasi eksplisit")
+> dijawab: YA, selalu, tanpa kecuali — pola sama batas-jaminan hash chain di
+> §9.1: jangan klaim lebih dari yang bisa dibuktikan.
+>
+> Diverifikasi via Docker `python:3.12-slim` + `uv sync --frozen`: **881
+> passed** (+18 dari 863), ruff check/format bersih, `uv.lock` tak tersentuh
+> (tanpa dependency baru). Verifikasi manual: seed 2 routing_events (1
+> `gemini-2.5-pro` mahal, 1 `gemma4:e4b` gratis) → `/metrics/cost-savings`
+> mengembalikan $7.5 aktual / $21.25 counterfactual / $13.75 hemat (64.7%) —
+> dihitung ulang manual, cocok persis. Render HTML `/metrics` dikonfirmasi
+> menampilkan kartu + disclaimer dengan benar.
+>
+> **Follow-up yang sengaja belum dikerjakan:** tabel harga perlu ditinjau
+> ulang berkala (harga API cloud berubah) — `PRICING_VERIFIED_ON` di modul
+> jadi penanda kapan terakhir dicek, tak ada mekanisme otomatis untuk
+> memperbarui atau memperingatkan staleness.
+
+**Konteks & justifikasi asli (dipertahankan):**
 
 **Validasi pasar:** model routing memangkas biaya LLM nyata **40-85% tanpa
 penurunan kualitas terlihat**; riset ICLR 2025 mencapai penghematan 85% pada

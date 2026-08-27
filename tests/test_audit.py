@@ -412,3 +412,115 @@ async def test_all_correction_signals(auditor, db):
 
         row = await db.fetchone("SELECT had_correction FROM routing_events WHERE id=?", (eid,))
         assert row["had_correction"] == 1, f"Sinyal '{signal}' tidak terdeteksi!"
+
+
+# ── cost_savings_report (§ Prioritas 9.4) ────────────────────────────────────
+
+
+def _route_with_model(model: str, provider: str) -> RouteDecision:
+    r = _fake_route()
+    return RouteDecision(
+        model=model,
+        provider=provider,
+        complexity=r.complexity,
+        complexity_score=r.complexity_score,
+        reason=r.reason,
+        cost_per_1k=0.0,
+        dimensions=r.dimensions,
+        soul_upgrade_hit=r.soul_upgrade_hit,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cost_savings_report_empty(auditor):
+    report = await auditor.cost_savings_report()
+    assert report["turns_counted"] == 0
+    assert report["turns_unpriced"] == 0
+    assert report["actual_cost_usd"] == 0
+    assert report["estimated_savings_usd"] == 0
+    assert report["is_estimate"] is True
+
+
+@pytest.mark.asyncio
+async def test_cost_savings_report_does_not_use_stored_cost_usd_column(auditor):
+    """cost_usd tersimpan SELALU 0.0 (cost_per_1k router selalu 0.0) — report
+    HARUS menghitung ulang dari model_chosen+token, bukan membaca kolom itu.
+    Test ini akan gagal kalau seseorang 'menyederhanakan' report jadi
+    SUM(cost_usd) di masa depan."""
+    route = _route_with_model("gemini-2.5-pro", "gemini")
+    eid = await auditor.log_decision("s_cost1", "dev", "critical task", route)
+    # cost_usd yang tersimpan = cost_per_1k(0.0) * tokens — selalu 0, apa pun tokennya.
+    await auditor.finalize(eid, _FakeTurn(tokens_in=1_000_000, tokens_out=1_000_000, cost_usd=0.0))
+
+    report = await auditor.cost_savings_report()
+    # Kalau report salah membaca cost_usd, actual_cost_usd akan 0 di sini juga.
+    assert report["actual_cost_usd"] == 11.25  # (1.25 + 10.00) per gemini-2.5-pro
+
+
+@pytest.mark.asyncio
+async def test_cost_savings_report_shows_savings_for_cheaper_tier(auditor):
+    """Query yang dilayani model lokal gratis dibanding baseline CRITICAL
+    (gemini-2.5-pro) harus menghasilkan penghematan > 0."""
+    route = _route_with_model("gemma4:e4b", "ollama")
+    eid = await auditor.log_decision("s_cost2", "pm", "hi", route)
+    await auditor.finalize(eid, _FakeTurn(tokens_in=1_000_000, tokens_out=1_000_000))
+
+    report = await auditor.cost_savings_report()
+    assert report["turns_counted"] == 1
+    assert report["actual_cost_usd"] == 0.0
+    assert report["baseline_model"] == "gemini-2.5-pro"
+    assert report["counterfactual_cost_usd"] == 11.25
+    assert report["estimated_savings_usd"] == 11.25
+    assert report["estimated_savings_pct"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_cost_savings_report_excludes_unpriced_models():
+    """Model di luar tabel harga dikeluarkan dari agregat (turns_unpriced),
+    BUKAN dihitung seolah gratis — konsisten prinsip 'jangan tebak'."""
+    db = DatabaseManager(AppConfig(db_path=":memory:"))
+    with open("migrations/001_initial.sql") as f:
+        sql = f.read()
+    conn = await db.conn()
+    await conn.executescript(sql)
+    await conn.commit()
+    auditor = RoutingAuditor(db=db)
+
+    route = _route_with_model("some-brand-new-model-not-priced", "gemini")
+    eid = await auditor.log_decision("s_cost3", "dev", "q", route)
+    await auditor.finalize(eid, _FakeTurn(tokens_in=100, tokens_out=100))
+
+    report = await auditor.cost_savings_report()
+    assert report["turns_counted"] == 0
+    assert report["turns_unpriced"] == 1
+    assert report["actual_cost_usd"] == 0.0
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_cost_savings_report_ignores_unfinished_turns(auditor):
+    """Turn yang belum di-finalize (tokens masih NULL) tak boleh ikut
+    dihitung — bukan diperlakukan sebagai 0 token."""
+    route = _fake_route()
+    await auditor.log_decision("s_cost4", "pm", "q", route)  # tanpa finalize
+
+    report = await auditor.cost_savings_report()
+    assert report["turns_counted"] == 0
+    assert report["turns_unpriced"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cost_savings_report_aggregates_across_multiple_turns(auditor):
+    route_free = _route_with_model("gemma4:e4b", "ollama")
+    route_paid = _route_with_model("gemini-2.5-flash", "gemini")
+
+    eid1 = await auditor.log_decision("s_cost5", "pm", "q1", route_free)
+    await auditor.finalize(eid1, _FakeTurn(tokens_in=1_000_000, tokens_out=0))
+    eid2 = await auditor.log_decision("s_cost6", "dev", "q2", route_paid)
+    await auditor.finalize(eid2, _FakeTurn(tokens_in=1_000_000, tokens_out=0))
+
+    report = await auditor.cost_savings_report()
+    assert report["turns_counted"] == 2
+    assert report["actual_cost_usd"] == 0.150  # hanya turn kedua yang berbayar
+    # Baseline: kedua turn dihitung SEOLAH gemini-2.5-pro (1.25/1M input)
+    assert report["counterfactual_cost_usd"] == 2.50

@@ -1168,6 +1168,9 @@ async def metrics(request: Request):
     tool_stats = await ToolAudit(db).summary()
     # I4: tampilkan apakah auto-apply aktif (opt-in via config).
     calibration["auto_apply"] = CONFIG.calibration_auto_apply
+    # § Prioritas 9.4: estimasi penghematan hybrid routing (bukan cost_usd
+    # tersimpan — kolom itu selalu 0.0, lihat docstring cost_savings_report).
+    cost_savings = await auditor.cost_savings_report()
     return templates.TemplateResponse(
         request,
         "metrics.html",
@@ -1176,6 +1179,7 @@ async def metrics(request: Request):
             "role_report": role_report,
             "calibration": calibration,
             "tool_stats": tool_stats,
+            "cost_savings": cost_savings,
             **await _ui_ctx("metrics", request),
         },
     )
@@ -1191,6 +1195,18 @@ async def metrics_roles_json():
     (NULL bila belum ada rating sama sekali untuk role itu).
     """
     return {"roles": await RoutingAuditor(db).role_report()}
+
+
+@app.get("/metrics/cost-savings")
+async def metrics_cost_savings_json():
+    """Estimasi penghematan biaya dari hybrid routing (TODO.md § Prioritas 9.4),
+    varian JSON murni dari kartu di `/metrics` — untuk integrasi eksternal
+    (laporan ROI, dashboard finance) tanpa parsing HTML.
+
+    `is_estimate` SELALU `True` — dihitung dari tarif publik (`core/cost_pricing.py`),
+    BUKAN tagihan nyata. Lihat `RoutingAuditor.cost_savings_report` untuk kenapa
+    kolom `cost_usd` yang tersimpan tidak dipakai (selalu 0.0)."""
+    return await RoutingAuditor(db).cost_savings_report()
 
 
 @app.get("/metrics/prometheus")

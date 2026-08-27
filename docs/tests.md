@@ -435,6 +435,40 @@ Test untuk `core/audit.py`.
 | `test_set_human_feedback_rejects_out_of_range` | Rating di luar 1-5 → `False`, tidak menulis apa pun |
 | `test_set_human_feedback_unknown_event_returns_false` | `event_id` tak ditemukan → `False` |
 | `test_all_correction_signals` | Semua `CORRECTION_SIGNALS` terdeteksi satu per satu |
+| `test_cost_savings_report_empty` | Tanpa data → semua angka 0, `is_estimate=True`, tidak crash |
+| `test_cost_savings_report_does_not_use_stored_cost_usd_column` | **Regresi kunci:** report HARUS hitung ulang dari `model_chosen`+token, BUKAN baca kolom `cost_usd` (yang selalu `0.0`) |
+| `test_cost_savings_report_shows_savings_for_cheaper_tier` | Model lokal gratis vs baseline `gemini-2.5-pro` → penghematan 100% |
+| `test_cost_savings_report_excludes_unpriced_models` | Model di luar tabel harga → `turns_unpriced`, BUKAN dianggap gratis |
+| `test_cost_savings_report_ignores_unfinished_turns` | Turn belum `finalize()` (token `NULL`) → tak ikut dihitung |
+| `test_cost_savings_report_aggregates_across_multiple_turns` | Agregasi benar lintas turn dengan model campuran (gratis + berbayar) |
+
+---
+
+### `tests/test_cost_pricing.py`
+
+Test untuk `core/cost_pricing.py` — estimasi biaya retrospektif (§ Prioritas 9.4).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_ollama_models_are_free` | Model self-hosted → tarif `0.0` |
+| `test_gemini_flash_pricing` / `test_gemini_pro_pricing` / `test_claude_pricing` | Tarif publik sesuai sumber di modul |
+| `test_zero_tokens_is_zero_cost` | 0 token → biaya `0.0` |
+| `test_unknown_model_returns_none_not_zero` | Model tak dikenal → `None`, BUKAN `0.0` (biaya tak diketahui ≠ gratis) |
+| `test_partial_token_ratio_scales_correctly` | Input & output dikalikan tarif MASING-MASING, bukan tarif rata-rata |
+| `test_every_pricing_entry_is_non_negative_tuple_of_two` | Sanity check struktural tabel harga — cegah typo lolos tanpa ketahuan |
+
+---
+
+### `tests/test_cost_savings_web.py`
+
+Test untuk `GET /metrics/cost-savings` dan kartu penghematan di `GET /metrics` (§ Prioritas 9.4).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_cost_savings_json_empty_initially` | Endpoint JSON tanpa data → nol, tidak error |
+| `test_cost_savings_json_reflects_logged_events` | Data routing_events tercermin di response |
+| `test_metrics_page_renders_cost_savings_card` | `/metrics` HTML render tanpa error dengan data (regresi Jinja `Undefined`/`KeyError`) |
+| `test_metrics_page_renders_with_no_data` | `/metrics` HTML render tanpa error TANPA data sama sekali |
 
 ---
 
