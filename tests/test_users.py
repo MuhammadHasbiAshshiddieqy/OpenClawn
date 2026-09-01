@@ -65,6 +65,26 @@ async def test_second_user_defaults_to_member(db):
 
 
 @pytest.mark.asyncio
+async def test_concurrent_first_logins_bootstrap_only_one_admin(db):
+    """Audit 2026-09-01: SEBELUMNYA `upsert_on_login` menghitung `is_first_user`
+    via `SELECT COUNT(*)` TERPISAH dari `INSERT` — jeda `await` di antara
+    keduanya membuat dua login pertama yang BERSAMAAN (dua subject BEDA, tenant
+    kosong) sama-sama membaca COUNT=0 sebelum salah satunya sungguh ter-INSERT,
+    hingga KEDUANYA jadi admin. `access_role` sekarang dihitung via subquery DI
+    DALAM satu statement INSERT yang sama — atomik, tak ada jeda `await` di
+    tengahnya untuk request lain menyisip."""
+    import asyncio
+
+    store = UserStore(db)
+    results = await asyncio.gather(
+        store.upsert_on_login("user-race-a"),
+        store.upsert_on_login("user-race-b"),
+    )
+    roles = sorted(u.access_role for u in results)
+    assert roles == ["admin", "member"]
+
+
+@pytest.mark.asyncio
 async def test_upsert_idempotent_does_not_reset_role(db):
     """Login berulang tak menimpa role yang sudah di-set admin secara eksplisit."""
     store = UserStore(db)

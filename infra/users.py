@@ -76,7 +76,19 @@ class UserStore:
         user baru → INSERT (bootstrap admin bila tenant ini belum punya user
         sama sekali, else default 'member'); user existing → UPDATE
         email/name/last_login_at, `access_role` TAK PERNAH ditimpa di sini
-        (perubahan role hanya lewat `set_access_role`, admin action eksplisit)."""
+        (perubahan role hanya lewat `set_access_role`, admin action eksplisit).
+
+        Audit 2026-09-01: `access_role` bootstrap dihitung via subquery
+        korelasi DI DALAM satu statement INSERT yang sama, BUKAN
+        `SELECT COUNT(*)` terpisah lalu `INSERT` — sebelumnya ada jeda
+        `await` di antara keduanya tempat scheduler asyncio bisa menyisipkan
+        request LAIN yang membaca `COUNT(*)` yang SAMA (masih 0) sebelum baris
+        pertama sungguh ter-INSERT. Diverifikasi lewat reproduksi terisolasi:
+        dua `upsert_on_login()` untuk subject BEDA dijalankan bersamaan
+        (`asyncio.gather`) pada tenant kosong → SEBELUM perbaikan, KEDUANYA
+        jadi `admin` (harusnya cuma satu). Subquery di dalam INSERT dievaluasi
+        atomik dalam satu lock tulis SQLite — tak ada jeda `await` di
+        tengahnya untuk request lain menyisip."""
         existing = await self.get_by_subject(subject)
         if existing:
             await self.db.execute(
@@ -85,16 +97,15 @@ class UserStore:
             )
             return await self.get_by_id(existing.id)
 
-        is_first_user = (
-            await self.db.fetchone(
-                "SELECT COUNT(*) AS n FROM users WHERE tenant_id=?", (self.tenant_id,)
-            )
-        )["n"] == 0
-        bootstrap_role = "admin" if is_first_user else "member"
         cursor = await self.db.execute(
             """INSERT INTO users (tenant_id, subject, email, name, access_role, last_login_at)
-               VALUES (?,?,?,?,?, CURRENT_TIMESTAMP)""",
-            (self.tenant_id, subject, email, name, bootstrap_role),
+               VALUES (
+                   ?, ?, ?, ?,
+                   CASE WHEN (SELECT COUNT(*) FROM users WHERE tenant_id=?) = 0
+                        THEN 'admin' ELSE 'member' END,
+                   CURRENT_TIMESTAMP
+               )""",
+            (self.tenant_id, subject, email, name, self.tenant_id),
         )
         return await self.get_by_id(cursor.lastrowid)
 

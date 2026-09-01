@@ -1045,6 +1045,7 @@ Test untuk `infra/users.py` (unit, tanpa HTTP) — `UserStore` + `role_at_least`
 | `test_role_at_least_unknown_role_fails_safe` | Role tak dikenal → `False` (paling ketat) |
 | `test_first_user_bootstrapped_as_admin` | User OIDC pertama per tenant → `access_role='admin'` |
 | `test_second_user_defaults_to_member` | User kedua → default `'member'` |
+| `test_concurrent_first_logins_bootstrap_only_one_admin` | **[Audit 2026-09-01]** Dua login pertama BERSAMAAN (`asyncio.gather`, subject beda, tenant kosong) → HANYA satu jadi admin — sebelumnya race `SELECT COUNT` lalu `INSERT` terpisah membuat KEDUANYA jadi admin |
 | `test_upsert_idempotent_does_not_reset_role` | Login berulang TAK menimpa role yang sudah diubah admin, tapi profil (email/name) di-refresh |
 | `test_shared_secret_subject_constant_used_consistently` | Shared-secret login selalu `SHARED_SECRET_SUBJECT`, bootstrap admin |
 | `test_set_access_role_updates_role` / `test_set_access_role_rejects_unknown_role` / `test_set_access_role_unknown_user_returns_false` | Ubah role: sukses, role tak valid ditolak, user tak ada ditolak — semua fail-safe (tak crash) |

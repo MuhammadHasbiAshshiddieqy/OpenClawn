@@ -534,9 +534,22 @@ True bila `access_role` setara/lebih tinggi dari `minimum` dalam hierarki
 **`upsert_on_login(subject, email=None, name=None) → User`** *(async)*  
 Dipanggil TIAP login sukses (shared-secret ATAU OIDC callback, `web/main.py`).
 User baru → INSERT; bootstrap `admin` bila tenant ini belum punya user SAMA
-SEKALI (dicek via `COUNT(*)`), else default `member`. User existing → UPDATE
-`email`/`name`/`last_login_at` — **`access_role` TAK PERNAH ditimpa di sini**,
-perubahan role hanya lewat `set_access_role` (admin action eksplisit).
+SEKALI, else default `member`. User existing → UPDATE `email`/`name`/
+`last_login_at` — **`access_role` TAK PERNAH ditimpa di sini**, perubahan role
+hanya lewat `set_access_role` (admin action eksplisit).
+
+**[Audit 2026-09-01] Bootstrap dihitung via subquery korelasi DI DALAM satu
+statement INSERT** (`CASE WHEN (SELECT COUNT(*) ...) = 0 THEN 'admin' ELSE
+'member' END`), BUKAN `SELECT COUNT(*)` terpisah lalu `INSERT` seperti
+sebelumnya. Versi lama punya jeda `await` di antara baca-hitung dan tulis —
+scheduler asyncio bisa menyisipkan request LAIN yang membaca `COUNT(*)` yang
+SAMA (masih 0) sebelum baris pertama sungguh ter-INSERT. Diverifikasi lewat
+reproduksi terisolasi: dua `upsert_on_login()` untuk subject BEDA dijalankan
+bersamaan (`asyncio.gather`) pada tenant kosong → SEBELUM perbaikan, KEDUANYA
+jadi `admin` (harusnya cuma satu — user OIDC pertama YANG login duluan). Satu
+statement INSERT dieksekusi atomik oleh SQLite (lock tulis dipegang untuk
+seluruh statement termasuk subquery-nya), tak ada jeda `await` Python di
+tengahnya untuk request lain menyisip.
 
 **`set_access_role(user_id, access_role) → bool`** *(async)*  
 Admin action (`POST /admin/users/set-role`, `web/main.py`). Role tak dikenal

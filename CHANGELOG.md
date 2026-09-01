@@ -7,6 +7,20 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Fixed — Audit lapisan infra/: race condition pada bootstrap admin pertama (TODO.md § Prioritas 11)
+
+`UserStore.upsert_on_login` menghitung "apakah tenant ini user pertama"
+lewat `SELECT COUNT(*)` TERPISAH dari `INSERT` — jeda `await` di antaranya
+memungkinkan dua login OIDC pertama yang BERSAMAAN (persis kondisi setup
+awal instance baru) sama-sama membaca `COUNT=0` sebelum salah satunya
+sungguh ter-INSERT, membuat KEDUANYA jadi admin. Reproduksi terisolasi
+(`asyncio.gather` dua subject beda) mengonfirmasi bug ini sebelum diperbaiki.
+
+Diperbaiki: `access_role` sekarang dihitung via subquery korelasi DI DALAM
+satu statement `INSERT` — atomik terhadap SQLite writer lock, tak ada jeda
+untuk request lain menyisip. 1 test regresi baru. **999 passed** (+1), ruff
+bersih, tanpa dependency baru.
+
 ### Fixed — Audit lapisan security/: rate-limit bypass, IDOR di /answer, bypass skill scanner (TODO.md § Prioritas 10)
 
 Babak audit baru atas internal modul `security/` (beda dari audit endpoint

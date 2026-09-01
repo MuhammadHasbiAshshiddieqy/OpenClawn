@@ -1182,6 +1182,52 @@ kebetulan lolos.
 
 ---
 
+## 11. Audit lapisan `infra/` — internal modul (2026-09-01)
+
+Babak audit lanjutan (setelah §10 menyelesaikan `security/`), atas
+permintaan eksplisit owner. Fokus: `infra/users.py`, `infra/config.py`,
+`infra/chat_sessions.py`, `infra/settings.py`, `infra/manifest.py`,
+`infra/backup.py`, `infra/env.py` — fondasi yang dipakai semua modul lain,
+belum pernah diaudit langsung sesi-sesi sebelumnya. Metodologi sama: baca
+kode + reproduksi terisolasi sebelum menindaklanjuti.
+
+**Diperbaiki:**
+
+1. **`UserStore.upsert_on_login` — race condition TOCTOU pada bootstrap
+   admin pertama.** Versi lama: `SELECT COUNT(*)` (cek "apakah tenant ini
+   sudah punya user") lalu, TERPISAH, `INSERT` dengan role yang sudah
+   diputuskan di sisi Python — ada jeda `await` di antara keduanya tempat
+   scheduler asyncio bisa menyisipkan request LAIN. Diverifikasi lewat
+   reproduksi terisolasi: dua `upsert_on_login()` untuk subject BEDA
+   dijalankan bersamaan (`asyncio.gather`) pada tenant kosong (persis
+   kondisi dua user OIDC berbeda login hampir bersamaan saat instance BARU
+   pertama kali di-setup) → **KEDUANYA jadi admin**, bukan cuma satu.
+   Diperbaiki: `access_role` dihitung via subquery korelasi DI DALAM satu
+   statement `INSERT` yang sama (`CASE WHEN (SELECT COUNT(*) ...) = 0 THEN
+   'admin' ELSE 'member' END`) — atomik terhadap SQLite writer lock, tak ada
+   jeda `await` Python di tengahnya untuk request lain menyisip.
+
+**Sudah solid (dibaca, tak perlu tindakan):** `infra/config.py` (deklaratif,
+tak ada logika runtime kompleks di luar `from_env()` yang sudah benar),
+`infra/chat_sessions.py` (isolasi tenant/owner konsisten dengan pola yang
+sudah diverifikasi §6), `infra/settings.py` (fail-safe ke default untuk
+nilai tak dikenal, konsisten di semua getter), `infra/manifest.py`
+(`role`/`roles_dir` dari `clawn.yaml` bisa secara teoretis path-traversal,
+TAPI hanya dipanggil dari `scripts/apply_manifest.py` — CLI lokal yang
+dijalankan operator sendiri di mesinnya sendiri, bukan endpoint remote;
+tak melintasi batas privilese apa pun), `infra/backup.py` (blocking
+`sqlite3` sinkron sengaja — hanya dipanggil dari `scripts/backup_db.py`,
+CLI standalone di luar event loop async, bukan dari `web/main.py`),
+`infra/env.py` (parser `.env` minimal, tanpa eksekusi shell/injeksi).
+
+Diverifikasi via `uv run --python 3.12`: **999 passed** (+1 test regresi
+baru: `tests/test_users.py::test_concurrent_first_logins_bootstrap_only_one_admin`),
+ruff check/format bersih, tanpa dependency baru. Bug diverifikasi GAGAL
+lebih dulu terhadap kode lama (`asyncio.gather` dua login pertama →
+`['admin', 'admin']`) sebelum diperbaiki (→ `['admin', 'member']`).
+
+---
+
 ## Sumber riset tren (dicari 2026-07-27)
 
 - [The best AI agent frameworks in 2026](https://www.langchain.com/resources/ai-agent-frameworks)
