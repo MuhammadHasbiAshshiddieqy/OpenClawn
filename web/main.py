@@ -988,6 +988,127 @@ async def get_approval_status(approval_id: str):
     }
 
 
+@app.get("/tasks/{task_id}")
+async def get_task_graph(request: Request, task_id: str):
+    """Status satu DAG subtask + tiap node-nya (§ Task Graph, TODO.md § Prioritas
+    12 Fase 4 — observability/replay, dibangun belakangan setelah Fase 1+2).
+
+    Kepemilikan dicek sama pola `GET /chat-sessions/{id}/turns` — `task_graphs.
+    owner_user_id` belum digerbangi endpoint apa pun sebelum ini (dicatat sengaja
+    saat Fase 1+2 dibangun, menunggu endpoint ini). 404 bila task_id tak dikenal.
+    """
+    task_row = await db.fetchone("SELECT * FROM task_graphs WHERE id=?", (task_id,))
+    if task_row is None:
+        raise StarletteHTTPException(status_code=404, detail="task not found")
+    if not _can_access_owned_resource(request, task_row["owner_user_id"]):
+        raise StarletteHTTPException(status_code=403, detail="forbidden")
+
+    node_rows = await db.fetchall(
+        """SELECT node_id, role, prompt, depends_on_json, status, attempt_count,
+                  result_summary, error, session_id, created_at, updated_at
+           FROM task_nodes WHERE task_id=? ORDER BY id""",
+        (task_id,),
+    )
+    return {
+        "task_id": task_row["id"],
+        "goal": task_row["goal"],
+        "session_id": task_row["session_id"],
+        "status": task_row["status"],
+        "created_at": task_row["created_at"],
+        "finished_at": task_row["finished_at"],
+        "nodes": [
+            {
+                "node_id": r["node_id"],
+                "role": r["role"],
+                "prompt": r["prompt"],
+                "depends_on": json.loads(r["depends_on_json"]),
+                "status": r["status"],
+                "attempt_count": r["attempt_count"],
+                "result_summary": r["result_summary"],
+                "error": r["error"],
+                "session_id": r["session_id"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+            }
+            for r in node_rows
+        ],
+    }
+
+
+@app.get("/tasks/{task_id}/timeline")
+async def get_task_graph_timeline(request: Request, task_id: str):
+    """Gabungan `routing_events`+`tool_invocations`+`approval_log` untuk SATU
+    task_id, diurut waktu — "replay" satu DAG lintas node (§ Task Graph Fase 4).
+    Pola sama `GET /evidence/{event_id}`: flat, query-able JSON, bukan raw dump.
+
+    Kepemilikan dicek via `task_graphs` (bukan tiap tabel sumber satu-satu —
+    ketiganya sudah pasti milik task ini, dijamin oleh `task_id` yang SAMA
+    dipakai `core/task_executor.py` menulis semuanya).
+    """
+    task_row = await db.fetchone("SELECT owner_user_id FROM task_graphs WHERE id=?", (task_id,))
+    if task_row is None:
+        raise StarletteHTTPException(status_code=404, detail="task not found")
+    if not _can_access_owned_resource(request, task_row["owner_user_id"]):
+        raise StarletteHTTPException(status_code=403, detail="forbidden")
+
+    routing_rows = await db.fetchall(
+        """SELECT id, node_id, role, model_chosen, provider, complexity_label,
+                  cost_usd, latency_ms, created_at
+           FROM routing_events WHERE task_id=?""",
+        (task_id,),
+    )
+    tool_rows = await db.fetchall(
+        """SELECT id, node_id, tool_name, outcome, latency_ms, created_at
+           FROM tool_invocations WHERE task_id=?""",
+        (task_id,),
+    )
+    approval_rows = await db.fetchall(
+        """SELECT id, node_id, tool_name, decision, created_at
+           FROM approval_log WHERE task_id=?""",
+        (task_id,),
+    )
+
+    timeline = (
+        [
+            {
+                "kind": "routing",
+                "node_id": r["node_id"],
+                "created_at": r["created_at"],
+                "role": r["role"],
+                "model": r["model_chosen"],
+                "provider": r["provider"],
+                "complexity": r["complexity_label"],
+                "cost_usd": r["cost_usd"],
+                "latency_ms": r["latency_ms"],
+            }
+            for r in routing_rows
+        ]
+        + [
+            {
+                "kind": "tool",
+                "node_id": r["node_id"],
+                "created_at": r["created_at"],
+                "tool_name": r["tool_name"],
+                "outcome": r["outcome"],
+                "latency_ms": r["latency_ms"],
+            }
+            for r in tool_rows
+        ]
+        + [
+            {
+                "kind": "approval",
+                "node_id": r["node_id"],
+                "created_at": r["created_at"],
+                "tool_name": r["tool_name"],
+                "decision": r["decision"],
+            }
+            for r in approval_rows
+        ]
+    )
+    timeline.sort(key=lambda e: e["created_at"])
+    return {"task_id": task_id, "timeline": timeline}
+
+
 @app.post("/converse/stream")
 async def converse_stream(request: Request):
     """Multi-agent conversation: beberapa role saling mengobrol, di-stream per giliran."""

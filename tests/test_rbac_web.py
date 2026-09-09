@@ -736,6 +736,91 @@ def test_member_can_still_answer_own_question(client_oidc):
     assert pending.future.result() == "jawaban bob sendiri"
 
 
+# ── § Task Graph, TODO.md Prioritas 12 Fase 4: GET /tasks/{id} + /timeline —
+# kepemilikan digerbangi sejak endpoint pertama kali dibuat (bukan gap yang
+# ditambal belakangan seperti kasus lain di atas), pola sama chat-sessions. ──
+
+
+async def _seed_task_graph(db, task_id: str, owner_user_id: str | None):
+    await db.execute(
+        """INSERT INTO task_graphs (id, goal, owner_user_id, session_id, status)
+           VALUES (?, 'goal', ?, 'parent-s', 'completed')""",
+        (task_id, owner_user_id),
+    )
+    await db.execute(
+        """INSERT INTO task_nodes
+           (task_id, node_id, role, prompt, depends_on_json, status, session_id)
+           VALUES (?, 'A', 'dev', 'x', '[]', 'completed', ?)""",
+        (task_id, f"{task_id}:A"),
+    )
+
+
+def test_member_forbidden_from_reading_other_users_task(client_oidc):
+    import asyncio
+
+    alice_id = asyncio.run(_bootstrap_admin_and_get_id())
+
+    import web.main as web_main
+
+    asyncio.run(_seed_task_graph(web_main.db, "task-alice", owner_user_id=str(alice_id)))
+
+    _login_via_oidc(client_oidc, "user-bob")
+    resp = client_oidc.get("/tasks/task-alice")
+    assert resp.status_code == 403
+
+
+def test_member_forbidden_from_reading_other_users_task_timeline(client_oidc):
+    import asyncio
+
+    alice_id = asyncio.run(_bootstrap_admin_and_get_id())
+
+    import web.main as web_main
+
+    asyncio.run(_seed_task_graph(web_main.db, "task-alice2", owner_user_id=str(alice_id)))
+
+    _login_via_oidc(client_oidc, "user-bob")
+    resp = client_oidc.get("/tasks/task-alice2/timeline")
+    assert resp.status_code == 403
+
+
+def test_member_can_still_read_own_task(client_oidc):
+    import asyncio
+
+    from infra.users import UserStore
+
+    asyncio.run(_bootstrap_admin_and_get_id())
+    _login_via_oidc(client_oidc, "user-bob")
+
+    import web.main as web_main
+
+    async def _seed_bob_task():
+        bob = await UserStore(web_main.db).get_by_subject("user-bob")
+        await _seed_task_graph(web_main.db, "task-bob", owner_user_id=str(bob.id))
+
+    asyncio.run(_seed_bob_task())
+
+    resp = client_oidc.get("/tasks/task-bob")
+    assert resp.status_code == 200
+    assert resp.json()["task_id"] == "task-bob"
+
+    resp2 = client_oidc.get("/tasks/task-bob/timeline")
+    assert resp2.status_code == 200
+
+
+def test_admin_can_read_member_task(client_oidc):
+    import asyncio
+
+    asyncio.run(_bootstrap_admin_and_get_id())
+    import web.main as web_main
+
+    asyncio.run(_seed_task_graph(web_main.db, "task-999", owner_user_id="999"))
+
+    # Login sebagai alice (admin) — subject sama dengan yang dibootstrap.
+    _login_via_oidc(client_oidc, "user-alice-admin")
+    resp = client_oidc.get("/tasks/task-999")
+    assert resp.status_code == 200
+
+
 # ── Audit produksi 2026-07-30: GET /workspace/download tanpa cek kepemilikan
 # saat session_id diberikan — user manapun bisa unduh file sesi orang lain. ──
 

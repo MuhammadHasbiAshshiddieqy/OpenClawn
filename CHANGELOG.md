@@ -7,6 +7,24 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Added — Task Graph Fase 4: observability/replay (TODO.md § Prioritas 12)
+
+Susulan Fase 1+2 (DAG + concurrency) — dipilih karena eksplisit rendah-risiko
+(murni baca data yang sudah ada, tak menyentuh sandbox/keamanan). Fase 3
+(sandbox lifecycle) tetap ditunda, butuh persetujuan trade-off keamanan
+terpisah sebelum kode ditulis.
+
+- `GET /tasks/{task_id}` — baris `task_graphs` + seluruh `task_nodes`-nya.
+- `GET /tasks/{task_id}/timeline` — gabungan `routing_events`+
+  `tool_invocations`+`approval_log` (filter `task_id`, diurut waktu), pola
+  sama `GET /evidence/{event_id}`.
+- Kepemilikan (`task_graphs.owner_user_id`) digerbangi SEJAK endpoint ini
+  dibuat — pola sama `GET /chat-sessions/{id}/turns`.
+- Tak ada migrasi/kolom baru — semua sudah tersedia dari Fase 1+2.
+
+9 test baru (`tests/test_task_graph_web.py`, `tests/test_rbac_web.py`).
+**1047 passed** (+9), ruff bersih, tanpa dependency baru.
+
 ### Added — Task Graph: DAG subtask dengan eksekusi paralel (TODO.md § Prioritas 12)
 
 Dikerjakan atas arahan eksplisit owner setelah membaca proposal eksternal

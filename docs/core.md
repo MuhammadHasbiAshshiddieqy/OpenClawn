@@ -582,17 +582,27 @@ wajib, `None` = turn chat biasa) lewat: `AgentConfig.task_id`/`.node_id` →
 dikunci `event_id`, baris yang sama sudah membawa kolom ini dari INSERT
 `log_decision()`.
 
+### Observability/replay — `GET /tasks/{task_id}`, `/timeline` (Fase 4, selesai)
+
+**[§ Task Graph Fase 4]** Dibangun BELAKANGAN setelah Fase 1+2 (yang hanya
+punya return value tool `task_graph_submit` sebagai satu-satunya cara lihat
+hasil graph). `GET /tasks/{task_id}` (`web/main.py`) mengembalikan baris
+`task_graphs` + seluruh `task_nodes`-nya; `GET /tasks/{task_id}/timeline`
+menggabungkan `routing_events`+`tool_invocations`+`approval_log` (filter
+`task_id=?`, diurut `created_at`) jadi satu daftar "replay" lintas node —
+kolom/tabel yang sudah ada dari Fase 1+2 membuat ini murah dibangun, tanpa
+migrasi baru. Kepemilikan (`task_graphs.owner_user_id`) digerbangi via
+`_can_access_owned_resource`, pola sama `GET /chat-sessions/{id}/turns` —
+lihat `docs/web.md` untuk skema response lengkap.
+
 ### Non-goal versi ini (dicatat, bukan lupa)
 
 - **Auto-decompose LLM** (goal → DAG otomatis) — v1 butuh DAG datang SUDAH
   terstruktur lewat argumen tool `nodes`.
 - **Sandbox lifecycle** (persist/pause/resume/recycle) — `tools/sandbox.py`
   TAK disentuh sama sekali di sini; setiap `docker run` tetap `--rm` ephemeral
-  seperti sebelumnya.
-- **Endpoint observability/replay** (`GET /tasks/{id}`, `/timeline`) — kolom/
-  tabel yang ditambahkan di sini membuatnya murah dibangun nanti, tapi belum
-  ada endpoint HTTP baru di versi ini. Satu-satunya cara lihat hasil graph
-  untuk sekarang: return value tool `task_graph_submit` itu sendiri.
+  seperti sebelumnya. Trade-off keamanan nyata, butuh persetujuan eksplisit
+  terpisah sebelum kode ditulis.
 - **Runtime isolasi pluggable** (gVisor/Firecracker) — tak disentuh.
 
 ---

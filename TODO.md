@@ -1308,9 +1308,8 @@ sesuatu yang sudah setengah ada.
   LOKAL di dalam `execute()`, bukan level-modul.
 
 **Non-goal eksplisit versi ini** (dicatat `docs/core.md`, bukan lupa):
-auto-decompose LLM, sandbox lifecycle (Fase 3), endpoint observability/
-replay `GET /tasks/{id}` (Fase 4), runtime isolasi pluggable gVisor/
-Firecracker (Fase 5).
+auto-decompose LLM, sandbox lifecycle (Fase 3), runtime isolasi pluggable
+gVisor/Firecracker (Fase 5).
 
 Diverifikasi via `uv run --python 3.12`: **1038 passed** (+39 test baru:
 `tests/test_task_graph.py` ×12, `tests/test_task_executor.py` ×8,
@@ -1325,6 +1324,26 @@ menimpa `node_id` duplikat diam-diam sebelum `validate()` sempat melihatnya
 `node.status` node itu sendiri) — diperbaiki jadi konsisten dengan kontrak
 nyata `ready_nodes(completed)` (mengasumsikan `completed` SELALU sinkron
 dengan `node.status`, sama seperti pemakaian nyata di `TaskGraphExecutor`).
+
+**Susulan (2026-09-09): Fase 4 (observability/replay) — ✅ SELESAI.** Dipilih
+lanjut karena EKSPLISIT rendah-risiko (murni baca data yang sudah ada dari
+Fase 1+2, tak menyentuh model sandbox/keamanan sama sekali) — beda dari Fase
+3 yang butuh persetujuan trade-off keamanan terpisah sebelum kode ditulis
+(TETAP ditunda). `GET /tasks/{task_id}` (`web/main.py`) mengembalikan baris
+`task_graphs` + seluruh `task_nodes`-nya; `GET /tasks/{task_id}/timeline`
+menggabungkan `routing_events`+`tool_invocations`+`approval_log` (filter
+`task_id`, diurut `created_at`) jadi satu daftar "replay" lintas node — pola
+sama `GET /evidence/{event_id}` yang sudah ada. Kepemilikan (`task_graphs.
+owner_user_id`) digerbangi SEJAK endpoint ini pertama kali dibuat (bukan gap
+yang ditambal belakangan seperti beberapa kasus lain di riwayat proyek ini) —
+pola sama `GET /chat-sessions/{id}/turns` (`_can_access_owned_resource`).
+Tak ada migrasi/kolom baru — semua yang dibutuhkan sudah ada dari Fase 1+2.
+
+Diverifikasi via `uv run --python 3.12`: **1047 passed** (+9: 5 di
+`tests/test_task_graph_web.py` untuk bentuk response/join timeline, 4 di
+`tests/test_rbac_web.py` untuk isolasi kepemilikan lintas-user — member
+ditolak baca task/timeline user lain, member tetap baca task sendiri, admin
+tetap baca task siapa pun), ruff check/format bersih, tanpa dependency baru.
 
 ---
 

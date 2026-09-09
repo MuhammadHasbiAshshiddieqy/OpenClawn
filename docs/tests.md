@@ -1143,6 +1143,10 @@ config sistem (`/settings`, `/skills/import`, `/mcp/*`, `/router`,
 | `test_member_forbidden_from_audit_anchor` | Member POST `/audit/anchor` → 403 (§ Prioritas 9.1 follow-up) |
 | `test_member_forbidden_from_answering_other_users_question` | **[Audit 2026-08-27]** `POST /answer` dengan `session_id` milik user lain → 403, pertanyaan tetap belum terjawab — SEBELUMNYA `session_id` APA PUN bisa dijawab siapa pun (injeksi jawaban ke turn agent orang lain) |
 | `test_member_can_still_answer_own_question` | Isolasi kepemilikan `/answer` tak menghalangi user menjawab pertanyaan di SESI MILIKNYA SENDIRI |
+| `test_member_forbidden_from_reading_other_users_task` | **[§ Task Graph Fase 4]** `GET /tasks/{id}` milik user lain → `403` |
+| `test_member_forbidden_from_reading_other_users_task_timeline` | `GET /tasks/{id}/timeline` milik user lain → `403` |
+| `test_member_can_still_read_own_task` | User tetap bisa baca task MILIKNYA SENDIRI (kedua endpoint) |
+| `test_admin_can_read_member_task` | Admin (oversight) tetap bisa baca task milik user lain |
 
 > **Catatan:** tabel di atas belum mencakup semua test di file ini (mis. `test_member_forbidden_from_calibration_apply/revert`, `test_member_forbidden_from_skills_set_visibility`, `test_member_forbidden_from_autopilots_*`, dan test kepemilikan chat-session/approval) — gap dokumentasi dari sesi sebelumnya, dicatat di sini agar tak disalahartikan sebagai test yang hilang, bukan cuma belum terdaftar.
 
@@ -1411,6 +1415,21 @@ Test untuk `GET /evidence/{event_id}` (§ Evidence-Based Response, TODO.md § Pr
 | `test_evidence_404_for_unknown_event` | `event_id` tak dikenal → `404` |
 | `test_evidence_returns_null_when_not_yet_finalized` | Event ada (`log_decision` sudah jalan) tapi `finalize` belum → `200` dengan `evidence: null`, bukan 404 |
 | `test_evidence_returns_stored_payload_after_finalize` | Setelah `finalize(evidence=...)` → response mengembalikan payload persis yang tersimpan |
+
+---
+
+### `tests/test_task_graph_web.py`
+
+Test untuk `GET /tasks/{task_id}` dan `GET /tasks/{task_id}/timeline` (§ Task
+Graph, TODO.md § Prioritas 12 Fase 4). Kepemilikan lintas-user diuji terpisah
+di `tests/test_rbac_web.py` — file ini fokus ke bentuk response & join timeline.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_get_task_unknown_returns_404` / `test_get_task_timeline_unknown_returns_404` | `task_id` tak dikenal → `404` di kedua endpoint |
+| `test_get_task_returns_graph_and_nodes` | Response memuat baris `task_graphs` + seluruh `task_nodes`-nya (`depends_on` ter-decode dari JSON) |
+| `test_get_task_timeline_merges_three_sources_sorted` | `routing_events`+`tool_invocations`+`approval_log` digabung & diurut WAKTU (bukan urut tabel) |
+| `test_get_task_timeline_empty_for_task_with_no_events` | Task ada tapi belum ada event → `timeline: []`, BUKAN 404 (task-nya sendiri ada) |
 
 ---
 

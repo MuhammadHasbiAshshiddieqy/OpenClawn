@@ -449,6 +449,60 @@ Berbeda dari `GET /approvals` (list SEMUA yang masih pending, sumber `ApprovalGa
 
 ---
 
+#### `GET /tasks/{task_id}`
+
+**Status satu DAG subtask + tiap node-nya (§ Task Graph, TODO.md § Prioritas
+12 Fase 4 — observability/replay, dibangun belakangan setelah Fase 1+2 yang
+hanya punya return value tool `task_graph_submit` sebagai satu-satunya cara
+lihat hasil).**
+
+**Kepemilikan:** digerbangi sejak endpoint ini pertama kali dibuat (bukan gap
+yang ditambal belakangan) — `task_graphs.owner_user_id` dicek via
+`_can_access_owned_resource`, pola sama `GET /chat-sessions/{id}/turns`. `403`
+bila bukan pemilik/admin, `404` bila `task_id` tak dikenal.
+
+Response:
+```json
+{
+  "task_id": "...", "goal": "...", "session_id": "...", "status": "completed",
+  "created_at": "...", "finished_at": "...",
+  "nodes": [
+    {
+      "node_id": "A", "role": "dev", "prompt": "...", "depends_on": [],
+      "status": "completed", "attempt_count": 1, "result_summary": "...",
+      "error": null, "session_id": "task-id:A", "created_at": "...", "updated_at": "..."
+    }
+  ]
+}
+```
+
+---
+
+#### `GET /tasks/{task_id}/timeline`
+
+**Gabungan `routing_events`+`tool_invocations`+`approval_log` untuk SATU
+`task_id`, diurut waktu — "replay" satu DAG lintas node.** Pola sama
+`GET /evidence/{event_id}`: flat, query-able JSON, bukan raw dump. Kepemilikan
+sama seperti `GET /tasks/{task_id}` di atas (dicek via `task_graphs`, bukan
+tiap tabel sumber satu-satu — ketiganya pasti milik task ini karena `task_id`
+yang SAMA dipakai `core/task_executor.py` menulis semuanya).
+
+Response:
+```json
+{
+  "task_id": "...",
+  "timeline": [
+    {"kind": "routing", "node_id": "A", "created_at": "...", "role": "dev", "model": "...", "provider": "...", "complexity": "...", "cost_usd": 0.0, "latency_ms": 500},
+    {"kind": "tool", "node_id": "A", "created_at": "...", "tool_name": "file_read", "outcome": "ok", "latency_ms": 5},
+    {"kind": "approval", "node_id": "A", "created_at": "...", "tool_name": "code_run", "decision": "proposal:pending"}
+  ]
+}
+```
+`timeline` kosong (`[]`) bila task belum memicu satu pun routing/tool/approval
+— bukan 404 (task-nya sendiri ADA, cuma belum ada event tercatat).
+
+---
+
 #### `POST /answer`
 
 **User menjawab pertanyaan klarifikasi (`ask_user`).**
