@@ -137,6 +137,8 @@ CREATE TABLE IF NOT EXISTS routing_events (
     evidence_json TEXT,                    -- [Evidence-Based Response] snapshot policy/skill/guardrail, query-able via GET /evidence/{id}
     human_feedback INTEGER,                -- [Runtime Evaluation Engine] rating eksplisit user 1-5 via POST /feedback/{id}, NULL = belum diberi. Beda dari had_correction (sinyal implisit dari teks pesan berikutnya)
     agent_identity TEXT,                   -- [§ Prioritas 9.2, Non-Human Identity] "{role}@{hash12}" dari core/agent_identity.py — hash SELURUH soul.toml efektif saat turn ini, BUKAN cuma nama role. Config berubah → identitas baru otomatis. NULL = dibuat sebelum kolom ini ada.
+    task_id TEXT,                          -- [§ Task Graph] diisi bila turn ini adalah eksekusi satu subtask DAG (core/task_executor.py). NULL = turn chat biasa.
+    node_id TEXT,                          -- [§ Task Graph] id node dalam task_id di atas. NULL = turn chat biasa.
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_routing_label ON routing_events(complexity_label, had_correction);
@@ -188,6 +190,8 @@ CREATE TABLE IF NOT EXISTS approval_log (
     approval_id TEXT,                       -- [Human Approval Pipeline] kolom eksplisit — SEBELUMNYA hanya tersirat sebagai substring "pending:{id}" di decision, hilang setelah resolve. Query-able via GET /approval/{approval_id}
     owner_user_id TEXT,                     -- [Audit produksi 2026-07-29] user yang memicu approval ini — GET /approvals & POST /approve digerbangi ini agar user lain tak bisa lihat/putuskan approval milik orang lain. NULL = tak tercatat (auth nonaktif).
     agent_identity TEXT,                    -- [§ Prioritas 9.2, Non-Human Identity] lihat routing_events — sama kolom, sama makna, di tabel checkpoint manusia. NULL = dibuat sebelum kolom ini ada.
+    task_id TEXT,                           -- [§ Task Graph] lihat routing_events — sama kolom, sama makna. NULL = bukan approval dari subtask DAG.
+    node_id TEXT,                           -- [§ Task Graph] lihat routing_events.
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -278,6 +282,8 @@ CREATE TABLE IF NOT EXISTS tool_invocations (
     tool_name TEXT NOT NULL,
     outcome TEXT NOT NULL,                  -- ok | error | timeout
     latency_ms INTEGER,
+    task_id TEXT,                           -- [§ Task Graph] lihat routing_events. NULL = bukan tool call dari subtask DAG.
+    node_id TEXT,                           -- [§ Task Graph] lihat routing_events.
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_tool_invocations ON tool_invocations(tool_name, outcome);
@@ -331,6 +337,42 @@ CREATE TABLE IF NOT EXISTS agent_todos (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_agent_todos_session ON agent_todos(session_id, position);
+
+-- ===================== TASK GRAPH [tool task_graph_submit] =====================
+-- DAG subtask (§ Task Graph, dari IMPROVEMENT-Sandbox-Isolation-Parallelization.md
+-- Fase 1+2 — owner memilih submission EKSPLISIT, bukan auto-decompose LLM, untuk
+-- versi ini). Beda dari agent_todos (daftar langkah linear SATU sesi, tanpa
+-- dependency): satu task_graphs = satu DAG subtask lintas-sesi, tiap subtask
+-- berjalan sebagai AgentLoop TERPISAH (task_nodes.session_id = "{task_id}:{node_id}"),
+-- bisa paralel bila tak saling depends_on. Lihat core/task_graph.py (model murni)
+-- + core/task_executor.py (eksekusi sungguhan, ditulis/dibaca dua tabel ini).
+CREATE TABLE IF NOT EXISTS task_graphs (
+    id TEXT PRIMARY KEY,                     -- uuid4 hex
+    goal TEXT,                               -- deskripsi ringkas (opsional, untuk tampilan)
+    owner_user_id TEXT,                      -- pola sama chat_sessions/approval_log — belum digerbangi endpoint apa pun di versi ini (observability/replay = fase terpisah)
+    session_id TEXT NOT NULL,                -- sesi chat ASAL yang memanggil task_graph_submit
+    status TEXT NOT NULL DEFAULT 'running',  -- running | completed | failed | partial
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    finished_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS task_nodes (
+    id INTEGER PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES task_graphs(id),
+    node_id TEXT NOT NULL,                   -- id lokal, unik dalam SATU task_id
+    role TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    depends_on_json TEXT NOT NULL DEFAULT '[]',  -- list node_id lain dalam task_id yang sama
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | running | completed | failed | blocked
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    result_summary TEXT,                     -- dipotong MAX_RESULT_SUMMARY_CHARS (core/task_executor.py) — token-first §1.4
+    error TEXT,
+    session_id TEXT NOT NULL,                -- "{task_id}:{node_id}" — AgentConfig.session_id subtask ini
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(task_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_nodes_task ON task_nodes(task_id);
 
 -- ===================== AGENT BLOCKERS [tool report_blocker] =====================
 -- Terinspirasi "proactive blocker reporting" Multica: agent dapat MENANDAI hambatan

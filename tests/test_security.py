@@ -393,3 +393,63 @@ async def test_agent_identity_written_to_audit_chain_on_auto_approve(db, fast_co
         "ORDER BY id DESC LIMIT 1"
     )
     assert "dev@abc123def456" in row["payload_json"]
+
+
+# ── task_id / node_id passthrough (§ Task Graph) ─────────────────────────────
+
+
+async def test_queue_proposal_stores_task_id_and_node_id(db, fast_config):
+    """Jalur INI yang sebenarnya dipakai proposal dari subtask DAG — subtask
+    SELALU autopilot=True (core/task_executor.py), jadi tool butuh-approval di
+    dalamnya berakhir di queue_proposal, bukan request()/auto_approve()."""
+    gate = ApprovalGate(db, fast_config)
+    await gate.queue_proposal(
+        "task-1:node-a", "code_run", {"code": "x"}, task_id="task-1", node_id="node-a"
+    )
+
+    row = await db.fetchone(
+        "SELECT task_id, node_id FROM approval_log WHERE session_id='task-1:node-a'"
+    )
+    assert row["task_id"] == "task-1"
+    assert row["node_id"] == "node-a"
+
+
+async def test_queue_proposal_task_id_defaults_to_none(db, fast_config):
+    gate = ApprovalGate(db, fast_config)
+    await gate.queue_proposal("s1", "code_run", {"code": "x"})
+
+    row = await db.fetchone("SELECT task_id, node_id FROM approval_log WHERE session_id='s1'")
+    assert row["task_id"] is None
+    assert row["node_id"] is None
+
+
+async def test_auto_approve_stores_task_id_and_node_id(db, fast_config):
+    gate = ApprovalGate(db, fast_config)
+    await gate.auto_approve(
+        "s_tg1", "shell_run", {"command": "ls"}, task_id="task-2", node_id="node-b"
+    )
+
+    row = await db.fetchone("SELECT task_id, node_id FROM approval_log WHERE session_id='s_tg1'")
+    assert row["task_id"] == "task-2"
+    assert row["node_id"] == "node-b"
+
+
+async def test_request_stores_task_id_and_node_id(db, fast_config):
+    gate = ApprovalGate(db, fast_config)
+    t = asyncio.create_task(
+        gate.request(
+            "s_tg2",
+            "code_run",
+            {"code": "x"},
+            approval_id="a_tg2",
+            task_id="task-3",
+            node_id="node-c",
+        )
+    )
+    await asyncio.sleep(0.05)
+    gate.resolve("a_tg2", True)
+    await t
+
+    row = await db.fetchone("SELECT task_id, node_id FROM approval_log WHERE approval_id='a_tg2'")
+    assert row["task_id"] == "task-3"
+    assert row["node_id"] == "node-c"

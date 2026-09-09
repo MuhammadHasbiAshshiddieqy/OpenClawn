@@ -199,6 +199,8 @@ Setiap keputusan routing dicatat sebelum LLM call dan diupdate setelah selesai.
 | `human_feedback` | INTEGER | Runtime Evaluation Engine (§ Prioritas 2): rating eksplisit user 1-5, diisi `RoutingAuditor.set_human_feedback()` via `POST /feedback/{id}`. `NULL` = belum diberi rating (beda dari `had_correction` yang implisit dari teks pesan berikutnya) |
 | `agent_identity` | TEXT | **[§ Prioritas 9.2, Non-Human Identity]** `"{role}@{hash12}"` dari `core/agent_identity.py` — hash SELURUH `soul.toml` efektif saat turn ini, bukan cuma nama role. Config berubah → identitas baru otomatis. `NULL` = dibuat sebelum kolom ini ada. Diagregasi via `RoutingAuditor.identity_report()`, `GET /metrics/identities` |
 | `tenant_id` | TEXT | Multi-Tenant (TODO.md § Prioritas 5), default `'default'`. Kolom pasif — belum di-filter di kode query |
+| `task_id` | TEXT | **[§ Task Graph]** Diisi bila turn ini adalah eksekusi satu subtask DAG (`core/task_executor.py`). `NULL` = turn chat biasa |
+| `node_id` | TEXT | **[§ Task Graph]** Id node dalam `task_id` di atas. `NULL` = turn chat biasa |
 | `created_at` | TIMESTAMP | |
 
 **Index:** `idx_routing_label` pada `(complexity_label, had_correction)` — untuk `calibration_report`. `idx_routing_agent_identity` pada `(role, agent_identity)` — untuk `identity_report()` (§ Prioritas 9.2); dibuat `DatabaseManager._ensure_columns()` SETELAH kolom `agent_identity` ditambal ke DB lama, bukan statis di migration file (pola sama `idx_approval_id`/`idx_l2_role`).
@@ -244,6 +246,8 @@ Semua permintaan approval tool destruktif.
 | `owner_user_id` | TEXT | **[Audit produksi 2026-07-29]** User yang memicu approval ini (dari `AgentConfig.user_id`, sebelumnya ada tapi tak pernah di-wire ke sini). `GET /approvals` & `POST /approve` digerbangi kolom ini (`docs/security.md` § `ApprovalGate`) agar user lain tak bisa lihat/putuskan approval milik orang lain — sebelumnya IDOR PALING SERIUS temuan minggu ini: siapa pun login (termasuk role rendah) bisa approve/reject aksi destruktif (`code_run` dst) milik user lain, melumpuhkan gate HITL sepenuhnya. `NULL` = tak tercatat (auth nonaktif) |
 | `agent_identity` | TEXT | **[§ Prioritas 9.2, Non-Human Identity]** Sama kolom & makna dengan `routing_events.agent_identity` — identitas agent (role + hash konfigurasi) yang memicu approval ini. Melengkapi `owner_user_id` (siapa MANUSIA-nya) dengan "agent versi mana". `NULL` = dibuat sebelum kolom ini ada |
 | `tenant_id` | TEXT | Multi-Tenant (TODO.md § Prioritas 5), default `'default'`. Kolom pasif — belum di-filter di kode query |
+| `task_id` | TEXT | **[§ Task Graph]** Sama kolom & makna dengan `routing_events.task_id`. Jalur nyatanya lewat `queue_proposal()` (subtask SELALU `autopilot=True`), bukan `request()`/`auto_approve()`. `NULL` = bukan approval dari subtask DAG |
+| `node_id` | TEXT | **[§ Task Graph]** Lihat `task_id` di atas |
 | `created_at` | TIMESTAMP | |
 
 **Index:** `idx_approval_id` pada `approval_id` — dibuat oleh `DatabaseManager._ensure_columns()` SETELAH kolom ditambal (bukan statis di migration script), karena DB lama baru mendapat kolom ini via `ALTER TABLE`; index yang dibuat lebih dulu akan gagal `no such column` untuk DB lama.
@@ -336,6 +340,8 @@ Audit setiap eksekusi tool, dicatat terpusat di `AgentLoop._execute_tool` lewat 
 | `tool_name` | TEXT | Nama tool |
 | `outcome` | TEXT | `ok` \| `error` \| `timeout` |
 | `latency_ms` | INTEGER | Durasi eksekusi |
+| `task_id` | TEXT | **[§ Task Graph]** Sama kolom & makna dengan `routing_events.task_id`. `NULL` = bukan tool call dari subtask DAG |
+| `node_id` | TEXT | **[§ Task Graph]** Lihat `task_id` di atas |
 | `created_at` | TIMESTAMP | — |
 
 **Index:** `idx_tool_invocations` pada `(tool_name, outcome)` — agregasi per tool cepat. Penulisan fail-soft (error tulis hanya di-log, tak menjatuhkan turn).
@@ -398,6 +404,48 @@ Daftar langkah multi-step yang dikelola agent lewat tool `todo_write`, per sesi.
 | `updated_at` | TIMESTAMP | — |
 
 **Index:** `idx_agent_todos_session` pada `(session_id, position)`. `session_id` disuntik AgentLoop sebagai `_session_id` (model tak mengarang sesi).
+
+---
+
+### `task_graphs` + `task_nodes` — DAG Subtask (tool `task_graph_submit`)
+
+**[§ Task Graph, dari `IMPROVEMENT-Sandbox-Isolation-Parallelization.md` Fase
+1+2]** Beda dari `agent_todos` (daftar langkah LINEAR satu sesi, tanpa
+dependency): satu `task_graphs` = satu DAG subtask lintas-sesi, tiap subtask
+berjalan sebagai `AgentLoop` TERPISAH (`task_nodes.session_id =
+"{task_id}:{node_id}"`), bisa paralel bila tak saling `depends_on`. Detail
+mekanisme: [`docs/core.md`](core.md) § `core/task_graph.py` + `core/task_executor.py`.
+
+**`task_graphs`**
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | TEXT PK | uuid4 hex (`task_id`) |
+| `goal` | TEXT | Deskripsi ringkas (opsional, untuk tampilan) |
+| `owner_user_id` | TEXT | Pola sama `chat_sessions`/`approval_log` — belum digerbangi endpoint apa pun di versi ini (observability/replay adalah fase lanjutan yang ditunda) |
+| `session_id` | TEXT | Sesi chat ASAL yang memanggil `task_graph_submit` |
+| `status` | TEXT | `running` \| `completed` \| `failed` \| `partial` — `partial` berarti sebagian node completed, sebagian failed/blocked (dihargai sebagai hasil nyata, bukan dibuang jadi gagal total) |
+| `created_at` | TIMESTAMP | — |
+| `finished_at` | TIMESTAMP | Diisi saat graph mencapai status terminal |
+
+**`task_nodes`**
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | INTEGER PK | — |
+| `task_id` | TEXT | FK ke `task_graphs.id` |
+| `node_id` | TEXT | Id lokal, unik dalam SATU `task_id` |
+| `role` | TEXT | Role yang menjalankan subtask ini |
+| `prompt` | TEXT | Instruksi lengkap subtask |
+| `depends_on_json` | TEXT | JSON list `node_id` lain dalam `task_id` yang sama yang harus `completed` dulu |
+| `status` | TEXT | `pending` \| `running` \| `completed` \| `failed` \| `blocked` (`blocked` = dependency-nya gagal permanen, node ini tak pernah dijalankan) |
+| `attempt_count` | INTEGER | Percobaan ke berapa (retry dengan backoff eksponensial, batas `AppConfig.task_graph_max_node_attempts`) |
+| `result_summary` | TEXT | Ringkasan hasil (dipotong `MAX_RESULT_SUMMARY_CHARS`, token-first §1.4) — dikirim ke node dependent, BUKAN transkrip mentah (context hygiene) |
+| `error` | TEXT | Pesan error percobaan TERAKHIR bila `status='failed'` |
+| `session_id` | TEXT | `"{task_id}:{node_id}"` — `AgentConfig.session_id` subtask ini |
+| `created_at` / `updated_at` | TIMESTAMP | — |
+
+**Index:** `idx_task_nodes_task` pada `(task_id)`. `UNIQUE(task_id, node_id)`.
 
 ---
 

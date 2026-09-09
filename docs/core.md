@@ -95,10 +95,11 @@ Konfigurasi per-sesi agent.
 | `workspace_override` | Folder kerja adaptif per-sesi; menggantikan `CONFIG.workspace_root` via ContextVar hanya selama turn. `None` = default server. Divalidasi di `web/main.py`. |
 | `persist_history` | `True` (default) → muat/simpan riwayat sesi ke `session_turns` (single-agent, agar turn berikutnya ingat konteks). `False` untuk multi-agent (strategy kelola transkrip sendiri). |
 | `trust_mode` | `True` → tool yang butuh approval (kecuali `_TRUST_MODE_EXEMPT`) TETAP DIEKSEKUSI tanpa menunggu klik manusia (§ user request otonomi). Beda dari `autopilot`: manusia sedang hadir di sesi aktif, hanya melewati klik. Default `False`. Toggle UI per-pengiriman, tak persist. |
+| `task_id` / `node_id` | **[§ Task Graph]** Diisi HANYA bila `AgentLoop` ini menjalankan satu subtask DAG (`core/task_executor.py`), bukan turn chat biasa. `None` (default) = tak ada perubahan perilaku. Diteruskan ke `RoutingAuditor`/`ApprovalGate`/`ToolAudit` (kolom nullable, pola sama `agent_identity`) agar audit trail subtask query-able per graph. |
 
 ### Konstanta: `_TRUST_MODE_EXEMPT`
 
-`frozenset({"code_run"})` — tool yang TIDAK PERNAH bisa dilewati `AgentConfig.trust_mode`, berapa pun nilainya. Approval `code_run` adalah aturan keras CLAUDE.md §1 ("code_run → True selalu"), bukan preferensi tool yang bisa dilonggarkan fitur otonomi. Dicek di DUA tempat (defense in depth): `_run_tool_loop` (menentukan status event mana yang di-emit ke UI) dan `_execute_tool` (menentukan `auto_approve` vs `request` yang benar-benar dipanggil) — sehingga bug di satu titik tak membuka celah code_run lolos tanpa approval.
+`frozenset({"code_run", "build_sandbox_image"})` — tool yang TIDAK PERNAH bisa dilewati `AgentConfig.trust_mode`, berapa pun nilainya. Approval `code_run` adalah aturan keras CLAUDE.md §1 ("code_run → True selalu"), bukan preferensi tool yang bisa dilonggarkan fitur otonomi; `build_sandbox_image` (§ Prioritas 8.3) ditambahkan sekelas sensitivitas — `docker build`-nya sendiri membuka network sementara. Dicek di DUA tempat (defense in depth): `_run_tool_loop` (menentukan status event mana yang di-emit ke UI) dan `_execute_tool` (menentukan `auto_approve` vs `request` yang benar-benar dipanggil) — sehingga bug di satu titik tak membuka celah tool ini lolos tanpa approval.
 
 ### Dataclass: `Turn`
 
@@ -475,6 +476,124 @@ SHA-256 hex penuh dari **seluruh** isi `soul.toml` yang dimuat, di-canonical-kan
 Identitas stabil `"{role}@{hash12}"`. Sengaja menghash **seluruh** dict `soul` (bukan subset field pilihan tangan) — supaya field baru yang ditambahkan ke `soul.toml` di masa depan otomatis ikut tercermin tanpa perlu mengingat memperbarui modul ini. Role sama + config PERSIS sama → identitas sama, lintas sesi/restart. Config berubah (tool dicabut/ditambah, policy diedit, prompt diubah) → identitas baru otomatis, tanpa tabel versioning terpisah.
 
 Dihitung sekali oleh `AgentLoop.__init__` (`self.agent_identity`, setelah `self._soul` di-cache) dan diteruskan ke `RoutingAuditor.log_decision()` dan `ApprovalGate.request()`/`auto_approve()`.
+
+---
+
+## `core/task_graph.py` + `core/task_executor.py` — Task Graph (DAG subtask)
+
+**[§ Task Graph, dari `IMPROVEMENT-Sandbox-Isolation-Parallelization.md` Fase
+1+2]** DAG subtask dengan eksekusi paralel — owner memilih **submission
+eksplisit** (bukan auto-decompose LLM) untuk versi ini: agent memecah sendiri
+satu goal jadi daftar subtask dengan dependency lewat tool `task_graph_submit`
+(`docs/tools.md`), bukan lewat modul planner terpisah. Fase lanjutan (sandbox
+lifecycle, observability/replay, runtime pluggable) sengaja **ditunda** —
+lihat catatan non-goal di bawah.
+
+Beda dari `core/conversation.py` (pipeline/debate/orchestrator, **sekuensial**,
+sedikit role tetap merefine SATU artefak bersama, sengaja saling melihat
+transkrip): task graph untuk **subtask independen sebanyak apa pun**, sengaja
+TIDAK berbagi transkrip mentah (context hygiene) — tiap subtask adalah
+`AgentLoop` baru dengan sesi sendiri. Keduanya tetap terpisah, bukan digabung
+jadi satu abstraksi (memaksa keduanya jadi satu akan merusak kebenaran
+sequential-refinement `conversation.py` ATAU mengalahkan tujuan context-hygiene
+task graph).
+
+### `core/task_graph.py` — model murni (tanpa I/O/DB/LLM)
+
+**Dataclass `TaskNode`**: `node_id`, `role`, `prompt`, `depends_on: list[str]`,
+`status` (`pending|running|completed|failed|blocked`), `attempt_count`,
+`result_summary`, `error`.
+
+**Kelas `TaskGraph(nodes, roles_dir="roles")`**:
+- `validate()` — cek `depends_on` ke node tak dikenal, role tak dikenal (cek
+  `roles/<role>/soul.toml` ada, SAMA pola `infra/manifest.py::apply_manifest`
+  — bukan registry baru), dan siklus (`detect_cycle()`, DFS 3-warna). Node_id
+  duplikat dicek di `__init__` (dict comprehension `{n.node_id: n for n in
+  nodes}` akan diam-diam menimpa duplikat sebelum `validate()` sempat melihatnya
+  — makanya dicek lebih dulu, sebelum dict dibangun). **Fail-closed**: graph
+  malformed/cyclic ditolak SELURUHNYA sebelum satu subtask pun mulai.
+- `ready_nodes(completed: set[str]) -> list[TaskNode]` — node `pending` yang
+  SEMUA `depends_on`-nya ∈ `completed`. Mengasumsikan `completed` konsisten
+  dengan `node.status` (caller — `TaskGraphExecutor` — selalu menjaga
+  keduanya sinkron).
+- `transitive_dependents(node_id) -> set[str]` — semua node yang (langsung/tak
+  langsung) `depends_on` node ini, dipakai menandai `blocked` saat satu node
+  gagal permanen.
+- `is_terminal() -> bool` — tak ada node `pending`/`running` tersisa.
+
+### `core/task_executor.py` — eksekusi sungguhan
+
+**`TaskGraphExecutor(db, config, agent_factory)`** — `agent_factory:
+Callable[[AgentConfig], AgentLoop]` disuntik caller (tool), bukan hardcode di
+sini (testable dengan `AgentLoop` palsu, lihat `docs/tests.md`).
+
+**`run(task_id, graph, owner_user_id, parent_session_id, goal="") -> dict`**
+*(async)* — persist `task_graphs`+`task_nodes` (lihat `docs/database.md`),
+lalu jalankan graph sampai tuntas via **penjadwalan event-driven** (bukan
+"wave" tetap — begitu satu node selesai, langsung cek ulang node mana yang
+BARU siap, node cepat tak menunggu sibling lambat yang tak jadi dependency-nya):
+loop `while not graph.is_terminal()`, isi `running: dict[node_id, Task]` dari
+`ready_nodes()` (dibatasi `config.task_graph_max_concurrency`), `asyncio.wait(
+running.values(), return_when=FIRST_COMPLETED)`, lalu proses yang selesai
+(masuk `completed` bila sukses, tandai `transitive_dependents()` sebagai
+`blocked` bila gagal permanen). Tak ada yang `ready` DAN tak ada yang `running`
+→ sisa `pending` ditandai `blocked` (dependency-nya gagal di cabang lain),
+loop selesai — bukan berputar tanpa akhir. Return `{"status":
+"completed"|"partial"|"failed", "nodes": {node_id: {status, result_summary,
+error}}}` — `"partial"` berarti SEBAGIAN node completed, sebagian
+failed/blocked (dihargai sebagai hasil nyata, bukan dibuang jadi "failed" total).
+
+**`_run_node(task_id, node)`** *(async, private)* — retry dengan backoff
+eksponensial (`config.task_graph_retry_backoff_sec * 2^(attempt-1)`) sampai
+`config.task_graph_max_node_attempts` (INI SEKALIGUS breaker-nya — tak ada
+abstraksi circuit-breaker terpisah). Setiap `AgentLoop.run()` dibungkus
+`asyncio.timeout(config.task_graph_node_timeout_sec)` DAN try/except di titik
+eksekusi (bukan hanya di titik agregasi via `return_exceptions=True`) — fault
+containment STRUKTURAL: satu node yang meledak TAK PERNAH menjalar ke
+`asyncio.wait`, jadi tak mungkin membatalkan sibling yang jalan bersamaan.
+
+**`AgentConfig` untuk tiap subtask** (dibuat `_run_node`, BUKAN opsional):
+`session_id=f"{task_id}:{node_id}"` (sesi terpisah — context hygiene, bukan
+berbagi transkrip induk), `persist_history=False` (fresh, tak memuat
+`session_turns` sesi lain), **`autopilot=True` WAJIB** — subtask di sini TAK
+PUNYA listener SSE/UI yang mengawasi sesinya; tool butuh-approval lewat
+`ApprovalGate.request()` biasa akan menggantung sampai timeout tanpa siapa pun
+pernah melihat kartu approval-nya. Dengan `autopilot=True`, tool semacam itu
+diantri sebagai proposal (`ApprovalGate.queue_proposal`, sudah terpasang
+`AgentLoop._execute_tool`) — tercatat, bisa ditinjau lewat `GET /approvals`
+nanti, TIDAK menggantung graph. Pelajaran langsung dari bug
+`scripts/run_evals.py` (TODO.md § Prioritas 8.2).
+
+**Tak ada streaming event subtask ke UI mana pun untuk versi ini** —
+`_run_node` menguras `agent.run()` (`async for _ in agent.run(...): pass`)
+tanpa forward event kemana pun; parent turn mendapat ringkasan AKHIR sebagai
+return value tool `task_graph_submit`. Observability/replay real-time adalah
+fase lanjutan yang ditunda (lihat non-goal di bawah).
+
+### `task_id`/`node_id` di audit trail
+
+Diteruskan sebagai kwarg opsional (pola SAMA `agent_identity`, TIDAK PERNAH
+wajib, `None` = turn chat biasa) lewat: `AgentConfig.task_id`/`.node_id` →
+`RoutingAuditor.log_decision()` → `ApprovalGate.request()`/`auto_approve()`/
+`queue_proposal()` (jalur yang SEBENARNYA dipakai subtask, karena
+`autopilot=True` selalu) → `ToolAudit.record()`. Kolom nullable di
+`routing_events`/`approval_log`/`tool_invocations` (lihat `docs/database.md`).
+`RoutingAuditor.finalize()` TIDAK butuh parameter yang sama — UPDATE-nya
+dikunci `event_id`, baris yang sama sudah membawa kolom ini dari INSERT
+`log_decision()`.
+
+### Non-goal versi ini (dicatat, bukan lupa)
+
+- **Auto-decompose LLM** (goal → DAG otomatis) — v1 butuh DAG datang SUDAH
+  terstruktur lewat argumen tool `nodes`.
+- **Sandbox lifecycle** (persist/pause/resume/recycle) — `tools/sandbox.py`
+  TAK disentuh sama sekali di sini; setiap `docker run` tetap `--rm` ephemeral
+  seperti sebelumnya.
+- **Endpoint observability/replay** (`GET /tasks/{id}`, `/timeline`) — kolom/
+  tabel yang ditambahkan di sini membuatnya murah dibangun nanti, tapi belum
+  ada endpoint HTTP baru di versi ini. Satu-satunya cara lihat hasil graph
+  untuk sekarang: return value tool `task_graph_submit` itu sendiri.
+- **Runtime isolasi pluggable** (gVisor/Firecracker) — tak disentuh.
 
 ---
 

@@ -55,6 +55,10 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `compaction_local_model` | `("ollama", "gemma4:e2b")` | Model lokal untuk meringkas turn lama saat mode `local` (peringkasan = ekstraktif, model kecil cukup) |
 | `compaction_keep_recent` | `4` | Jumlah turn terbaru yang DIPERTAHANKAN utuh (tak diringkas) |
 | `compaction_min_old_turns` | `3` | Minimal turn lama agar peringkasan dijalankan (hindari LLM call sia-sia) |
+| `task_graph_max_concurrency` | `3` | **[§ Task Graph]** Batas subtask BERSAMAAN dalam satu DAG — konservatif karena tiap subtask adalah `AgentLoop` penuh (bisa memanggil `code_run`/sandbox sendiri) |
+| `task_graph_max_node_attempts` | `3` | **[§ Task Graph]** Percobaan maksimum per node sebelum menyerah permanen (`status='failed'`) — INI SEKALIGUS breaker-nya, tak ada abstraksi circuit-breaker terpisah |
+| `task_graph_retry_backoff_sec` | `2.0` | **[§ Task Graph]** Backoff dasar antar percobaan node (eksponensial: `base * 2^(attempt-1)`) |
+| `task_graph_node_timeout_sec` | `300` | **[§ Task Graph]** Timeout keras per node — subtask yang menggantung tak boleh membekukan seluruh graph selamanya |
 | `fallback_chain` | lihat di bawah | Urutan model jika provider utama gagal |
 
 **Fallback chain default:**

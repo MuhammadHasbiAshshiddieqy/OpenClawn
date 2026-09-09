@@ -65,6 +65,13 @@ class AgentConfig:
     # bisa dilewati toggle ini — code_run tetap SELALU approval (CLAUDE.md §1, aturan
     # non-negotiable, tidak disentuh oleh fitur ini). Default False (perilaku lama).
     trust_mode: bool = False
+    # § Task Graph (DAG subtask, core/task_executor.py): identitas node saat
+    # AgentLoop ini menjalankan SATU subtask dalam sebuah graph, bukan turn
+    # chat biasa. None (default) = turn biasa, tak ada perubahan perilaku.
+    # Diteruskan ke RoutingAuditor/ApprovalGate/ToolAudit (kolom nullable,
+    # pola sama agent_identity) agar audit trail subtask query-able per graph.
+    task_id: str | None = None
+    node_id: str | None = None
 
 
 @dataclass
@@ -457,6 +464,8 @@ class AgentLoop:
             route,
             user_id=self.cfg.user_id,
             agent_identity=self.agent_identity,
+            task_id=self.cfg.task_id,
+            node_id=self.cfg.node_id,
         )
         # Status: beri tahu UI model/provider yang dipilih sebelum LLM dipanggil.
         yield AgentEvent(type="status", text="routing", detail=f"{route.provider}:{route.model}")
@@ -826,12 +835,18 @@ class AgentLoop:
             "set_workdir",
             "memory_search",
             "build_sandbox_image",
+            "task_graph_submit",
         ):
             input_data = {
                 **input_data,
                 "_session_id": self.cfg.session_id,
                 "_role": self.cfg.role,
             }
+        # task_graph_submit (§ Task Graph) SEKALIGUS butuh identitas user pemilik
+        # graph (task_graphs.owner_user_id) — tool lain di atas tak memakainya,
+        # jadi tak ikut disuntik agar tak menambah field yang tak dipakai siapa pun.
+        if name == "task_graph_submit":
+            input_data = {**input_data, "_user_id": self.cfg.user_id}
 
         if tool.requires_approval or policy_forces_approval:
             # Autopilot (§1, §17): tidak ada manusia untuk approve → JANGAN eksekusi.
@@ -840,7 +855,13 @@ class AgentLoop:
             # "rusak", bukan "aman". Di sini aman secara eksplisit: aksi destruktif
             # terjadwal jadi PROPOSAL, bukan eksekusi diam-diam.
             if self.cfg.autopilot:
-                await self.approval.queue_proposal(self.cfg.session_id, name, input_data)
+                await self.approval.queue_proposal(
+                    self.cfg.session_id,
+                    name,
+                    input_data,
+                    task_id=self.cfg.task_id,
+                    node_id=self.cfg.node_id,
+                )
                 return {
                     "proposed": True,
                     "note": (
@@ -861,7 +882,12 @@ class AgentLoop:
             # pada caller menghitung dengan benar.
             if bypass_approval and name not in _TRUST_MODE_EXEMPT and not policy_forces_approval:
                 approved = await self.approval.auto_approve(
-                    self.cfg.session_id, name, input_data, agent_identity=self.agent_identity
+                    self.cfg.session_id,
+                    name,
+                    input_data,
+                    agent_identity=self.agent_identity,
+                    task_id=self.cfg.task_id,
+                    node_id=self.cfg.node_id,
                 )
             else:
                 # Audit produksi 2026-07-29: teruskan identitas user (bila ada,
@@ -874,6 +900,8 @@ class AgentLoop:
                     approval_id=approval_id,
                     owner_user_id=self.cfg.user_id if self.cfg.user_id != "default" else None,
                     agent_identity=self.agent_identity,
+                    task_id=self.cfg.task_id,
+                    node_id=self.cfg.node_id,
                 )
             if not approved:
                 return {"error": f"Tool '{name}' ditolak oleh user"}
@@ -907,6 +935,8 @@ class AgentLoop:
                 outcome,
                 latency_ms,
                 user_id=self.cfg.user_id,
+                task_id=self.cfg.task_id,
+                node_id=self.cfg.node_id,
             )
         return result
 

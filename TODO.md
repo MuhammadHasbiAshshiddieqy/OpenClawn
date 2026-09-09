@@ -1228,6 +1228,106 @@ lebih dulu terhadap kode lama (`asyncio.gather` dua login pertama →
 
 ---
 
+## 12. Task Graph — DAG subtask + concurrency engine (2026-09-09)
+
+Dikerjakan atas permintaan eksplisit owner setelah membaca
+`IMPROVEMENT-Sandbox-Isolation-Parallelization.md` (dokumen eksternal, tak
+tracked git, dijatuhkan ke repo — bukan berasal dari audit internal proyek
+ini). Proposal itu mengusulkan arsitektur ala Manus: DAG subtask + eksekusi
+paralel, sandbox-per-subtask dengan lifecycle sleep/wake/recycle, fault
+containment, context hygiene, observability/replay, dan runtime isolasi
+pluggable (gVisor/Firecracker). Arahan owner eksplisit: **"tidak masalah
+kalau sudah tidak minimalis, utamakan fungsi dan kebutuhan"** — CLAUDE.md §8
+minimalis DILONGGARKAN untuk inisiatif ini, TAPI ranking keamanan #1 CLAUDE.md
+TIDAK dilonggarkan (trade-off keamanan apa pun tetap butuh persetujuan
+eksplisit terpisah, bukan keputusan sepihak).
+
+**Keputusan skop (via `EnterPlanMode`/`ExitPlanMode`, disetujui owner
+eksplisit sebelum kode ditulis):** dari 5 fase yang diusulkan, owner memilih
+**HANYA Fase 1 (DAG model + orchestrator) dan Fase 2 (concurrency engine +
+fault containment + audit threading)** untuk dikerjakan sekarang, dengan
+**submission EKSPLISIT** (bukan auto-decompose LLM). Fase 3 (sandbox
+lifecycle — trade-off keamanan nyata: filesystem persisten vs ephemeral
+`--rm` saat ini), Fase 4 (observability/replay endpoint), dan Fase 5 (runtime
+pluggable gVisor/Firecracker) **DITUNDA**, dicatat sebagai non-goal eksplisit
+di `docs/core.md` § Task Graph — bukan lupa.
+
+**Riset sebelum desain (2 Explore agent + 1 Plan agent, dibaca & diverifikasi
+langsung ke kode, bukan diasumsikan):** dikonfirmasi TIDAK ADA machinery
+DAG/paralel/worker-pool apa pun di seluruh codebase sebelumnya —
+`core/conversation.py` (multi-agent) strictly sekuensial; `core/autopilot.py`
+strictly sekuensial, TANPA retry/circuit-breaker; `tools/todo.py` daftar
+linear tanpa dependency. Ini benar-benar wilayah baru, bukan perluasan
+sesuatu yang sudah setengah ada.
+
+**Hasil:**
+- `core/task_graph.py` (baru) — `TaskNode`/`TaskGraph` MURNI (tanpa I/O/DB/
+  LLM): `validate()` (node_id duplikat, `depends_on` tak dikenal, role tak
+  dikenal — cek `roles/<role>/soul.toml` ada, SAMA pola `infra/manifest.py`),
+  `detect_cycle()` (DFS 3-warna), `ready_nodes()`, `transitive_dependents()`.
+  **Fail-closed**: graph malformed/cyclic ditolak SELURUHNYA sebelum satu
+  subtask pun mulai.
+- `core/task_executor.py` (baru) — `TaskGraphExecutor`, penjadwalan
+  EVENT-DRIVEN (bukan "wave" tetap — node cepat tak menunggu sibling lambat
+  yang tak jadi dependency-nya), dibatasi `task_graph_max_concurrency`.
+  Fault containment STRUKTURAL (try/except DI TITIK EKSEKUSI `_run_node`,
+  bukan hanya `return_exceptions=True` di titik agregasi) — satu node
+  meledak TAK PERNAH menjalar ke `asyncio.wait`, mustahil membatalkan
+  sibling. Retry+backoff eksponensial sampai `task_graph_max_node_attempts`
+  (INI SEKALIGUS breaker-nya, tanpa abstraksi circuit-breaker terpisah).
+  Node gagal permanen → `transitive_dependents()`-nya `blocked`, node
+  independen lain TETAP jalan — graph `status="partial"` dihargai sebagai
+  hasil nyata, bukan dibuang jadi "failed" total.
+- **`autopilot=True` WAJIB (bukan opsional) untuk tiap subtask** — pelajaran
+  LANGSUNG dari bug `scripts/run_evals.py` (§ Prioritas 8.2): subtask di sini
+  tak punya listener SSE/UI, `request()` biasa akan menggantung sampai
+  timeout tanpa siapa pun pernah melihat kartu approval-nya. Dengan
+  `autopilot=True`, tool butuh-approval diantri sebagai proposal
+  (`queue_proposal`, sudah terpasang `_execute_tool`) — tercatat, ditinjau
+  lewat `GET /approvals` nanti (termasuk orphan-cleanup lintas restart dari
+  § Prioritas 8.1), TIDAK menggantung graph.
+- Tool baru `task_graph_submit` (`tools/task_graph_submit.py`) —
+  `requires_approval=False` (tool ini sendiri hanya mengorkestrasi turn agent
+  lain; aksi destruktif subtask tetap digerbangi individual). Validasi
+  SEBELUM DB/eksekusi disentuh (semua-atau-tidak). Diizinkan role
+  `pm`/`dev`/`qa`/`data` (yang sudah punya `todo_write`), BUKAN `security`
+  (read-only).
+- `task_id`/`node_id` di-thread sebagai kwarg OPSIONAL (pola SAMA
+  `agent_identity`, tak pernah wajib) lewat `AgentConfig` →
+  `RoutingAuditor.log_decision()` → `ApprovalGate.request()`/`auto_approve()`/
+  `queue_proposal()` → `ToolAudit.record()`. Kolom nullable baru di
+  `routing_events`/`approval_log`/`tool_invocations` (dual-listed: `CREATE
+  TABLE` untuk DB baru + `_ADDED_COLUMNS` untuk DB lama, pola sama
+  `agent_identity`). Tabel baru `task_graphs`+`task_nodes`.
+- Impor sirkular ditemukan & diperbaiki SEBELUM commit (bukan setelah error
+  produksi): `core.agent_loop` mengimpor `tools` (untuk `TOOL_REGISTRY`)
+  SEBELUM class `AgentLoop` didefinisikan — `tools/task_graph_submit.py`
+  butuh `AgentLoop`/`TaskGraphExecutor` (yang keduanya mengimpor
+  `core.agent_loop`), jadi impor level-modul akan memicu "partially
+  initialized module". Diperbaiki: impor `TaskGraphExecutor`/`AgentLoop`
+  LOKAL di dalam `execute()`, bukan level-modul.
+
+**Non-goal eksplisit versi ini** (dicatat `docs/core.md`, bukan lupa):
+auto-decompose LLM, sandbox lifecycle (Fase 3), endpoint observability/
+replay `GET /tasks/{id}` (Fase 4), runtime isolasi pluggable gVisor/
+Firecracker (Fase 5).
+
+Diverifikasi via `uv run --python 3.12`: **1038 passed** (+39 test baru:
+`tests/test_task_graph.py` ×12, `tests/test_task_executor.py` ×8,
+`tests/test_task_graph_submit.py` ×11, plus passthrough `task_id`/`node_id`
+di `tests/test_audit.py`/`tests/test_security.py`/`tests/test_tools.py`),
+ruff check/format bersih, tanpa dependency baru. Dua bug ditemukan &
+diperbaiki lewat test yang GAGAL lebih dulu sebelum kode ditulis benar
+(bukan lolos kebetulan): (1) `TaskGraph.__init__`'s dict comprehension
+menimpa `node_id` duplikat diam-diam sebelum `validate()` sempat melihatnya
+— dipindah ke cek eksplisit di `__init__` SEBELUM dict dibangun; (2) test
+`ready_nodes()` awal salah asumsi (memberi id "completed" tanpa mengubah
+`node.status` node itu sendiri) — diperbaiki jadi konsisten dengan kontrak
+nyata `ready_nodes(completed)` (mengasumsikan `completed` SELALU sinkron
+dengan `node.status`, sama seperti pemakaian nyata di `TaskGraphExecutor`).
+
+---
+
 ## Sumber riset tren (dicari 2026-07-27)
 
 - [The best AI agent frameworks in 2026](https://www.langchain.com/resources/ai-agent-frameworks)

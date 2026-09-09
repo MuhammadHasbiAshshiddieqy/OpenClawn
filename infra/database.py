@@ -48,6 +48,10 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # core/agent_identity.py — sudah di CREATE TABLE untuk DB baru, baris
         # ini menambal DB LAMA.
         ("agent_identity", "TEXT"),
+        # § Task Graph (core/task_executor.py): sudah di CREATE TABLE untuk DB
+        # baru, baris ini menambal DB LAMA. NULL = turn chat biasa (bukan subtask).
+        ("task_id", "TEXT"),
+        ("node_id", "TEXT"),
     ],
     "approval_log": [
         # Human Approval Pipeline (TODO.md § Prioritas 2): approval_id SEBELUMNYA
@@ -66,12 +70,18 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # Non-Human Identity (TODO.md § Prioritas 9.2) — sama kolom & alasan
         # seperti routing_events di atas.
         ("agent_identity", "TEXT"),
+        # § Task Graph — sama kolom & alasan seperti routing_events di atas.
+        ("task_id", "TEXT"),
+        ("node_id", "TEXT"),
     ],
     "tool_invocations": [
         # Audit log format actor_is_agent (TODO.md § Prioritas 2) — sama seperti
         # routing_events, lihat komentar di atas.
         ("user_id", "TEXT DEFAULT 'default'"),
         ("actor_is_agent", "INTEGER DEFAULT 1"),
+        # § Task Graph — sama kolom & alasan seperti routing_events di atas.
+        ("task_id", "TEXT"),
+        ("node_id", "TEXT"),
     ],
     "memory_l2": [
         # Multi-Tenant (TODO.md § Prioritas 5) — lihat komentar approval_log.

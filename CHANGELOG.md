@@ -7,6 +7,46 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Added — Task Graph: DAG subtask dengan eksekusi paralel (TODO.md § Prioritas 12)
+
+Dikerjakan atas arahan eksplisit owner setelah membaca proposal eksternal
+("IMPROVEMENT-Sandbox-Isolation-Parallelization.md") yang mengusulkan
+arsitektur ala Manus. Owner memilih HANYA Fase 1 (DAG model + orchestrator)
++ Fase 2 (concurrency engine + fault containment) untuk dikerjakan sekarang,
+dengan submission EKSPLISIT (bukan auto-decompose LLM). Sandbox lifecycle,
+observability/replay endpoint, dan runtime isolasi pluggable (gVisor/
+Firecracker) sengaja ditunda — dicatat sebagai non-goal, bukan lupa.
+Minimalisme CLAUDE.md §8 dilonggarkan untuk inisiatif ini atas arahan owner
+eksplisit; ranking keamanan #1 CLAUDE.md TIDAK dilonggarkan.
+
+- `core/task_graph.py` (baru) — model DAG murni: `TaskNode`/`TaskGraph`,
+  validasi fail-closed (node_id duplikat, dependency tak dikenal, role tak
+  dikenal, siklus via DFS 3-warna) sebelum satu subtask pun mulai.
+- `core/task_executor.py` (baru) — `TaskGraphExecutor`, penjadwalan
+  event-driven dibatasi `task_graph_max_concurrency`, fault containment
+  struktural (try/except di titik eksekusi, bukan hanya agregasi) — satu
+  node gagal permanen hanya memblokir `transitive_dependents()`-nya, node
+  independen lain tetap jalan (graph `status="partial"`). Retry+backoff
+  eksponensial per node (`task_graph_max_node_attempts`, sekaligus jadi
+  circuit breaker-nya). Tiap subtask **WAJIB** `autopilot=True` — pelajaran
+  langsung dari bug `scripts/run_evals.py`: tak ada listener SSE untuk
+  subtask, jadi tool butuh-approval diantri sebagai proposal
+  (`queue_proposal`), bukan menggantung.
+- Tool baru `task_graph_submit` (`requires_approval=False`, izin
+  `pm`/`dev`/`qa`/`data`) — agent memecah satu goal jadi subtask eksplisit
+  dengan dependency; independen berjalan paralel, masing-masing `AgentLoop`
+  terpisah dengan sesi sendiri (context hygiene).
+- `task_id`/`node_id` di-thread opsional (pola sama `agent_identity`) lewat
+  `AgentConfig` → `RoutingAuditor`/`ApprovalGate`/`ToolAudit`, kolom nullable
+  baru di `routing_events`/`approval_log`/`tool_invocations`. Tabel baru
+  `task_graphs`+`task_nodes`.
+
+39 test baru (`tests/test_task_graph.py`, `tests/test_task_executor.py`,
+`tests/test_task_graph_submit.py`, plus passthrough di test audit/security/
+tools yang sudah ada). **1038 passed** (+39), ruff bersih, tanpa dependency
+baru. Dua bug ditemukan lewat test yang gagal lebih dulu sebelum diperbaiki
+(cek TODO.md § Prioritas 12 untuk detail).
+
 ### Fixed — Audit lapisan infra/: race condition pada bootstrap admin pertama (TODO.md § Prioritas 11)
 
 `UserStore.upsert_on_login` menghitung "apakah tenant ini user pertama"

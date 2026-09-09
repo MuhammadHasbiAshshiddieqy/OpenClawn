@@ -639,6 +639,46 @@ async def test_log_decision_writes_agent_identity_to_audit_chain(auditor, db):
     assert "dev@abc123def456" in row["payload_json"]
 
 
+# ── task_id / node_id passthrough (§ Task Graph) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_log_decision_stores_task_id_and_node_id_when_given(auditor, db):
+    route = _fake_route()
+    eid = await auditor.log_decision(
+        "s_tg1", "dev", "q", route, task_id="task-abc", node_id="node-1"
+    )
+
+    row = await db.fetchone("SELECT task_id, node_id FROM routing_events WHERE id=?", (eid,))
+    assert row["task_id"] == "task-abc"
+    assert row["node_id"] == "node-1"
+
+
+@pytest.mark.asyncio
+async def test_log_decision_task_id_defaults_to_none(auditor, db):
+    """Turn chat biasa (bukan subtask DAG) → NULL, tak ada perubahan perilaku
+    untuk caller yang belum mengenal parameter ini (backward-compat)."""
+    route = _fake_route()
+    eid = await auditor.log_decision("s_tg2", "dev", "q", route)
+
+    row = await db.fetchone("SELECT task_id, node_id FROM routing_events WHERE id=?", (eid,))
+    assert row["task_id"] is None
+    assert row["node_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_log_decision_writes_task_id_to_audit_chain(auditor, db):
+    route = _fake_route()
+    await auditor.log_decision("s_tg3", "dev", "q", route, task_id="task-xyz", node_id="node-2")
+
+    row = await db.fetchone(
+        "SELECT payload_json FROM audit_chain WHERE entry_type='routing.decision' "
+        "ORDER BY id DESC LIMIT 1"
+    )
+    assert "task-xyz" in row["payload_json"]
+    assert "node-2" in row["payload_json"]
+
+
 @pytest.mark.asyncio
 async def test_identity_report_empty(auditor):
     assert await auditor.identity_report() == []

@@ -57,6 +57,8 @@ class RoutingAuditor:
         route: RouteDecision,
         user_id: str = "default",
         agent_identity: str | None = None,
+        task_id: str | None = None,
+        node_id: str | None = None,
     ) -> int:
         """`user_id` (§ Audit log format actor_is_agent, TODO.md Prioritas 2):
         AgentConfig.user_id — default 'default' selaras single-user design saat
@@ -68,7 +70,13 @@ class RoutingAuditor:
         `agent_identity` (§ Prioritas 9.2, Non-Human Identity): `"{role}@{hash12}"`
         dari `core/agent_identity.py` — identitas agent yang menyertakan versi
         KONFIGURASI (`soul.toml` efektif), bukan cuma nama role. `None` (default)
-        untuk caller yang belum menghitungnya (backward-compat)."""
+        untuk caller yang belum menghitungnya (backward-compat).
+
+        `task_id`/`node_id` (§ Task Graph, `core/task_executor.py`): diisi HANYA
+        bila turn ini adalah eksekusi satu subtask DAG (`AgentConfig.task_id`/
+        `.node_id`) — `None` untuk turn chat biasa, tak ada perubahan perilaku.
+        `finalize()` TIDAK butuh parameter yang sama karena UPDATE-nya dikunci
+        `event_id`, baris yang sama sudah membawa kolom ini dari INSERT ini."""
         d = route.dimensions
         cursor = await self.db.execute(
             """
@@ -79,8 +87,8 @@ class RoutingAuditor:
                 dim_needs_stream, dim_is_continuation, dim_soul_upgrade_hit,
                 dim_has_code_signal, dim_query_script, dim_language_bumped,
                 complexity_score, complexity_label,
-                model_chosen, provider, routing_reason
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                model_chosen, provider, routing_reason, task_id, node_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 session_id,
@@ -107,6 +115,8 @@ class RoutingAuditor:
                 route.model,
                 route.provider,
                 route.reason,
+                task_id,
+                node_id,
             ),
         )
         event_id = cursor.lastrowid
@@ -122,6 +132,8 @@ class RoutingAuditor:
                 "role": role,
                 "user_id": user_id,
                 "agent_identity": agent_identity,
+                "task_id": task_id,
+                "node_id": node_id,
                 "model": route.model,
                 "provider": route.provider,
                 "complexity": route.complexity.value,

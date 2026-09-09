@@ -177,7 +177,7 @@ Human-in-the-loop (HITL) gate untuk tool destruktif. **Privat per-user** sejak a
 **`__init__(db, config)`**  
 Inisialisasi dict `_pending` untuk track approval yang menunggu.
 
-**`request(session_id, tool_name, tool_input, approval_id=None, owner_user_id=None, agent_identity=None) → bool`** *(async)*  
+**`request(session_id, tool_name, tool_input, approval_id=None, owner_user_id=None, agent_identity=None, task_id=None, node_id=None) → bool`** *(async)*  
 Alur lengkap permintaan approval:
 1. Buat `PendingApproval` — pakai `approval_id` bila diberikan, kalau tidak generate UUID baru. `owner_user_id` (audit produksi 2026-07-29) dan `agent_identity` (§ Prioritas 9.2) disertakan ke `PendingApproval` dan ke baris `approval_log` yang diinsert
 2. Catat ke tabel `approval_log` dengan `decision="pending"`, `approval_id`, `owner_user_id`, DAN `agent_identity` di KOLOM SENDIRI (§ Human Approval Pipeline, TODO.md Prioritas 2 — sebelumnya `approval_id` hanya tersirat sebagai substring `pending:{id}` di kolom `decision`, hilang begitu langkah 5 menimpanya jadi keputusan final; sekarang tetap query-able lintas status via `GET /approval/{approval_id}`, `docs/web.md`)
@@ -186,7 +186,7 @@ Alur lengkap permintaan approval:
 5. Update `approval_log` dengan keputusan final (dicari via kolom `approval_id`, bukan lagi pola string `decision=pending:{id}`)
 6. Return `True` (approved) atau `False` (rejected/timeout)
 
-`owner_user_id` dipakai `web/main.py` untuk menggerbangi `GET /approvals` dan `POST /approve` agar user lain tak bisa lihat/putuskan approval ini — bukan dicek di dalam `ApprovalGate` sendiri (lihat `find_pending`/`resolve` di bawah). `agent_identity` (§ Prioritas 9.2, Non-Human Identity, `core/agent_identity.py`) menjawab pertanyaan berbeda dari `owner_user_id`: bukan "manusia mana", tapi "agent dengan KONFIGURASI mana" — melengkapi jejak audit dengan versi `soul.toml` efektif saat approval ini dibuat.
+`owner_user_id` dipakai `web/main.py` untuk menggerbangi `GET /approvals` dan `POST /approve` agar user lain tak bisa lihat/putuskan approval ini — bukan dicek di dalam `ApprovalGate` sendiri (lihat `find_pending`/`resolve` di bawah). `agent_identity` (§ Prioritas 9.2, Non-Human Identity, `core/agent_identity.py`) menjawab pertanyaan berbeda dari `owner_user_id`: bukan "manusia mana", tapi "agent dengan KONFIGURASI mana" — melengkapi jejak audit dengan versi `soul.toml` efektif saat approval ini dibuat. `task_id`/`node_id` (§ Task Graph) diisi bila caller adalah subtask DAG — CATATAN: subtask SELALU `autopilot=True` (`core/task_executor.py`), jadi jalur normalnya `queue_proposal` di bawah, bukan `request()` ini; parameter di sini disediakan untuk caller masa depan yang mungkin menjalankan subtask non-autopilot.
 
 Fail-safe DENY dipilih sesuai prinsip CLAUDE.md §1.1: keamanan dulu — tool destruktif tidak pernah jalan tanpa persetujuan eksplisit.
 
@@ -205,8 +205,11 @@ Dipanggil dari endpoint `/approve` saat user klik tombol. Set result pada Future
 **`find_pending(approval_id) → PendingApproval | None`**  
 Cari satu pending approval by ID — dipakai `web/main.py` untuk cek kepemilikan (`owner_user_id`) SEBELUM memanggil `resolve()`.
 
-**`auto_approve(session_id, tool_name, tool_input, agent_identity=None) → bool`** *(async)*  
-Trust mode per-sesi (§ user request otonomi): tool YANG BUTUH APPROVAL tetap DIEKSEKUSI sungguhan, tapi tanpa Future/blocking — langsung catat ke `approval_log` dengan `decision="auto:trust_mode"` (berbeda dari `"approved"` manual, agar audit trail membedakan keputusan manusia vs toggle) lalu return `True`. Beda dari `queue_proposal`: manusia SEDANG hadir di sesi chat aktif (bukan autopilot tanpa manusia), hanya melewati klik. Caller (`AgentLoop._execute_tool`) yang memutuskan tool mana boleh lewat sini — `code_run` TIDAK PERNAH, berapa pun trust mode-nya (CLAUDE.md §1, lihat `core/agent_loop.py` § `_TRUST_MODE_EXEMPT`). `agent_identity` (§ Prioritas 9.2) dicatat SEKALIGUS PENTING di jalur ini — approval yang MELEWATI klik manusia justru paling perlu bisa dijawab "agent versi mana yang melakukannya".
+**`auto_approve(session_id, tool_name, tool_input, agent_identity=None, task_id=None, node_id=None) → bool`** *(async)*  
+Trust mode per-sesi (§ user request otonomi): tool YANG BUTUH APPROVAL tetap DIEKSEKUSI sungguhan, tapi tanpa Future/blocking — langsung catat ke `approval_log` dengan `decision="auto:trust_mode"` (berbeda dari `"approved"` manual, agar audit trail membedakan keputusan manusia vs toggle) lalu return `True`. Beda dari `queue_proposal`: manusia SEDANG hadir di sesi chat aktif (bukan autopilot tanpa manusia), hanya melewati klik. Caller (`AgentLoop._execute_tool`) yang memutuskan tool mana boleh lewat sini — `code_run`/`build_sandbox_image` TIDAK PERNAH, berapa pun trust mode-nya (CLAUDE.md §1, lihat `core/agent_loop.py` § `_TRUST_MODE_EXEMPT`). `agent_identity` (§ Prioritas 9.2) dicatat SEKALIGUS PENTING di jalur ini — approval yang MELEWATI klik manusia justru paling perlu bisa dijawab "agent versi mana yang melakukannya". `task_id`/`node_id` (§ Task Graph) — sama catatan dengan `request()` di atas.
+
+**`queue_proposal(session_id, tool_name, tool_input, task_id=None, node_id=None) → None`** *(async)*  
+Antri aksi destruktif dari autopilot sebagai PROPOSAL (`decision="proposal:pending"`) — TANPA Future hidup, TANPA memblokir. Dipanggil `AgentLoop._execute_tool` saat `AgentConfig.autopilot=True` dan tool butuh approval: tidak ada manusia menunggu, jadi eksekusi nyata TIDAK terjadi, keputusan tetap di tangan user yang meninjau lewat `GET /approvals` nanti (CLAUDE.md §17). Fail-soft: kegagalan tulis hanya di-log, tak menjatuhkan run autopilot. **Ini JALUR NYATA yang dipakai subtask DAG** (§ Task Graph, `core/task_executor.py`) — subtask SELALU `autopilot=True` (tak ada listener SSE/UI yang mengawasi sesinya, `request()`/`auto_approve()` biasa akan menggantung sampai timeout tanpa siapa pun melihat kartu approval-nya), jadi `task_id`/`node_id` di sini yang benar-benar terisi untuk approval dari subtask, bukan parameter serupa di `request()`/`auto_approve()`.
 
 **`pending_list(session_id=None, owner_user_id=None) → list[dict]`**  
 Kembalikan daftar approval yang masih menunggu **DARI `self._pending` IN-MEMORY SAJA**.

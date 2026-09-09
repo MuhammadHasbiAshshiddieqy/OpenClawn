@@ -451,6 +451,9 @@ Test untuk `core/audit.py`.
 | `test_log_decision_stores_agent_identity_when_given` | `agent_identity` tersimpan ke kolom `routing_events.agent_identity` |
 | `test_log_decision_agent_identity_defaults_to_none` | Caller lama tanpa `agent_identity` → `NULL`, bukan error |
 | `test_log_decision_writes_agent_identity_to_audit_chain` | Identitas ikut ke payload `audit_chain` (melengkapi § Prioritas 9.1), bukan cuma kolom DB |
+| `test_log_decision_stores_task_id_and_node_id_when_given` | **[§ Task Graph]** `task_id`/`node_id` opsional tersimpan di `routing_events` |
+| `test_log_decision_task_id_defaults_to_none` | Turn chat biasa (bukan subtask) → `NULL`, backward-compat |
+| `test_log_decision_writes_task_id_to_audit_chain` | `task_id`/`node_id` ikut ke payload `audit_chain` |
 | `test_identity_report_empty` | Tanpa data → list kosong |
 | `test_identity_report_excludes_null_identity` | Baris tanpa `agent_identity` TIDAK muncul sebagai grup "None" |
 | `test_identity_report_groups_by_role_and_identity` | Agregasi benar per `(role, agent_identity)` |
@@ -654,6 +657,10 @@ Test untuk `security/` — Shield, Vault, ApprovalGate (HITL).
 | `test_agent_identity_persisted_to_approval_log_via_auto_approve` | `agent_identity` tersimpan lewat `auto_approve()` — trust mode, paling penting karena tak ada klik manusia |
 | `test_agent_identity_defaults_to_none` | Caller lama tanpa `agent_identity` → `NULL`, bukan error |
 | `test_agent_identity_written_to_audit_chain_on_auto_approve` | Identitas ikut ke payload `audit_chain` entry `approval.auto` (melengkapi § Prioritas 9.1) |
+| `test_queue_proposal_stores_task_id_and_node_id` | **[§ Task Graph]** Jalur NYATA proposal dari subtask DAG (subtask SELALU `autopilot=True` → `queue_proposal`, bukan `request()`/`auto_approve()`) — `task_id`/`node_id` tersimpan |
+| `test_queue_proposal_task_id_defaults_to_none` | Proposal biasa (bukan dari subtask) → `NULL` |
+| `test_auto_approve_stores_task_id_and_node_id` | `task_id`/`node_id` opsional tersimpan lewat `auto_approve()` |
+| `test_request_stores_task_id_and_node_id` | `task_id`/`node_id` opsional tersimpan lewat `request()` |
 
 ---
 
@@ -663,7 +670,7 @@ Test untuk `tools/`.
 
 | Test | Yang Diverifikasi |
 |---|---|
-| `test_registry_has_all_28_tools` | Semua 28 tool terdaftar di registry |
+| `test_registry_has_all_29_tools` | Semua 29 tool terdaftar di registry |
 | `test_file_read_returns_content` | `FileReadTool` baca file yang ada |
 | `test_file_read_not_found` | File tidak ada → error dict (tidak crash) |
 | `test_file_write_creates_file` | `FileWriteTool` tulis konten |
@@ -686,6 +693,7 @@ Test untuk `tools/`.
 | `test_tool_audit_summary_aggregates` | `ToolAudit.summary()` agregasi total/errors/fail_rate per tool |
 | `test_tool_audit_record_defaults_actor_is_agent_true` | `actor_is_agent` default `1` di `tool_invocations` (§ Audit log format actor_is_agent) |
 | `test_tool_audit_record_stores_user_id` | `user_id` opsional tersimpan, query-able terpisah dari `session_id` |
+| `test_tool_audit_record_stores_task_id_and_node_id` | **[§ Task Graph]** `task_id`/`node_id` opsional tersimpan; `NULL` untuk turn biasa |
 | `test_read_many_reads_multiple_files` | `read_many` baca beberapa file workspace-safe sekaligus |
 | `test_read_many_per_file_error_does_not_fail_others` | Satu file gagal → error per-file, lain tetap terbaca |
 | `test_read_many_requires_list` | `paths` bukan list → error |
@@ -707,6 +715,65 @@ Test untuk `tools/`.
 | `test_web_fetch_rejects_internal_host` | `web_fetch` ke host internal ditolak SEBELUM request keluar (tanpa approval) |
 | `test_web_fetch_rejects_non_http_scheme` | Scheme selain http/https (mis. `file://`) ditolak |
 | `test_http_request_rejects_internal_host` | `http_request` diblokir SSRF walau butuh approval |
+
+---
+
+### `tests/test_task_graph.py`
+
+Test untuk `core/task_graph.py` — model DAG murni (§ Task Graph, Fase 1). Tanpa I/O/DB/LLM.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_valid_diamond_dag_accepted` | DAG valid (dependency berlian A→B,A→C,B+C→D) lolos validasi |
+| `test_empty_graph_rejected` | Graph tanpa node → error |
+| `test_duplicate_node_id_rejected` | `node_id` duplikat ditolak SEBELUM tertimpa diam-diam oleh dict comprehension internal |
+| `test_unknown_depends_on_target_rejected` | `depends_on` ke `node_id` tak ada di graph → error |
+| `test_self_dependency_rejected` | Node `depends_on` dirinya sendiri → error |
+| `test_unknown_role_rejected` | Role tanpa `roles/<role>/soul.toml` → error (cek sama `infra/manifest.py`) |
+| `test_simple_two_node_cycle_detected` / `test_longer_cycle_detected` | Siklus 2-node dan siklus lebih panjang terdeteksi (DFS 3-warna) |
+| `test_ready_nodes_on_diamond` | `ready_nodes()` benar pada dependency berlian — D butuh KEDUA B dan C selesai |
+| `test_ready_nodes_excludes_non_pending` | Node yang sudah `completed` tak muncul lagi di `ready_nodes()` |
+| `test_transitive_dependents_diamond` | `transitive_dependents()` menangkap SEMUA turunan (langsung+tak langsung), bukan cuma anak langsung |
+| `test_is_terminal` | `is_terminal()` benar untuk kombinasi status campuran |
+
+---
+
+### `tests/test_task_executor.py`
+
+Test untuk `core/task_executor.py` — eksekusi DAG sungguhan (§ Task Graph,
+Fase 2: concurrency engine + fault containment). `AgentLoop` di-mock TOTAL
+(`FakeAgentLoop`, CLAUDE.md §5) — tak ada LLM/Docker sungguhan.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_all_nodes_succeed_graph_completed` | Semua node sukses → graph `status="completed"`, tersimpan ke `task_graphs` |
+| `test_independent_nodes_run_concurrently` | Dua node TANPA `depends_on` overlap eksekusinya (bukan sekuensial) |
+| `test_max_concurrency_respected` | 5 node independen, `max_concurrency=2` → tak pernah lebih dari 2 jalan bersamaan |
+| `test_node_exhausts_retries_then_failed` | Node gagal terus → `status="failed"` setelah `max_node_attempts` percobaan |
+| `test_node_succeeds_after_retry` | Node gagal sekali lalu sukses → `status="completed"`, `attempt_count=2` |
+| `test_failed_node_blocks_dependents_not_whole_graph` | Node gagal permanen → HANYA `transitive_dependents()`-nya `blocked`; node independen lain tetap `completed`; graph `status="partial"` |
+| `test_retry_backoff_is_awaited` | Backoff eksponensial (`base * 2^(attempt-1)`) benar-benar di-`await` dengan nilai yang tepat |
+| `test_task_nodes_persisted_to_db` | Baris `task_graphs`/`task_nodes` benar-benar tertulis (goal, owner, prompt, result_summary), bukan cuma di memori |
+
+---
+
+### `tests/test_task_graph_submit.py`
+
+Test untuk `tools/task_graph_submit.py` (§ Task Graph, Fase 1) — validasi
+input SEBELUM DB/executor disentuh.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_missing_session_id_errors` / `test_missing_db_errors` | Konteks internal hilang → error, bukan crash |
+| `test_empty_nodes_errors_without_touching_db` | `nodes` kosong → error, ZERO baris `task_graphs` tertulis |
+| `test_too_many_nodes_rejected` | > `MAX_NODES` (20) → ditolak |
+| `test_node_missing_required_field_rejected` | Subtask tanpa `prompt`/`role`/`node_id` → error |
+| `test_depends_on_wrong_type_rejected` | `depends_on` bukan list string → error |
+| `test_cyclic_graph_rejected_zero_db_writes` | **Fail-closed inti:** graph cyclic ditolak SEBELUM satu subtask pun mulai — ZERO baris `task_graphs`/`task_nodes` |
+| `test_unknown_role_rejected` | Role tak dikenal → error, ZERO baris DB |
+| `test_valid_submission_executes_and_persists` | Submission valid → `TaskGraphExecutor` sungguhan dipanggil (`AgentLoop` di-mock via monkeypatch `_build_agent`), hasil dikembalikan sebagai return value tool |
+| `test_default_user_id_not_recorded_as_owner` | `user_id="default"` (auth nonaktif) → `owner_user_id` TETAP `None`, konsisten pola di seluruh codebase |
+| `test_registered_and_no_approval` | Terdaftar di `TOOL_REGISTRY`, `requires_approval=False` |
 
 ---
 

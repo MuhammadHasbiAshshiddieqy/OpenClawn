@@ -59,6 +59,7 @@ TOOL_REGISTRY = {
     # interaksi & manajemen
     "ask_user":     AskUserTool(),
     "todo_write":   TodoWriteTool(),
+    "task_graph_submit": TaskGraphSubmitTool(),
 }
 ```
 
@@ -333,6 +334,45 @@ Agent mengelola daftar langkah multi-step yang terlihat user. Tiap panggilan **m
 
 ---
 
+## `tools/task_graph_submit.py`
+
+### `TaskGraphSubmitTool` — `task_graph_submit`
+
+**[§ Task Graph, dari `IMPROVEMENT-Sandbox-Isolation-Parallelization.md` Fase
+1+2]** Agent memecah SATU goal jadi beberapa subtask EKSPLISIT dengan
+dependency — bukan auto-decompose LLM terpisah (owner memilih submission
+eksplisit untuk versi ini, lihat `docs/core.md` § Task Graph). Subtask
+independen (tak saling `depends_on`) berjalan **PARALEL**, masing-masing
+sebagai `AgentLoop` terpisah dengan sesi sendiri (context hygiene — tak ada
+transkrip mentah dibagi antar-subtask). Tool ini **BLOCKS** sampai seluruh
+graph selesai (belum ada endpoint polling/observability terpisah di versi
+ini — itu fase lanjutan yang ditunda) lalu mengembalikan ringkasan hasil
+tiap subtask sebagai return value.
+
+- `requires_approval = False` — tool ini SENDIRI hanya mengorkestrasi turn
+  agent lain, tak melakukan aksi destruktif langsung. Aksi destruktif yang
+  subtask-nya coba lakukan tetap digerbangi individual: tiap subtask SELALU
+  `autopilot=True` (lihat `core/task_executor.py`), jadi tool butuh-approval
+  di dalamnya diantri sebagai proposal (`queue_proposal`), TIDAK menggantung.
+- Input: `{"goal": "..." (opsional), "nodes": [{"node_id", "role", "prompt",
+  "depends_on": [...] (opsional)}]}` (maks 20 subtask)
+- Validasi SEBELUM DB/eksekusi disentuh (fail-closed, semua-atau-tidak):
+  field wajib per node, `depends_on` harus list string, lalu
+  `TaskGraph.validate()` (node_id duplikat, `depends_on` ke node tak dikenal,
+  role tak dikenal, siklus) — pelanggaran apa pun → `{"error": "..."}` TANPA
+  satu baris DB pun tertulis, TANPA satu subtask pun dimulai.
+- `session_id`/`role` disuntik `AgentLoop` sebagai `_session_id`/`_role`
+  (pola sama `todo_write` dkk); `_user_id` JUGA disuntik khusus tool ini
+  (dipakai `task_graphs.owner_user_id`, `None` bila `user_id == "default"`)
+  — tool lain di atas tak memakainya, jadi tak ikut disuntik.
+- Output sukses: `{"status": "completed"|"partial"|"failed", "nodes":
+  {node_id: {"status", "result_summary", "error"}}}`.
+- Output error: `{"error": "..."}` bila validasi gagal atau konteks sesi/DB hilang.
+- Izin role: `pm`/`dev`/`qa`/`data` (role yang sudah punya `todo_write`) —
+  BUKAN `security` (read-only, konsisten tool set terbatasnya).
+
+---
+
 ## `tools/blocker.py`
 
 ### `ReportBlockerTool` — `report_blocker`
@@ -582,6 +622,7 @@ Prioritas resolusi folder di `AgentLoop.run()`: (1) `workspace_override` dari fo
 | `json_query` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 | `ask_user` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 | `todo_write` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
+| `task_graph_submit` | ✅ | ✅ | ✅ | ✅ | ❌ | Tidak |
 | `report_blocker` | ✅ | ✅ | ✅ | ✅ | ✅ | Tidak |
 
 Permission dikontrol via `soul.toml[tools][allowed]` tiap role — bukan hardcoded di kode tool. Semua tool filesystem dibatasi ke `workspace_root` (lihat catatan di `TOOL_REGISTRY`). `security` read-only murni (tanpa write/exec/network); `data` boleh tulis dokumen & jalankan kode tapi tidak `shell_run`/`http_request`.

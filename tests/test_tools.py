@@ -18,8 +18,8 @@ def dataclasses_replace(obj, **changes):
 # ── TOOL_REGISTRY ─────────────────────────────────────────────────────────────
 
 
-def test_registry_has_all_28_tools():
-    """Semua 28 tool harus terdaftar di TOOL_REGISTRY."""
+def test_registry_has_all_29_tools():
+    """Semua 29 tool harus terdaftar di TOOL_REGISTRY."""
     expected = {
         "file_read",
         "read_many",
@@ -48,6 +48,7 @@ def test_registry_has_all_28_tools():
         "json_query",
         "ask_user",
         "todo_write",
+        "task_graph_submit",
         "report_blocker",
     }
     assert set(TOOL_REGISTRY.keys()) == expected
@@ -741,6 +742,27 @@ async def test_tool_audit_record_stores_user_id():
 
     row = await db.fetchone("SELECT user_id FROM tool_invocations WHERE tool_name='grep'")
     assert row["user_id"] == "bob"
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_tool_audit_record_stores_task_id_and_node_id():
+    """§ Task Graph: opsional, NULL untuk turn biasa — subtask DAG mengisinya
+    agar tool_invocations query-able per graph/node."""
+    from core.tool_audit import ToolAudit
+
+    agent, db = await _agent_with_db()
+    audit = ToolAudit(db)
+    await audit.record("s", "dev", "grep", "ok", 10, task_id="task-1", node_id="node-a")
+    await audit.record("s", "dev", "glob", "ok", 5)  # tanpa task_id/node_id
+
+    row1 = await db.fetchone("SELECT task_id, node_id FROM tool_invocations WHERE tool_name='grep'")
+    assert row1["task_id"] == "task-1"
+    assert row1["node_id"] == "node-a"
+
+    row2 = await db.fetchone("SELECT task_id, node_id FROM tool_invocations WHERE tool_name='glob'")
+    assert row2["task_id"] is None
+    assert row2["node_id"] is None
     await db.close()
 
 

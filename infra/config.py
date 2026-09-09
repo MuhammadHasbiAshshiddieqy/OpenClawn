@@ -175,6 +175,21 @@ class AppConfig:
     # (network, DB lock) tidak boleh membekukan turn. code_run/shell_run punya timeout
     # sandbox sendiri 30s, jadi batas ini sedikit di atasnya agar tidak memotong sandbox.
     tool_timeout_sec: int = 40
+    # === Task Graph (DAG subtask, § IMPROVEMENT-Sandbox-Isolation-Parallelization.md
+    # Fase 1+2) — core/task_graph.py + core/task_executor.py ===
+    # Batas subtask BERSAMAAN dalam satu graph — konservatif karena tiap subtask
+    # adalah AgentLoop penuh (bisa memanggil code_run/sandbox sendiri); default
+    # lebih tinggi berisiko membebani host tanpa manfaat nyata untuk single-host self-host.
+    task_graph_max_concurrency: int = 3
+    # Percobaan maksimum per node sebelum menyerah permanen (status='failed').
+    # INI SEKALIGUS breaker-nya — tak ada abstraksi circuit-breaker terpisah,
+    # lihat docstring core/task_executor.py.
+    task_graph_max_node_attempts: int = 3
+    # Backoff dasar antar percobaan (eksponensial: base * 2^(attempt-1)).
+    task_graph_retry_backoff_sec: float = 2.0
+    # Timeout keras per node (§1.3) — subtask yang menggantung tak boleh
+    # membekukan seluruh graph selamanya.
+    task_graph_node_timeout_sec: int = 300
     # === Headroom compaction (opt-in via /settings, terinspirasi chopratejas/headroom) ===
     # Saat budget token habis, compactor default MEMOTONG turn lama (truncation — yang
     # hilang benar-benar hilang, tapi jujur). Compaction MERINGKAS turn lama jadi satu

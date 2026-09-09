@@ -34,6 +34,10 @@ class PendingApproval:
     # yang menyertakan versi KONFIGURASI (soul.toml efektif) saat approval ini
     # dibuat, bukan cuma nama role. None = caller belum menghitungnya.
     agent_identity: str | None = None
+    # § Task Graph (core/task_executor.py): diisi bila approval ini dipicu dari
+    # eksekusi satu subtask DAG. None untuk turn chat biasa.
+    task_id: str | None = None
+    node_id: str | None = None
     future: asyncio.Future = field(default_factory=lambda: asyncio.get_event_loop().create_future())
 
 
@@ -66,6 +70,8 @@ class ApprovalGate:
         approval_id: str | None = None,
         owner_user_id: str | None = None,
         agent_identity: str | None = None,
+        task_id: str | None = None,
+        node_id: str | None = None,
     ) -> bool:
         """`approval_id` opsional — caller (AgentLoop) bisa pre-generate & emit ke UI
         SEBELUM memanggil ini, agar user tahu ID-nya sementara request() masih menunggu
@@ -79,7 +85,13 @@ class ApprovalGate:
 
         `agent_identity` (§ Prioritas 9.2, Non-Human Identity): identitas agent
         (role + hash konfigurasi) yang memicu approval ini — melengkapi
-        `owner_user_id` (siapa MANUSIA-nya) dengan "agent versi mana"."""
+        `owner_user_id` (siapa MANUSIA-nya) dengan "agent versi mana".
+
+        `task_id`/`node_id` (§ Task Graph): diisi bila caller adalah eksekusi
+        subtask DAG. CATATAN: subtask DAG SELALU `autopilot=True` (lihat
+        `core/task_executor.py`), jadi jalur normalnya adalah `queue_proposal`
+        di bawah, bukan `request()` ini — parameter di sini disediakan untuk
+        caller masa depan yang mungkin menjalankan subtask non-autopilot."""
         approval_id = approval_id or uuid.uuid4().hex
         pending = PendingApproval(
             approval_id=approval_id,
@@ -88,6 +100,8 @@ class ApprovalGate:
             tool_input=tool_input,
             owner_user_id=owner_user_id,
             agent_identity=agent_identity,
+            task_id=task_id,
+            node_id=node_id,
         )
         self._pending[approval_id] = pending
 
@@ -98,8 +112,9 @@ class ApprovalGate:
         # approval lintas status pending→approved/rejected/timeout.
         cursor = await self.db.execute(
             """INSERT INTO approval_log
-               (session_id, tool_name, tool_input, decision, approval_id, owner_user_id, agent_identity)
-               VALUES (?,?,?,?,?,?,?)""",
+               (session_id, tool_name, tool_input, decision, approval_id, owner_user_id,
+                agent_identity, task_id, node_id)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (
                 session_id,
                 tool_name,
@@ -108,6 +123,8 @@ class ApprovalGate:
                 approval_id,
                 owner_user_id,
                 agent_identity,
+                task_id,
+                node_id,
             ),
         )
         await self.chain.append(
@@ -245,6 +262,8 @@ class ApprovalGate:
         tool_name: str,
         tool_input: dict,
         agent_identity: str | None = None,
+        task_id: str | None = None,
+        node_id: str | None = None,
     ) -> bool:
         """Setuju otomatis untuk "Trust mode" per-sesi (§ user request otonomi).
 
@@ -261,9 +280,18 @@ class ApprovalGate:
         bisa dijawab "agent versi mana yang melakukannya".
         """
         cursor = await self.db.execute(
-            """INSERT INTO approval_log (session_id, tool_name, tool_input, decision, agent_identity)
-               VALUES (?,?,?,?,?)""",
-            (session_id, tool_name, json.dumps(tool_input), "auto:trust_mode", agent_identity),
+            """INSERT INTO approval_log
+               (session_id, tool_name, tool_input, decision, agent_identity, task_id, node_id)
+               VALUES (?,?,?,?,?,?,?)""",
+            (
+                session_id,
+                tool_name,
+                json.dumps(tool_input),
+                "auto:trust_mode",
+                agent_identity,
+                task_id,
+                node_id,
+            ),
         )
         # DIRANTAI justru karena ini MELEWATI klik manusia — "aksi butuh-approval
         # mana yang dijalankan tanpa persetujuan eksplisit" adalah pertanyaan
@@ -276,7 +304,14 @@ class ApprovalGate:
         )
         return True
 
-    async def queue_proposal(self, session_id: str, tool_name: str, tool_input: dict) -> None:
+    async def queue_proposal(
+        self,
+        session_id: str,
+        tool_name: str,
+        tool_input: dict,
+        task_id: str | None = None,
+        node_id: str | None = None,
+    ) -> None:
         """Antri aksi destruktif dari autopilot sebagai PROPOSAL (tanpa Future hidup).
 
         Berbeda dari `request()`: tidak ada manusia menunggu, jadi tidak ada Future &
@@ -284,12 +319,25 @@ class ApprovalGate:
         approval_log agar user bisa meninjau nanti. Eksekusi nyata TIDAK terjadi di
         sini — keputusan tetap di tangan user (CLAUDE.md §17). Fail-soft: kegagalan
         tulis hanya di-log, tidak menjatuhkan run autopilot.
+
+        `task_id`/`node_id` (§ Task Graph): jalur INI yang sebenarnya dipakai
+        proposal dari subtask DAG — `core/task_executor.py` SELALU menjalankan
+        subtask dengan `autopilot=True`, jadi tool butuh-approval di dalam
+        subtask berakhir di sini, bukan di `request()`/`auto_approve()`.
         """
         try:
             await self.db.execute(
-                """INSERT INTO approval_log (session_id, tool_name, tool_input, decision)
-                   VALUES (?,?,?,?)""",
-                (session_id, tool_name, json.dumps(tool_input), "proposal:pending"),
+                """INSERT INTO approval_log
+                   (session_id, tool_name, tool_input, decision, task_id, node_id)
+                   VALUES (?,?,?,?,?,?)""",
+                (
+                    session_id,
+                    tool_name,
+                    json.dumps(tool_input),
+                    "proposal:pending",
+                    task_id,
+                    node_id,
+                ),
             )
         except Exception as e:  # noqa: BLE001 — antrian proposal bukan jalur kritis
             log.error("proposal_queue_failed", session=session_id, tool=tool_name, error=str(e))

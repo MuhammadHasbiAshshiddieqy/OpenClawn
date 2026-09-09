@@ -17,6 +17,7 @@ from tools.document import DocWriteTool, PdfReadTool, PdfWriteTool
 from tools.data import DbQueryTool, JsonQueryTool, MemorySearchTool
 from tools.git import GitDiffTool, GitLogTool, GitStatusTool
 from tools.todo import TodoWriteTool
+from tools.task_graph_submit import TaskGraphSubmitTool
 from tools.blocker import ReportBlockerTool
 from tools.workspace_tool import SetWorkdirTool
 
@@ -54,5 +55,6 @@ TOOL_REGISTRY: dict[str, Tool] = {
     # interaksi & manajemen
     "ask_user": AskUserTool(),
     "todo_write": TodoWriteTool(),
+    "task_graph_submit": TaskGraphSubmitTool(),
     "report_blocker": ReportBlockerTool(),
 }
