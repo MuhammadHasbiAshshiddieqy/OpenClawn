@@ -1371,14 +1371,103 @@ backlog untuk deployment enterprise/multi-tenant masa depan, bukan lupa —
 bisa masuk lewat knob `sandbox_runtime` yang SAMA nanti bila runtime
 container-nya sendiri diganti (mis. `sandbox_runtime="kata"`).
 
-**Dengan ini, proposal `IMPROVEMENT-Sandbox-Isolation-Parallelization.md`
-SELESAI diproses**: Fase 1, 2, 4, 5 dikerjakan; Fase 3 (sandbox lifecycle)
-sengaja ditunda menunggu keputusan trade-off keamanan terpisah dari owner.
+**Susulan (2026-09-15): Fase 3 (sandbox lifecycle) — ✅ SELESAI.** Fase yang
+sengaja ditunda paling akhir karena satu-satunya yang melonggarkan trade-off
+keamanan nyata. Ditanya eksplisit lewat `AskUserQuestion` (dua putaran):
+"bangun sekarang, opt-in per sesi" (bukan default-on, bukan ditunda lagi), lalu
+"tersedia untuk semua role dengan `code_run`" (`dev`/`qa`/`data` — BUKAN
+`pm`/`security` yang tak punya `code_run` sama sekali). Direncanakan penuh
+lewat `EnterPlanMode`/`ExitPlanMode` (riset fakta-dulu: dikonfirmasi tak ada
+`docker.sock` mount/`DOCKER_HOST` di repo, jadi `docker run -d`/`exec`/
+`pause`/named volume semua terjangkau via CLI host yang sama seperti `docker
+run --rm` sebelumnya — nol infra baru) sebelum satu baris kode ditulis.
 
-Diverifikasi via `uv run --python 3.12`: **1049 passed** (+2:
-`test_base_docker_args_omits_runtime_flag_by_default`,
-`test_base_docker_args_passes_runtime_flag_when_non_default`), ruff
-check/format bersih, tanpa dependency baru.
+**Trade-off keamanan yang diterima, jujur dicatat:** sebelumnya SETIAP
+`code_run` = `docker run --rm` + temp-dir sekali pakai — state (file, package
+terinstall) hilang total begitu container keluar, tak ada jejak yang bisa
+bertahan lintas panggilan. Sekarang, sesi yang secara EKSPLISIT memanggil
+tool baru `sandbox_persist_enable` mendapat container `docker run -d` +
+named Docker volume untuk `/work` yang bertahan lintas panggilan `code_run`
+BERIKUTNYA dalam sesi yang sama — kode berbahaya di satu panggilan BISA
+meninggalkan jejak yang bertahan sampai container di-recycle. `--network
+none`, `--read-only` (kecuali `/work`), non-root, `no-new-privileges` TETAP
+tak berubah — HANYA persistensi filesystem yang dilonggarkan, dan HANYA untuk
+sesi yang secara sadar memilihnya (opt-in, bukan default).
+
+**Keputusan skop dibuat transparan saat planning (bukan ditanyakan terpisah,
+dinilai cukup rendah-risiko untuk diputuskan langsung — dicatat di plan agar
+owner bisa menantang sebelum `ExitPlanMode` disetujui):** persistensi HANYA
+untuk `code_run`, TIDAK PERNAH `shell_run`. `shell_run` ada murni untuk
+inspeksi workspace ASLI read-only (grep/find/git log); `code_run` sudah sama
+sekali tak pernah mount workspace asli (kode ditulis ke temp-dir sekali
+pakai) — mengganti mount itu dengan volume persisten adalah perubahan
+mandiri, mencampurnya ke `shell_run` akan mencampur dua concern tak
+berhubungan tanpa manfaat.
+
+**Hasil:**
+- `infra/sandbox_lifecycle.py` (baru) — `CURRENT_PERSISTENT_SANDBOX`
+  (ContextVar) + `effective_persistent_container()` + `SessionSandboxContainerStore`
+  (CRUD `session_sandbox_container`, termasuk `count_active()` untuk batas
+  DoS). Pola SAMA PERSIS `infra/sandbox_image.py`
+  (`CURRENT_SANDBOX_IMAGE`/`SessionSandboxImageStore`) — ContextVar dipulihkan
+  `AgentLoop.run()` dari DB tiap turn, direset di `finally`, bertahan lintas
+  turn DAN restart server (container Docker & baris SQLite sama-sama
+  bertahan lintas restart proses app).
+- Tabel baru `session_sandbox_container` (`session_id` PK, `container_id`,
+  `volume_name`, `state` running/paused, `created_at`, `last_used_at`) —
+  state operasional MURNI (baris DIHAPUS begitu container di-destroy, bukan
+  disimpan `state='destroyed'`).
+- `tools/sandbox.py::DockerSandbox` — 6 method baru: `create_persistent`
+  (`docker run -d`, nama container/volume DETERMINISTIK dari hash
+  `session_id` — idempoten, hindari parsing stdout `docker run` untuk id),
+  `exec_persistent` (kode ditulis via **stdin**, `docker exec -i ... cat >
+  script.py` — bukan diinterpolasi ke argumen shell, nol risiko shell
+  injection dari isi kode), `pause_persistent`/`resume_persistent` (`docker
+  pause`/`unpause`), `_run_lifecycle_command` (helper bersama), dan
+  `destroy_persistent` (`docker rm -f` + `docker volume rm`, FAIL-SOFT
+  sepenuhnya — pembersihan tak boleh diblokir container setengah rusak).
+  `run_python` gains satu branch di awal: `effective_persistent_container()`
+  terisi → delegasi ke `exec_persistent`, kalau tidak jalur ephemeral lama
+  byte-identik.
+- Tool baru `sandbox_persist_enable` (`tools/sandbox_persist.py`) —
+  `requires_approval=True` **selalu**, masuk `_TRUST_MODE_EXEMPT` (sekelas
+  `build_sandbox_image`, malah lebih sensitif: state writable yang bertahan
+  lintas panggilan, bukan cuma network sesaat saat build). Idempoten (sesi
+  yang sudah opt-in → no-op sukses, bukan container kedua). Diizinkan role
+  `dev`/`qa`/`data` (yang sudah punya `code_run`), BUKAN `pm`/`security`.
+- `AppConfig.sandbox_persist_max_containers` (default 5) — batas DoS baru
+  yang model ephemeral lama TAK PUNYA (banyak sesi opt-in sekaligus bisa
+  membebani host tanpa batas), dicek `sandbox_persist_enable` SEBELUM
+  membuat container baru.
+- `core/sandbox_reaper.py::SandboxReaper` (baru) — bentuk SAMA PERSIS
+  `AutopilotScheduler` (`start()`/`stop()`/`_loop()`/`run_due_once()` yang
+  testable tanpa tick nyata, `add_done_callback` crash logger). Idle >
+  `sandbox_persist_idle_ttl_sec` (600s) → `pause_persistent`; tak dipakai >
+  `sandbox_persist_destroy_ttl_sec` (3600s, dicek TERLEPAS state) →
+  `destroy_persistent` + hapus baris DB permanen. Dipasang `web/main.py`
+  lifespan persis seperti `autopilot_scheduler`.
+- `AgentLoop.run()` — satu blok ContextVar restore lagi (bentuk SAMA PERSIS
+  dua blok sebelumnya untuk workspace/sandbox-image): muat
+  `session_sandbox_container`, `touch()` (tandai dipakai turn ini — dasar
+  keputusan idle reaper), auto-`resume_persistent` bila `paused` (transparan
+  bagi model, tak perlu tool "resume" terpisah), set
+  `CURRENT_PERSISTENT_SANDBOX`.
+
+**Dengan ini, proposal `IMPROVEMENT-Sandbox-Isolation-Parallelization.md`
+SELESAI diproses SEPENUHNYA**: semua 5 fase (DAG, concurrency, sandbox
+lifecycle, observability/replay, runtime pluggable) sudah dikerjakan atas
+keputusan eksplisit owner di tiap titik trade-off.
+
+Diverifikasi via `uv run --python 3.12`: **1084 passed** (+35: 8 di
+`tests/test_sandbox_lifecycle.py` untuk `SessionSandboxContainerStore` CRUD
+murni, 10 di `tests/test_sandbox_persist_tool.py` untuk tool (idempoten, cap
+enforcement, role allow-list dev/qa/data vs pm/security), 6 di
+`tests/test_sandbox_reaper.py` untuk pause/destroy/untouched TTL logic, 8
+argv-verification baru di `tests/test_tools.py` untuk `DockerSandbox`
+persistent methods (flag keamanan wajib tetap ada di `docker run -d`, kode
+via stdin bukan argv, delegasi `run_python`↔`exec_persistent`), 1 di
+`tests/test_trust_mode.py` untuk `_TRUST_MODE_EXEMPT`, plus tool count
+29→30), ruff check/format bersih, tanpa dependency baru.
 
 ---
 

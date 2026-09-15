@@ -12,6 +12,8 @@ from infra.logging import log
 from infra.settings import SettingsStore
 from infra.workspace import CURRENT_WORKSPACE_ROOT, SessionWorkspaceStore
 from infra.sandbox_image import CURRENT_SANDBOX_IMAGE, SessionSandboxImageStore
+from infra.sandbox_lifecycle import CURRENT_PERSISTENT_SANDBOX, SessionSandboxContainerStore
+from tools.sandbox import DockerSandbox
 from core.router import SmartRouter
 from core.agent_identity import agent_identity
 from core.audit import RoutingAuditor
@@ -129,7 +131,10 @@ _FILE_WRITE_TOOLS = frozenset(
 # "build_sandbox_image" (§ Prioritas 8.3): sekelas sensitivitas dengan code_run —
 # `docker build`-nya sendiri membuka network sementara (§ residual risk didokumentasikan
 # `DockerSandbox.build_project_image`), jadi tak boleh lolos trust mode juga.
-_TRUST_MODE_EXEMPT = frozenset({"code_run", "build_sandbox_image"})
+# "sandbox_persist_enable" (§ Fase 3, sandbox lifecycle): SEKALIGUS lebih sensitif —
+# membuat state WRITABLE yang bertahan lintas panggilan (bukan cuma network
+# sesaat saat build), jadi non-negotiable sama seperti dua tool di atas.
+_TRUST_MODE_EXEMPT = frozenset({"code_run", "build_sandbox_image", "sandbox_persist_enable"})
 
 
 def _format_tool_params(tool_name: str, params: dict) -> str:
@@ -367,6 +372,36 @@ class AgentLoop:
         img_token = None
         if sandbox_image:
             img_token = CURRENT_SANDBOX_IMAGE.set(sandbox_image)
+
+        # Sandbox PERSISTEN (§ Fase 3, sandbox lifecycle — owner disetujui
+        # eksplisit): sama pola & alasan persis dengan dua ContextVar di atas.
+        # Bila sesi ini pernah sukses `sandbox_persist_enable`, code_run untuk
+        # SISA sesi (termasuk lintas restart server — container Docker & baris
+        # DB sama-sama bertahan lintas restart proses app) otomatis exec ke
+        # container itu, bukan diam-diam balik ke ephemeral. `touch()` menandai
+        # container ini BENAR-BENAR dipakai turn ini (dibaca `core/sandbox_reaper.py`
+        # untuk keputusan idle/destroy) — dan bila sempat di-pause karena idle,
+        # bangunkan otomatis DI SINI, transparan bagi model (tak perlu tool baru
+        # untuk "resume", `code_run` biasa saja cukup).
+        persist_token = None
+        if self.cfg.persist_history:
+            container = await SessionSandboxContainerStore(self.db).get(self.cfg.session_id)
+            if container is not None:
+                await SessionSandboxContainerStore(self.db).touch(self.cfg.session_id)
+                if container["state"] == "paused":
+                    sandbox = DockerSandbox()
+                    result = await sandbox.resume_persistent(container["container_id"])
+                    if result["ok"]:
+                        await SessionSandboxContainerStore(self.db).set_state(
+                            self.cfg.session_id, "running"
+                        )
+                    else:
+                        log.warning(
+                            "sandbox_persistent_resume_failed",
+                            session=self.cfg.session_id,
+                            error=result["error"],
+                        )
+                persist_token = CURRENT_PERSISTENT_SANDBOX.set(container["container_id"])
         try:
             async for ev in self._run(user_message):
                 yield ev
@@ -375,6 +410,8 @@ class AgentLoop:
                 CURRENT_WORKSPACE_ROOT.reset(ws_token)
             if img_token is not None:
                 CURRENT_SANDBOX_IMAGE.reset(img_token)
+            if persist_token is not None:
+                CURRENT_PERSISTENT_SANDBOX.reset(persist_token)
 
     async def _run(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         start = time.monotonic()
@@ -826,9 +863,10 @@ class AgentLoop:
         policy_forces_approval = policy_decision.action == "require_approval"
 
         # Tool internal per-sesi (todo_write, report_blocker, set_workdir,
-        # build_sandbox_image § Prioritas 8.3): suntik konteks sesi/role. Tool tak
-        # menerima ini via signature execute; model tak perlu — & tak boleh —
-        # mengarang session_id/role (sumber kebenaran = AgentLoop, bukan output model).
+        # build_sandbox_image § Prioritas 8.3, sandbox_persist_enable § Fase 3):
+        # suntik konteks sesi/role. Tool tak menerima ini via signature execute;
+        # model tak perlu — & tak boleh — mengarang session_id/role (sumber
+        # kebenaran = AgentLoop, bukan output model).
         if name in (
             "todo_write",
             "report_blocker",
@@ -836,6 +874,7 @@ class AgentLoop:
             "memory_search",
             "build_sandbox_image",
             "task_graph_submit",
+            "sandbox_persist_enable",
         ):
             input_data = {
                 **input_data,

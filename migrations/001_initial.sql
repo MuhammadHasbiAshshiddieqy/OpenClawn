@@ -62,6 +62,22 @@ CREATE TABLE IF NOT EXISTS session_sandbox_image (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Container sandbox PERSISTEN aktif per-sesi (§ IMPROVEMENT-Sandbox-Isolation-
+-- Parallelization.md Fase 3, sandbox lifecycle) — lihat
+-- infra/sandbox_lifecycle.py::SessionSandboxContainerStore. Diisi setelah tool
+-- sandbox_persist_enable sukses; code_run (HANYA code_run, tidak shell_run)
+-- otomatis exec ke container ini alih-alih docker run --rm sekali-pakai.
+-- Baris DIHAPUS oleh core/sandbox_reaper.py begitu container di-destroy
+-- (state operasional murni, bukan audit trail — tak ada nilai menyimpan histori).
+CREATE TABLE IF NOT EXISTS session_sandbox_container (
+    session_id TEXT PRIMARY KEY,
+    container_id TEXT NOT NULL,
+    volume_name TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'running',   -- running | paused
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Metadata sesi chat single-agent untuk sidebar riwayat (§ user report: "chat
 -- selalu ke-reset", tak ada cara membuka chat baru/lanjutkan/hapus riwayat).
 -- Terpisah dari session_turns (transkrip per-giliran) — ini metadata TAMPILAN

@@ -188,6 +188,17 @@ class AppConfig:
     # `docker build` (`build_project_image`) — beda skop, isolasi build-time
     # sudah punya alasan lain (network sengaja terbuka SAAT build saja).
     sandbox_runtime: str = "runc"
+    # § IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3 (sandbox
+    # lifecycle) — owner disetujui EKSPLISIT via AskUserQuestion setelah
+    # trade-off keamanan dijelaskan (lihat `infra/sandbox_lifecycle.py`).
+    # Idle → pause (hemat CPU, container masih ada); lebih lama tak dipakai →
+    # destroy (container + volume dihapus fisik). `sandbox_persist_max_containers`
+    # menutup permukaan DoS baru yang model ephemeral lama tak punya — banyak
+    # sesi opt-in sekaligus tak boleh membebani host tanpa batas.
+    sandbox_persist_idle_ttl_sec: int = 600
+    sandbox_persist_destroy_ttl_sec: int = 3600
+    sandbox_persist_max_containers: int = 5
+    sandbox_reaper_tick_sec: int = 60
     # === Task Graph (DAG subtask, § IMPROVEMENT-Sandbox-Isolation-Parallelization.md
     # Fase 1+2) — core/task_graph.py + core/task_executor.py ===
     # Batas subtask BERSAMAAN dalam satu graph — konservatif karena tiap subtask

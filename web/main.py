@@ -30,6 +30,7 @@ from core.audit_anchor import verify_against_anchors, write_anchor
 from core.late_execute import execute_orphan_approval
 from core.llm_client import close_shared_http_client, get_shared_http_client
 from core.autopilot import AutopilotScheduler, AutopilotStore
+from core.sandbox_reaper import SandboxReaper
 from core.skill_pack import SkillPack
 from core.mcp_registry import MCPRegistry
 from memory.curator import SkillCuratorManager
@@ -142,6 +143,9 @@ async def _run_autopilot(ap: dict) -> int:
 
 autopilot_store = AutopilotStore(db)
 autopilot_scheduler = AutopilotScheduler(autopilot_store, runner=_run_autopilot, config=CONFIG)
+# § Fase 3 (sandbox lifecycle) — reaper hidup selama server hidup, pola sama
+# persis autopilot_scheduler di atas (satu-satunya precedent background task).
+sandbox_reaper = SandboxReaper(db, config=CONFIG)
 
 # Urutan tampil role yang sudah dikenal; role lain (folder soul.toml baru) muncul
 # setelahnya secara alfabetis. Daftar role di-scan dari folder roles/ agar menambah
@@ -293,8 +297,10 @@ async def lifespan(app: FastAPI):
         log.warning("mcp_load_failed", error=str(e))
     # Scheduler autopilot hidup selama server hidup (loop asyncio in-process).
     autopilot_scheduler.start()
+    sandbox_reaper.start()
     yield
     await autopilot_scheduler.stop()
+    await sandbox_reaper.stop()
     await close_shared_http_client()
     await db.close()
 

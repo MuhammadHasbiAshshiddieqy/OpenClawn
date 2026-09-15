@@ -161,6 +161,7 @@ Pipeline utama per turn. Menghasilkan `AgentEvent` (`token` + `status`) ke Web U
 
 0. **Resolve & set workspace root** — prioritas: (a) `AgentConfig.workspace_override` dari form UI bila diisi eksplisit di request ini; (b) kalau kosong & `persist_history=True`, folder tersimpan di `session_workspace` (`SessionWorkspaceStore.get`) dari panggilan tool `set_workdir` di turn SEBELUMNYA (§ user request "pindah direktori dinamis lewat chat" — `AgentLoop` dibuat baru tiap request, jadi perpindahan folder harus dimuat balik dari DB, bukan cuma ContextVar in-memory yang sudah reset); (c) default `CONFIG.workspace_root`. Hasilnya di-set ke `CURRENT_WORKSPACE_ROOT` (ContextVar), di-reset di `finally` agar tak bocor ke request lain.
 0b. **Resolve & set sandbox image proyek** *(§ Prioritas 8.3, sandbox proyek besar/kompleks)* — bila `persist_history=True`, muat `session_sandbox_image` (`SessionSandboxImageStore.get`, `infra/sandbox_image.py`) — image yang ditulis tool `build_sandbox_image` di turn manapun sebelumnya untuk sesi ini. Bila ada, di-set ke `CURRENT_SANDBOX_IMAGE` (ContextVar), sama pola langkah 0 — `code_run`/`shell_run` (`tools/sandbox.py::DockerSandbox._base_docker_args`) otomatis memakainya untuk SISA turn ini, tanpa model perlu memanggil tool lain. `None` (sesi belum pernah membangun image) → ContextVar tetap `None`, `code_run`/`shell_run` jatuh ke `SANDBOX_IMAGE` dasar (perilaku lama, tak berubah). Direset di `finally` yang sama dengan langkah 0.
+0c. **Resolve & set sandbox PERSISTEN** *(§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3, sandbox lifecycle)* — bila `persist_history=True`, muat `session_sandbox_container` (`SessionSandboxContainerStore.get`, `infra/sandbox_lifecycle.py`) — container yang diaktifkan tool `sandbox_persist_enable` di turn manapun sebelumnya. Bila ada: `touch()` (tandai dipakai turn ini, dasar keputusan idle `SandboxReaper`), auto-`resume_persistent` bila statenya `paused` (transparan bagi model, tak perlu tool "resume"), lalu set `CURRENT_PERSISTENT_SANDBOX` (ContextVar) — `code_run` (HANYA `code_run`, TIDAK `shell_run`) otomatis exec ke container yang sama untuk SISA turn ini. `None` (sesi belum pernah opt-in) → `code_run` jatuh ke jalur ephemeral `--rm` lama, tak berubah. Direset di `finally` yang sama dengan langkah 0.
 1. **Shield scan** — tolak input mencurigakan sebelum masuk pipeline
 2. **Correction check** — deteksi apakah turn sebelumnya dikoreksi user (audit feedback)
 2b. **Load session history** — bila `persist_history` & `self.history` kosong, muat giliran sesi ini dari `session_turns` (`MemoryManager.load_turns`, cap `session_history_turns`) → agent ingat percakapan lintas-request (§ user report). Multi-agent skip (kelola transkrip sendiri).
@@ -599,11 +600,73 @@ lihat `docs/web.md` untuk skema response lengkap.
 
 - **Auto-decompose LLM** (goal → DAG otomatis) — v1 butuh DAG datang SUDAH
   terstruktur lewat argumen tool `nodes`.
-- **Sandbox lifecycle** (persist/pause/resume/recycle) — `tools/sandbox.py`
-  TAK disentuh sama sekali di sini; setiap `docker run` tetap `--rm` ephemeral
-  seperti sebelumnya. Trade-off keamanan nyata, butuh persetujuan eksplisit
-  terpisah sebelum kode ditulis.
-- **Runtime isolasi pluggable** (gVisor/Firecracker) — tak disentuh.
+- **Runtime isolasi pluggable** (gVisor/Firecracker) — SUDAH dikerjakan
+  (Fase 5, `sandbox_runtime`/`--runtime`, lihat `tools/sandbox.py`).
+- **Sandbox lifecycle** (persist/pause/resume/recycle) — SUDAH dikerjakan
+  (Fase 3, lihat bagian "Persistent Sandbox" di bawah). Semua 5 fase
+  `IMPROVEMENT-Sandbox-Isolation-Parallelization.md` selesai.
+
+### Persistent Sandbox — sandbox lifecycle (Fase 3, selesai)
+
+**[§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3]** Fase terakhir,
+sengaja ditunda paling akhir karena satu-satunya yang melonggarkan trade-off
+keamanan (owner disetujui EKSPLISIT via `AskUserQuestion`: bangun, opt-in per
+sesi, tersedia untuk semua role dengan `code_run` — `dev`/`qa`/`data`).
+Sebelum fase ini, setiap `docker run` untuk `code_run` selalu `--rm` +
+temp-dir sekali pakai; state (file, package terinstall) hilang total begitu
+container keluar. Sekarang sesi bisa memanggil tool `sandbox_persist_enable`
+untuk membuat container `docker run -d` + named Docker volume yang bertahan
+lintas panggilan `code_run` berikutnya dalam sesi yang sama.
+
+**Lingkup SENGAJA hanya `code_run`, TIDAK PERNAH `shell_run`** — `shell_run`
+ada murni untuk inspeksi workspace ASLI read-only; `code_run` sudah sama
+sekali tak pernah mount workspace asli (kode ditulis ke temp-dir sekali
+pakai), jadi mengganti mount itu dengan volume persisten adalah perubahan
+mandiri tanpa mencampur dua concern berbeda.
+
+Flag keamanan wajib (`--network none`, `--read-only`, non-root,
+`no-new-privileges`, `--runtime` bila non-default) TETAP tak berubah untuk
+container persisten — HANYA `/work` yang jadi writable+persisten lewat named
+volume, menggantikan mount temp-dir `:ro`. Lihat `infra/sandbox_lifecycle.py`
+(module docstring) untuk rasionalisasi lengkap.
+
+**Alur:** `sandbox_persist_enable` (`requires_approval=True`, `_TRUST_MODE_EXEMPT`
+— sekelas sensitivitas `build_sandbox_image`) → `DockerSandbox.create_persistent`
+→ baris `session_sandbox_container` (lihat `docs/database.md`) → ContextVar
+`CURRENT_PERSISTENT_SANDBOX` (`infra/sandbox_lifecycle.py`, pola SAMA
+`CURRENT_SANDBOX_IMAGE`/`CURRENT_WORKSPACE_ROOT`) dipulihkan `AgentLoop.run()`
+tiap turn dari DB, sehingga bertahan lintas turn maupun restart server. Sesi
+yang tak pernah opt-in: `effective_persistent_container()` selalu `None`,
+`code_run` byte-identik jalur ephemeral lama.
+
+**Auto-resume:** bila container sedang `paused` (idle di-pause reaper) dan
+sesi memanggil `code_run` lagi, `AgentLoop.run()` otomatis
+`resume_persistent` sebelum turn berjalan — transparan bagi model, tak perlu
+tool "resume" terpisah.
+
+**Batas DoS baru:** `AppConfig.sandbox_persist_max_containers` (default 5)
+dicek `sandbox_persist_enable` sebelum membuat container baru — permukaan
+risiko yang tak ada di model ephemeral (banyak sesi opt-in sekaligus bisa
+membebani host tanpa batas).
+
+### `core/sandbox_reaper.py` — `SandboxReaper`
+
+Loop asyncio in-process, bentuk **SAMA PERSIS** `AutopilotScheduler` di bawah
+(`start()`/`stop()`/`_loop()`/`run_due_once()`, `add_done_callback` crash
+logger) — dua modul memecahkan masalah bentuk sama ("cek jadwal/keadaan tiap
+tick, ambil tindakan"). Dipasang `web/main.py` lifespan sama seperti
+`autopilot_scheduler`.
+
+**`run_due_once(now=None) → dict`** *(async)* Evaluasi SEMUA baris
+`session_sandbox_container`: idle > `sandbox_persist_idle_ttl_sec` (default
+600s) & `state=="running"` → `pause_persistent` + `set_state("paused")`; idle
+> `sandbox_persist_destroy_ttl_sec` (default 3600s, dicek TERLEPAS dari
+state, selalu jendela yang lebih panjang) → `destroy_persistent` + hapus
+baris DB permanen. Return `{"paused": [...], "destroyed": [...]}`
+(`session_id`) — dipisah dari `_loop` agar test memicu satu evaluasi tanpa
+menunggu tick nyata. Container Docker & baris SQLite sama-sama bertahan
+lintas restart proses app — reaper yang start ulang melanjutkan dari
+`last_used_at` yang sama, tak ada yang jadi yatim.
 
 ---
 

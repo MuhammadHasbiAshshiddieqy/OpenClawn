@@ -7,11 +7,43 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Added — Sandbox: persistent lifecycle, opt-in per sesi (TODO.md § Prioritas 12 Fase 3)
+
+Fase TERAKHIR dari proposal `IMPROVEMENT-Sandbox-Isolation-Parallelization.md`
+— sengaja ditunda paling akhir karena satu-satunya yang melonggarkan trade-off
+keamanan (owner disetujui EKSPLISIT via `AskUserQuestion`: bangun, opt-in per
+sesi, tersedia untuk semua role dengan `code_run`). Semua 5 fase proposal kini
+selesai diproses.
+
+- Tool baru `sandbox_persist_enable` (`requires_approval=True` selalu,
+  `_TRUST_MODE_EXEMPT`) — hidupkan container `docker run -d` + named Docker
+  volume untuk `/work`, menggantikan mount temp-dir `:ro` sekali pakai. Sesi
+  yang tak opt-in: `code_run` byte-identik jalur ephemeral lama. Diizinkan
+  role `dev`/`qa`/`data` (yang sudah punya `code_run`).
+- `tools/sandbox.py::DockerSandbox` — 6 method baru: `create_persistent`,
+  `exec_persistent` (kode via stdin, bukan argv shell), `pause_persistent`/
+  `resume_persistent`, `destroy_persistent` (fail-soft). Flag keamanan wajib
+  (`--network none`, `--read-only`, non-root, `no-new-privileges`) tetap
+  utuh — HANYA `/work` yang jadi writable+persisten.
+- `core/sandbox_reaper.py::SandboxReaper` (baru) — bentuk sama
+  `AutopilotScheduler`. Idle > `sandbox_persist_idle_ttl_sec` (600s) →
+  pause; tak dipakai > `sandbox_persist_destroy_ttl_sec` (3600s) → destroy
+  permanen (container + volume + baris DB).
+- `AppConfig.sandbox_persist_max_containers` (default 5) — batas DoS baru
+  yang model ephemeral lama tak punya.
+- Tabel baru `session_sandbox_container`; `infra/sandbox_lifecycle.py`
+  (ContextVar `CURRENT_PERSISTENT_SANDBOX` + `SessionSandboxContainerStore`),
+  pola sama `infra/sandbox_image.py`.
+
+35 test baru (`tests/test_sandbox_lifecycle.py`, `tests/test_sandbox_persist_tool.py`,
+`tests/test_sandbox_reaper.py`, + argv/trust-mode di `test_tools.py`/
+`test_trust_mode.py`). **1084 passed** (+35), ruff bersih, tanpa dependency baru.
+
 ### Added — Sandbox: runtime isolasi pluggable (TODO.md § Prioritas 12 Fase 5)
 
-Terakhir dari proposal `IMPROVEMENT-Sandbox-Isolation-Parallelization.md` yang
-dikerjakan — dipilih owner secara eksplisit atas Fase 3 (sandbox lifecycle,
-butuh persetujuan trade-off keamanan terpisah, TETAP ditunda).
+Dipilih owner secara eksplisit lebih dulu dari Fase 3 (sandbox lifecycle,
+butuh persetujuan trade-off keamanan terpisah — dikerjakan belakangan,
+lihat entri di atas) karena rendah-risiko (satu config knob).
 
 - `AppConfig.sandbox_runtime: str = "runc"` (env `OPENCLAWN_SANDBOX_RUNTIME`)
   — `tools/sandbox.py::_base_docker_args` meneruskannya sebagai `--runtime

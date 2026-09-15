@@ -81,6 +81,21 @@ Folder kerja aktif untuk satu sesi chat, bisa diubah agent sendiri lewat tool `s
 
 ---
 
+### `session_sandbox_container` — Sandbox Persisten Aktif Per-Sesi
+
+**[§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3, sandbox lifecycle — owner disetujui EKSPLISIT via `AskUserQuestion`]** Container Docker PERSISTEN (`docker run -d`, bukan `--rm`) yang aktif untuk satu sesi chat, ditulis tool `sandbox_persist_enable` saat sukses. Satu baris per sesi (state operasional MURNI, bukan audit trail — baris DIHAPUS begitu container di-destroy, tak disimpan sebagai `state='destroyed'`). Dibaca `AgentLoop.run()` di awal turn → `CURRENT_PERSISTENT_SANDBOX` (ContextVar, `infra/sandbox_lifecycle.py`) → `DockerSandbox.run_python` (`tools/sandbox.py`) exec ke container ini alih-alih `docker run --rm` baru, untuk `code_run` SISA sesi. Dievaluasi tiap tick `core/sandbox_reaper.py::SandboxReaper` (pause bila idle, destroy bila lama tak dipakai).
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `session_id` | TEXT PK | Sesi pemilik container aktif |
+| `container_id` | TEXT | Nama container Docker — deterministik dari `hashlib.sha256(session_id)[:12]`, prefix `openclawn-persist-` |
+| `volume_name` | TEXT | Nama named Docker volume yang di-mount ke `/work` (writable+persisten, menggantikan mount temp-dir `:ro` ephemeral) |
+| `state` | TEXT | `running` \| `paused`. Default `running` |
+| `created_at` | TIMESTAMP | |
+| `last_used_at` | TIMESTAMP | Diperbarui tiap kali `code_run` benar-benar exec ke container ini (`SessionSandboxContainerStore.touch`, dipanggil `AgentLoop.run()`) — dasar keputusan idle/destroy reaper |
+
+---
+
 ### `chat_sessions` — Metadata Sidebar Riwayat Chat
 
 Metadata TAMPILAN (judul, waktu, role) untuk sidebar riwayat chat single-agent (§ user report: "chat selalu ke-reset", tak ada cara buka chat baru/lanjutkan/hapus riwayat). Terpisah dari `session_turns` (transkrip per-giliran) — tabel ini murni untuk daftar di sidebar, bukan isi percakapan.

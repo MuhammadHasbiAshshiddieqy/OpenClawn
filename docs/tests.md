@@ -670,7 +670,7 @@ Test untuk `tools/`.
 
 | Test | Yang Diverifikasi |
 |---|---|
-| `test_registry_has_all_29_tools` | Semua 29 tool terdaftar di registry |
+| `test_registry_has_all_30_tools` | Semua 30 tool terdaftar di registry |
 | `test_file_read_returns_content` | `FileReadTool` baca file yang ada |
 | `test_file_read_not_found` | File tidak ada → error dict (tidak crash) |
 | `test_file_write_creates_file` | `FileWriteTool` tulis konten |
@@ -686,6 +686,13 @@ Test untuk `tools/`.
 | `test_base_docker_args_contains_every_required_flag` | `_base_docker_args` (sumber argv tunggal) memuat semua `_REQUIRED_FLAGS` |
 | `test_base_docker_args_omits_runtime_flag_by_default` | **[§ Fase 5, runtime pluggable]** `sandbox_runtime="runc"` (default) → `--runtime` TIDAK ADA sama sekali di argv |
 | `test_base_docker_args_passes_runtime_flag_when_non_default` | `sandbox_runtime="runsc"` (gVisor) → `--runtime runsc` diteruskan ke `docker run` |
+| `test_create_persistent_argv_enforces_security_flags` | **[§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3]** `docker run -d` untuk sandbox persisten memuat SEMUA flag keamanan wajib; volume `/work` writable (BUKAN `:ro`) — satu-satunya perbedaan sengaja dari jalur ephemeral |
+| `test_create_persistent_names_are_deterministic` | Nama container sama untuk `session_id` yang sama di dua panggilan (hash SHA-256, idempoten) |
+| `test_exec_persistent_writes_code_via_stdin_not_shell_arg` | Kode ditulis via stdin (`docker exec -i ... cat >`), TIDAK ADA di argv — cegah shell injection dari isi kode |
+| `test_pause_and_resume_persistent_use_correct_subcommand` | `pause_persistent`/`resume_persistent` memanggil `docker pause`/`docker unpause` dengan container id yang benar |
+| `test_destroy_persistent_removes_container_then_volume` | `destroy_persistent` memanggil `docker rm -f` LALU `docker volume rm`, urutan benar |
+| `test_run_python_unaffected_when_no_persistent_container_active` | Regresi: `CURRENT_PERSISTENT_SANDBOX` unset → `run_python` byte-identik jalur ephemeral `--rm` lama |
+| `test_run_python_delegates_to_exec_persistent_when_container_active` | ContextVar terset → `run_python` exec ke container yang sama, TIDAK ada `docker run` baru |
 | `test_tool_exception_returns_error_not_crash` | Tool melempar exception → error dict anggun (§1.3), turn tak mati |
 | `test_tool_timeout_returns_error` | Tool menggantung > `tool_timeout_sec` → error timeout |
 | `test_tool_output_truncated_uniformly` | Output panjang dipotong ke `tool_max_output` apa pun tool-nya |
@@ -1269,6 +1276,7 @@ Test trust mode per-sesi (§ user request otonomi: kurangi approval yang tak per
 | `test_code_run_still_requires_approval` | Kontrol negatif: `CodeRunTool.requires_approval` tetap `True` |
 | `test_code_run_is_trust_mode_exempt` | `"code_run"` ada di `_TRUST_MODE_EXEMPT` |
 | `test_build_sandbox_image_is_trust_mode_exempt` | **[§ Prioritas 8.3]** `build_sandbox_image` sekelas `code_run`: `requires_approval=True` & ada di `_TRUST_MODE_EXEMPT` — `docker build`-nya sendiri membuka network sementara |
+| `test_sandbox_persist_enable_is_trust_mode_exempt` | **[§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3]** `sandbox_persist_enable` sekelas `build_sandbox_image`: `requires_approval=True` & ada di `_TRUST_MODE_EXEMPT` — membuat state writable yang bertahan lintas panggilan |
 | `test_trust_mode_bypasses_approval_and_executes_for_real` | Trust mode aktif → `file_write` benar-benar menulis file (bukan cuma diloloskan), lewat `auto_approve`; tercatat `decision="auto:trust_mode"` |
 | `test_trust_mode_never_bypasses_code_run` | `code_run` + `trust_mode=True` + `bypass_approval=True` tetap lewat `approval.request()` normal, `auto_approve` tak pernah dipanggil |
 | `test_bypass_approval_false_uses_normal_request` | `bypass_approval=False` → jalur `request()` biasa, `auto_approve` tak dipanggil |
@@ -1373,6 +1381,57 @@ Sandbox proyek besar/kompleks (§ Prioritas 8.3 — keputusan owner: opsi (a), i
 | `test_sandbox_image_persists_to_next_agentloop` | AgentLoop BARU turn 2 (sesi sama, image dibangun turn 1) → `CURRENT_SANDBOX_IMAGE` otomatis terisi tanpa tool lain dipanggil lagi |
 | `test_no_sandbox_image_leaves_contextvar_unset` | Sesi yang tak pernah `build_sandbox_image` → ContextVar tetap `None` sepanjang turn |
 | `test_build_sandbox_image_registered_and_requires_approval` | Terdaftar di `TOOL_REGISTRY`, `requires_approval=True`, ada di `_TRUST_MODE_EXEMPT` |
+
+---
+
+### `tests/test_sandbox_lifecycle.py`
+
+Test `SessionSandboxContainerStore` + `effective_persistent_container` (`infra/sandbox_lifecycle.py`, § IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3) — CRUD murni DB, TANPA Docker sama sekali.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_create_and_get` | `create()`/`get()` roundtrip, `state` default `"running"` |
+| `test_set_state` | `set_state()` mengubah kolom `state` |
+| `test_touch_updates_last_used_at` | `touch()` memperbarui `last_used_at` tanpa error |
+| `test_delete` | `delete()` menghapus baris permanen |
+| `test_list_all` | `list_all()` mengembalikan SEMUA baris (dipakai `SandboxReaper`) |
+| `test_count_active` | `count_active()` bertambah/berkurang sesuai `create`/`delete` |
+| `test_effective_persistent_container_default_none` | ContextVar default `None` → mode ephemeral |
+| `test_effective_persistent_container_reads_contextvar` | ContextVar terset → nilainya terbaca balik |
+
+---
+
+### `tests/test_sandbox_persist_tool.py`
+
+Test `SandboxPersistEnableTool` (§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3, owner disetujui EKSPLISIT via `AskUserQuestion`). Docker di-mock seluruhnya (pola sama `test_sandbox_image.py`) — tak ada container sungguhan dibuat di suite pytest.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_requires_approval` | `requires_approval=True` |
+| `test_missing_session_id_errors` | `_session_id` absen → error, bukan crash |
+| `test_missing_db_errors` | `db=None` → error, bukan crash |
+| `test_success_persists_row` | Sukses → baris `session_sandbox_container` tertulis |
+| `test_idempotent_second_call_is_noop` | Panggilan kedua untuk sesi yang sama → `already_enabled=True`, `create_persistent` TIDAK dipanggil lagi (tak ada container kedua) |
+| `test_cap_enforcement_returns_clean_error` | `count_active() >= sandbox_persist_max_containers` → error terkontrol, `create_persistent` tak dipanggil (permukaan DoS baru) |
+| `test_docker_unavailable_returns_error_not_raise` | `SandboxUnavailable` → dikembalikan sebagai dict error |
+| `test_create_failure_returns_error_dict` | `create_persistent` gagal → error, baris DB TIDAK tertulis |
+| `test_roles_with_code_run_allow_sandbox_persist_enable` (parametrized dev/qa/data) | Ketiga role dengan `code_run` punya `sandbox_persist_enable` di `[tools].allowed` |
+| `test_roles_without_code_run_do_not_allow_sandbox_persist_enable` (parametrized pm/security) | Role tanpa `code_run` juga TIDAK punya `sandbox_persist_enable` |
+
+---
+
+### `tests/test_sandbox_reaper.py`
+
+Test `SandboxReaper` (§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3) — `run_due_once()` dipanggil langsung dengan baris `last_used_at` terkontrol (pola sama `test_autopilot.py`), tanpa menunggu tick nyata. Docker di-mock via `sandbox=` yang di-inject.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_idle_row_gets_paused` | Idle > `sandbox_persist_idle_ttl_sec` & `state="running"` → `pause_persistent` dipanggil, `state` jadi `"paused"` |
+| `test_long_idle_row_gets_destroyed_and_row_removed` | Idle > `sandbox_persist_destroy_ttl_sec` → `destroy_persistent` dipanggil, baris DB DIHAPUS |
+| `test_freshly_used_row_untouched` | Baris baru dipakai → tak dipause/didestroy sama sekali |
+| `test_already_paused_row_not_paused_again_but_still_destroyed_when_old` | Baris `paused` tak di-`pause_persistent` ulang, TAPI tetap di-destroy begitu lewat destroy TTL (dicek terlepas dari state) |
+| `test_pause_failure_is_logged_and_row_not_updated` | `pause_persistent` gagal → `state` tak berubah, tak masuk daftar `paused` |
+| `test_run_due_once_callable_directly_without_real_ticks` | `run_due_once()` bisa dipanggil berulang tanpa `start()`/tick nyata — testable sama seperti `AutopilotScheduler` |
 
 ---
 

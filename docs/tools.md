@@ -48,6 +48,7 @@ TOOL_REGISTRY = {
     "shell_run":    ShellRunTool(),
     "code_run":     CodeRunTool(),
     "build_sandbox_image": BuildSandboxImageTool(),
+    "sandbox_persist_enable": SandboxPersistEnableTool(),
     # akses luar
     "web_fetch":    WebFetchTool(),
     "web_search":   WebSearchTool(),
@@ -541,6 +542,39 @@ Kode dijalankan via `timeout {SANDBOX_TIMEOUT_SEC} python /work/script.py` — t
 
 Jika asyncio timeout → `{"error": "Eksekusi melebihi timeout", "exit_code": -1}`.
 
+### Sandbox PERSISTEN (§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3)
+
+**Konstanta:** `PERSISTENT_CONTAINER_PREFIX = "openclawn-persist"`, `PERSISTENT_TMPFS_SIZE = "64m"`.
+
+`run_python` mengecek `effective_persistent_container()` (`infra/sandbox_lifecycle.py`) lebih dulu — bila sesi ini punya sandbox persisten aktif, delegasi ke `exec_persistent` alih-alih `docker run --rm` biasa. `None` (default, mayoritas sesi) → jalur ephemeral di atas, tak berubah sama sekali.
+
+**`create_persistent(session_id: str) → dict`** *(async)*  
+`docker run -d` (BUKAN `--rm`) + named Docker volume untuk `/work` (writable, menggantikan mount temp-dir `:ro`) + `sleep infinity` (idiom keep-alive). Mewarisi SEMUA flag keamanan wajib (`--network none`, `--read-only`, non-root, `no-new-privileges`, `--runtime` bila non-default) dari sumber yang sama `_base_docker_args`. Nama container/volume **deterministik** dari `hashlib.sha256(session_id)[:12]` — idempoten, memudahkan debug via `docker ps`. Return `{"ok": True, "container_id", "volume_name"}` atau `{"ok": False, "error"}`.
+
+**`exec_persistent(container_id: str, code: str) → dict`** *(async)*  
+Jalankan kode di container yang SUDAH hidup (`docker exec`, bukan `docker run` baru) — state bertahan lintas panggilan sampai container di-recycle. Kode ditulis via **stdin** (`docker exec -i ... sh -c 'cat > /work/script.py'`), bukan diinterpolasi ke argumen shell — tak ada risiko shell injection dari isi `code`. Timeout & output shape sama persis jalur ephemeral.
+
+**`pause_persistent(container_id)` / `resume_persistent(container_id)`** *(async)*  
+`docker pause`/`docker unpause` — bekukan semua proses (hemat CPU host) tanpa menghapus state; dipanggil `core/sandbox_reaper.py` (idle) dan `AgentLoop.run()` (auto-resume saat sesi memakai `code_run` lagi). Return `{"ok": bool, "error": str | None}`.
+
+**`destroy_persistent(container_id, volume_name) → None`** *(async)*  
+`docker rm -f` lalu `docker volume rm` PERMANEN. **Fail-soft sepenuhnya** (tak pernah raise, hanya log) — penghancuran tak boleh diblokir container setengah rusak; caller (`SandboxReaper`) tetap menghapus baris DB terlepas dari hasil ini.
+
+---
+
+## `tools/sandbox_persist.py`
+
+### `SandboxPersistEnableTool`
+
+**[§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3, owner disetujui EKSPLISIT via `AskUserQuestion`]** Hidupkan sandbox PERSISTEN untuk sesi ini — sekali sukses, `code_run` (HANYA `code_run`, TIDAK `shell_run`) di SISA sesi otomatis exec ke container yang sama, tanpa model perlu memanggil tool lain lagi.
+
+- `requires_approval = True` **selalu**, non-negotiable — sekelas sensitivitas `build_sandbox_image` (`_TRUST_MODE_EXEMPT`), bahkan lebih: membuat state WRITABLE yang bertahan lintas panggilan, bukan cuma network sesaat saat build.
+- Input: `{}` (tanpa argumen — `_session_id` disuntik `AgentLoop._execute_tool`, model tak boleh mengarang ini).
+- **Idempoten:** sesi yang sudah punya sandbox persisten aktif → no-op sukses (`{"ok": True, "already_enabled": True, "container_id": ...}`), tak membuat container kedua.
+- **Batas DoS baru:** dicek `count_active() < CONFIG.sandbox_persist_max_containers` (default 5) sebelum membuat container baru — di atas batas → `{"error": "..."}` jelas, bukan crash.
+- Output sukses: `{"ok": True, "already_enabled": False, "container_id": "..."}`. Output gagal: `{"error": "..."}` (Docker tak terpasang, `create_persistent` gagal, `_session_id`/`db` absen).
+- Setelah sukses: menulis baris `session_sandbox_container` via `SessionSandboxContainerStore` (`infra/sandbox_lifecycle.py`) — `AgentLoop.run()` memulihkannya ke ContextVar `CURRENT_PERSISTENT_SANDBOX` tiap turn (pola sama `build_sandbox_image`/`CURRENT_SANDBOX_IMAGE`), bertahan lintas turn DAN restart server.
+
 ---
 
 ## `tools/sandbox_image.py`
@@ -635,6 +669,7 @@ Prioritas resolusi folder di `AgentLoop.run()`: (1) `workspace_override` dari fo
 | `shell_run` | ❌ | ✅ | ✅ | ❌ | ❌ | Tidak (sandboxed) |
 | `code_run` | ❌ | ✅ | ✅ | ✅ | ❌ | **Ya (selalu)** |
 | `build_sandbox_image` | ❌ | ✅ | ✅ | ✅ | ❌ | **Ya (selalu)** |
+| `sandbox_persist_enable` | ❌ | ✅ | ✅ | ✅ | ❌ | **Ya (selalu)** |
 | `web_fetch` | ✅ | ❌ | ✅ | ✅ | ❌ | Tidak |
 | `web_search` | ✅ | ❌ | ✅ | ✅ | ❌ | Tidak |
 | `http_request` | ❌ | ❌ | ✅ | ❌ | ❌ | **Ya** |

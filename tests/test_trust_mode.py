@@ -55,6 +55,16 @@ def test_build_sandbox_image_is_trust_mode_exempt():
     assert "build_sandbox_image" in _TRUST_MODE_EXEMPT
 
 
+def test_sandbox_persist_enable_is_trust_mode_exempt():
+    """§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3: mengaktifkan
+    sandbox persisten membuat state writable yang bertahan lintas panggilan —
+    setidaknya sesensitif build_sandbox_image, tak boleh lolos trust mode."""
+    from tools.sandbox_persist import SandboxPersistEnableTool
+
+    assert SandboxPersistEnableTool.requires_approval is True
+    assert "sandbox_persist_enable" in _TRUST_MODE_EXEMPT
+
+
 # ── AgentLoop._execute_tool: trust_mode bypass ───────────────────────────────
 
 

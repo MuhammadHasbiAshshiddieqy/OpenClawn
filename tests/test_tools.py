@@ -18,8 +18,8 @@ def dataclasses_replace(obj, **changes):
 # ── TOOL_REGISTRY ─────────────────────────────────────────────────────────────
 
 
-def test_registry_has_all_29_tools():
-    """Semua 29 tool harus terdaftar di TOOL_REGISTRY."""
+def test_registry_has_all_30_tools():
+    """Semua 30 tool harus terdaftar di TOOL_REGISTRY."""
     expected = {
         "file_read",
         "read_many",
@@ -40,6 +40,7 @@ def test_registry_has_all_29_tools():
         "shell_run",
         "code_run",
         "build_sandbox_image",
+        "sandbox_persist_enable",
         "web_fetch",
         "web_search",
         "http_request",
@@ -528,6 +529,137 @@ def test_base_docker_args_passes_runtime_flag_when_non_default(monkeypatch):
 
     args = DockerSandbox()._base_docker_args("/x:/work:ro", "16m")
     assert _flag_pair_present(args, "--runtime", "runsc")
+
+
+# ── Sandbox persisten (§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3) ──
+
+
+async def _capture_all_docker_calls(coro_factory) -> list[list[str]]:
+    """Sama seperti _capture_docker_argv, tapi merekam SETIAP panggilan
+    create_subprocess_exec dalam satu operasi (bukan hanya yang terakhir) —
+    dibutuhkan untuk metode lifecycle persisten yang memanggil Docker
+    berkali-kali (mis. exec_persistent: tulis lalu jalankan; destroy_persistent:
+    rm container lalu rm volume)."""
+    calls: list[list[str]] = []
+
+    async def _fake_exec(*args, **kwargs):
+        calls.append(list(args))
+        proc = MagicMock()
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        proc.returncode = 0
+        return proc
+
+    with patch("tools.sandbox.asyncio.create_subprocess_exec", side_effect=_fake_exec):
+        await coro_factory()
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_create_persistent_argv_enforces_security_flags():
+    """docker run -d untuk sandbox persisten HARUS tetap membawa semua flag
+    keamanan wajib — hanya /work yang berbeda (volume writable, bukan :ro)."""
+    from tools.sandbox import DockerSandbox
+
+    sandbox = DockerSandbox()
+    calls = await _capture_all_docker_calls(lambda: sandbox.create_persistent("sess-1"))
+
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[:3] == ["docker", "run", "-d"]
+    assert "--rm" not in argv
+    assert _flag_pair_present(argv, "--network", "none")
+    assert _flag_pair_present(argv, "--read-only", None)
+    assert _flag_pair_present(argv, "--user", "nobody")
+    assert _flag_pair_present(argv, "--security-opt", "no-new-privileges")
+    assert "sleep" in argv and "infinity" in argv
+    # Volume /work HARUS writable (bukan :ro) — satu-satunya perbedaan sengaja.
+    mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "-v"]
+    assert mounts and all(not m.endswith(":ro") for m in mounts)
+
+
+@pytest.mark.asyncio
+async def test_create_persistent_names_are_deterministic():
+    """Nama container/volume dari hash session_id — panggilan berulang untuk
+    sesi yang sama menghasilkan nama yang sama (idempoten, debug-friendly)."""
+    from tools.sandbox import DockerSandbox
+
+    sandbox = DockerSandbox()
+    calls_1 = await _capture_all_docker_calls(lambda: sandbox.create_persistent("sess-abc"))
+    calls_2 = await _capture_all_docker_calls(lambda: sandbox.create_persistent("sess-abc"))
+    name_idx_1 = calls_1[0].index("--name") + 1
+    name_idx_2 = calls_2[0].index("--name") + 1
+    assert calls_1[0][name_idx_1] == calls_2[0][name_idx_2]
+
+
+@pytest.mark.asyncio
+async def test_exec_persistent_writes_code_via_stdin_not_shell_arg():
+    """Kode ditulis via stdin (docker exec -i ... cat > script.py), bukan
+    diinterpolasi ke argumen shell — cegah shell injection dari isi code."""
+    from tools.sandbox import DockerSandbox
+
+    sandbox = DockerSandbox()
+    calls = await _capture_all_docker_calls(
+        lambda: sandbox.exec_persistent("openclawn-persist-abc", "print('hi')")
+    )
+
+    assert len(calls) == 2
+    write_argv, run_argv = calls
+    assert write_argv[:3] == ["docker", "exec", "-i"]
+    assert "print('hi')" not in write_argv  # kode TIDAK ada di argv, hanya via stdin
+    assert run_argv[:2] == ["docker", "exec"]
+    assert "python" in run_argv
+
+
+@pytest.mark.asyncio
+async def test_pause_and_resume_persistent_use_correct_subcommand():
+    from tools.sandbox import DockerSandbox
+
+    sandbox = DockerSandbox()
+    calls = await _capture_all_docker_calls(lambda: sandbox.pause_persistent("cid-1"))
+    assert calls[0] == ["docker", "pause", "cid-1"]
+
+    calls = await _capture_all_docker_calls(lambda: sandbox.resume_persistent("cid-1"))
+    assert calls[0] == ["docker", "unpause", "cid-1"]
+
+
+@pytest.mark.asyncio
+async def test_destroy_persistent_removes_container_then_volume():
+    from tools.sandbox import DockerSandbox
+
+    sandbox = DockerSandbox()
+    calls = await _capture_all_docker_calls(lambda: sandbox.destroy_persistent("cid-1", "vol-1"))
+    assert calls[0] == ["docker", "rm", "-f", "cid-1"]
+    assert calls[1] == ["docker", "volume", "rm", "vol-1"]
+
+
+@pytest.mark.asyncio
+async def test_run_python_unaffected_when_no_persistent_container_active():
+    """Regresi: sesi tanpa sandbox_persist_enable tetap pakai jalur ephemeral
+    --rm lama, byte-identik — perilaku default TIDAK berubah."""
+    from tools.sandbox import DockerSandbox
+
+    sandbox = DockerSandbox()
+    argv = await _capture_docker_argv(lambda: sandbox.run_python("print(1)"))
+    assert "--rm" in argv
+    assert argv[:2] == ["docker", "run"]
+
+
+@pytest.mark.asyncio
+async def test_run_python_delegates_to_exec_persistent_when_container_active():
+    """Sesi dengan CURRENT_PERSISTENT_SANDBOX terset → run_python exec ke
+    container yang sama, TIDAK membuat docker run baru."""
+    from infra.sandbox_lifecycle import CURRENT_PERSISTENT_SANDBOX
+    from tools.sandbox import DockerSandbox
+
+    sandbox = DockerSandbox()
+    token = CURRENT_PERSISTENT_SANDBOX.set("openclawn-persist-xyz")
+    try:
+        calls = await _capture_all_docker_calls(lambda: sandbox.run_python("print(1)"))
+    finally:
+        CURRENT_PERSISTENT_SANDBOX.reset(token)
+
+    assert len(calls) == 2  # tulis via stdin, lalu jalankan — bukan docker run baru
+    assert all(c[1] == "exec" for c in calls)
 
 
 # ── Approval gate integration ────────────────────────────────────────────────
