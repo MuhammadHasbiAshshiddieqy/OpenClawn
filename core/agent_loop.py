@@ -383,25 +383,46 @@ class AgentLoop:
         # untuk keputusan idle/destroy) — dan bila sempat di-pause karena idle,
         # bangunkan otomatis DI SINI, transparan bagi model (tak perlu tool baru
         # untuk "resume", `code_run` biasa saja cukup).
+        # Audit produksi 2026-09-15: seluruh blok ini dibungkus try/except — Docker
+        # yang sepenuhnya tak tersedia (binary hilang/daemon berhenti) membuat
+        # `resume_persistent` RAISE `SandboxUnavailable` (bukan return dict error),
+        # dan itu terjadi SEBELUM `try/finally` di bawah mulai. Tanpa guard ini,
+        # SETIAP turn berikutnya untuk sesi itu crash total sebelum LLM sempat
+        # dipanggil sama sekali (tak ada routing/audit/jawaban) — DAN kondisi
+        # `state='paused'` di DB tak pernah berubah, jadi sesi itu rusak PERMANEN
+        # sampai operator turun tangan manual. Melanggar CLAUDE.md §1.3 ("setiap
+        # dependency eksternal punya kegagalan yang anggun") — dependency Docker
+        # di sini diperlakukan berbeda dari di titik lain (mis. `_execute_tool`
+        # sudah menangkap SEMUA exception tool). Fail-safe: log lalu lanjut TANPA
+        # persist_token (turn ini jatuh ke jalur ephemeral seperti sesi yang tak
+        # pernah opt-in — `code_run` tetap bisa gagal anggun lewat `_execute_tool`
+        # seperti biasa, bukan menjatuhkan seluruh turn).
         persist_token = None
         if self.cfg.persist_history:
-            container = await SessionSandboxContainerStore(self.db).get(self.cfg.session_id)
-            if container is not None:
-                await SessionSandboxContainerStore(self.db).touch(self.cfg.session_id)
-                if container["state"] == "paused":
-                    sandbox = DockerSandbox()
-                    result = await sandbox.resume_persistent(container["container_id"])
-                    if result["ok"]:
-                        await SessionSandboxContainerStore(self.db).set_state(
-                            self.cfg.session_id, "running"
-                        )
-                    else:
-                        log.warning(
-                            "sandbox_persistent_resume_failed",
-                            session=self.cfg.session_id,
-                            error=result["error"],
-                        )
-                persist_token = CURRENT_PERSISTENT_SANDBOX.set(container["container_id"])
+            try:
+                container = await SessionSandboxContainerStore(self.db).get(self.cfg.session_id)
+                if container is not None:
+                    await SessionSandboxContainerStore(self.db).touch(self.cfg.session_id)
+                    if container["state"] == "paused":
+                        sandbox = DockerSandbox()
+                        result = await sandbox.resume_persistent(container["container_id"])
+                        if result["ok"]:
+                            await SessionSandboxContainerStore(self.db).set_state(
+                                self.cfg.session_id, "running"
+                            )
+                        else:
+                            log.warning(
+                                "sandbox_persistent_resume_failed",
+                                session=self.cfg.session_id,
+                                error=result["error"],
+                            )
+                    persist_token = CURRENT_PERSISTENT_SANDBOX.set(container["container_id"])
+            except Exception as e:  # noqa: BLE001 — Docker mati tak boleh jatuhkan seluruh turn
+                log.warning(
+                    "sandbox_persistent_restore_failed",
+                    session=self.cfg.session_id,
+                    error=str(e),
+                )
         try:
             async for ev in self._run(user_message):
                 yield ev
