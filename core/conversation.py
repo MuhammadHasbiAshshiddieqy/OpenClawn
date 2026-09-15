@@ -468,28 +468,45 @@ class ConversationOrchestrator:
         diam-diam ke `totals`, sama seperti perilaku sebelum refactor) — tapi
         TETAP dipublish ke event bus untuk konsistensi (observer eksternal bisa
         subscribe raw `AgentEvent` termasuk usage bila perlu).
+
+        Audit produksi 2026-09-15: sentinel HARUS terkirim lewat `finally`, bukan
+        di akhir jalur sukses saja. `agent.run()` adalah pipeline penuh (LLM,
+        tool, DB, sandbox) — exception apa pun yang lolos dari sana (bukan cuma
+        `httpx.HTTPError` transient) sebelumnya membuat method ini berhenti TANPA
+        mengirim sentinel, dan `run()` menunggu `queue.get()` yang tak pernah
+        datang: DEADLOCK PERMANEN, bukan error yang dilaporkan ke UI. Exception
+        task ini sendiri juga tak pernah diambil siapa pun (tak ada yang
+        `await run_task` bila `run()` sudah macet di `queue.get()`), jadi gagal
+        senyap sepenuhnya — melanggar CLAUDE.md ("jangan menelan error tanpa
+        log"). Sekarang: sentinel SELALU terkirim (sukses maupun exception), lalu
+        exception (bila ada) re-raise natural keluar dari method ini — `run()`
+        mengambilnya lewat `await run_task` dan meneruskannya ke pemanggil
+        (`web/main.py` sudah membungkus `orch.run()` dengan try/except yang
+        melaporkannya ke UI, pola sama chat single-agent).
         """
         agent = self.agent_factory(role)
         collected = ""
         stopped_mid = False
-        async for ev in agent.run(turn_input):
-            if await self.control.is_stopped():
-                stopped_mid = True
-                break
-            await self.event_bus.publish("conversation.agent_event", (role, ti, ev))
-            if ev.type == "usage" and ev.usage:
-                totals["tokens_in"] += ev.usage.get("tokens_in", 0)
-                totals["tokens_out"] += ev.usage.get("tokens_out", 0)
-                totals["cost_usd"] += ev.usage.get("cost_usd", 0.0)
-                totals["latency_ms"] += ev.usage.get("latency_ms", 0)
-                totals["peak_context_tokens"] = max(
-                    totals["peak_context_tokens"], ev.usage.get("context_tokens", 0)
-                )
-                totals["turns"] += 1
-                continue
-            if ev.type == "token":
-                collected += ev.text
-        await queue.put(None)  # sentinel: run() berhenti membaca dari queue
+        try:
+            async for ev in agent.run(turn_input):
+                if await self.control.is_stopped():
+                    stopped_mid = True
+                    break
+                await self.event_bus.publish("conversation.agent_event", (role, ti, ev))
+                if ev.type == "usage" and ev.usage:
+                    totals["tokens_in"] += ev.usage.get("tokens_in", 0)
+                    totals["tokens_out"] += ev.usage.get("tokens_out", 0)
+                    totals["cost_usd"] += ev.usage.get("cost_usd", 0.0)
+                    totals["latency_ms"] += ev.usage.get("latency_ms", 0)
+                    totals["peak_context_tokens"] = max(
+                        totals["peak_context_tokens"], ev.usage.get("context_tokens", 0)
+                    )
+                    totals["turns"] += 1
+                    continue
+                if ev.type == "token":
+                    collected += ev.text
+        finally:
+            await queue.put(None)  # sentinel: run() berhenti membaca dari queue
         return collected, stopped_mid
 
     async def _persist(

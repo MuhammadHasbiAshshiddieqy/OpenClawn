@@ -1,6 +1,7 @@
 """Test multi-agent conversation: strategy, orchestrator loop, stop, interject,
 contract validation. DB :memory:, tanpa LLM nyata (fake agent_factory)."""
 
+import asyncio
 import json
 
 import pytest
@@ -535,3 +536,54 @@ async def test_conversation_persisted_once_per_run(db):
     await _collect(orch, "halo")
     rows = await db.fetchall("SELECT id FROM conversations WHERE session_id='s-once'")
     assert len(rows) == 1
+
+
+class FakeAgentBoom:
+    """Agent palsu yang MELEDAK di tengah stream (setelah beberapa event) — untuk
+    menguji jalur exception `_run_agent_turn`, bukan cuma jalur sukses."""
+
+    async def run(self, prompt: str):
+        yield AgentEvent(type="status", text="thinking")
+        yield AgentEvent(type="token", text="sebagian ")
+        raise RuntimeError("boom mid-stream")
+
+
+async def test_agent_exception_mid_turn_does_not_deadlock(db):
+    """Audit produksi 2026-09-15: exception dari agent.run() di tengah giliran
+    sebelumnya membuat sentinel (`queue.put(None)`) TIDAK PERNAH terkirim —
+    run() menunggu queue.get() selamanya (deadlock permanen, bukan error yang
+    dilaporkan). Sekarang exception harus PROPAGATE (bukan ditelan diam-diam)
+    tanpa menggantung, agar caller (web/main.py, sudah membungkus orch.run()
+    dengan try/except) bisa melaporkannya ke UI — pola sama chat single-agent."""
+    orch = ConversationOrchestrator(
+        strategy=PipelineStrategy(["dev"]),
+        db=db,
+        agent_factory=lambda role: FakeAgentBoom(),
+        session_id="s-boom",
+    )
+
+    async def _drain():
+        return [ev async for ev in orch.run("halo")]
+
+    async with asyncio.timeout(5):
+        with pytest.raises(RuntimeError, match="boom mid-stream"):
+            await _drain()
+
+
+async def test_agent_exception_mid_turn_does_not_leak_subscriber(db):
+    """Event bus subscriber sementara (_on_agent_event di run()) harus tetap
+    di-unsubscribe walau giliran meledak (finally di run() sekitar run_task)."""
+    orch = ConversationOrchestrator(
+        strategy=PipelineStrategy(["dev"]),
+        db=db,
+        agent_factory=lambda role: FakeAgentBoom(),
+        session_id="s-boom-unsub",
+    )
+    with pytest.raises(RuntimeError):
+        async with asyncio.timeout(5):
+            _ = [ev async for ev in orch.run("halo")]
+
+    # Hanya subscriber permanen (_persist_agent_event) yang tersisa — subscriber
+    # sementara run() (_on_agent_event) sudah dilepas walau exception terjadi.
+    subs = orch.event_bus._subscribers.get("conversation.agent_event", [])
+    assert subs == [orch._persist_agent_event]
