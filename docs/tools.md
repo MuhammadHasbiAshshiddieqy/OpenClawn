@@ -509,6 +509,27 @@ Kode dijalankan via `timeout {SANDBOX_TIMEOUT_SEC} python /work/script.py` — t
 
 > **Sumber argv tunggal.** Baik `run_python` maupun `run_shell` membangun perintah `docker run` lewat satu helper `_base_docker_args(mount, tmpfs_size)`, sehingga flag keamanan wajib (`_REQUIRED_FLAGS`: `--network none`, `--read-only`, `--user nobody`, `--security-opt no-new-privileges`) tidak bisa terhapus diam-diam di salah satu call site. Test (`test_run_python_argv_enforces_security_flags`, `test_run_shell_argv_enforces_security_flags`) memverifikasi **argv nyata** yang dikirim ke Docker — bukan rekonstruksi manual — sehingga regresi penghapusan flag pasti tertangkap.
 
+> **Runtime isolasi pluggable (§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md
+> Fase 5, owner memilih ini — BUKAN Fase 3 sandbox lifecycle, TANPA
+> Firecracker/microVM yang direkomendasikan dilewati eksplisit).**
+> `_base_docker_args` membaca `CONFIG.sandbox_runtime` (default `"runc"`,
+> env `OPENCLAWN_SANDBOX_RUNTIME`) — bila diisi nilai NON-default (mis.
+> `"runsc"` untuk [gVisor](https://gvisor.dev/), isolasi kernel-level lebih
+> kuat dari `--network none`/non-root/`no-new-privileges` biasa), diteruskan
+> sebagai `--runtime <value>` ke `docker run`. Default `"runc"` TIDAK PERNAH
+> menyentuh argv sama sekali (flag ini absen total) — perilaku lama utuh
+> tak berubah untuk deployment yang tak mengisi env var ini. **Satu flag
+> Docker, bukan perubahan arsitektur** — kode ini TIDAK memverifikasi runtime
+> itu benar-benar terpasang/terdaftar di Docker daemon (`docker info
+> --format '{{.Runtimes}}'`), tanggung jawab operator. Berlaku HANYA untuk
+> `run_python`/`run_shell` (eksekusi kode) — `build_project_image` (§
+> Prioritas 8.3) sengaja tidak disentuh, beda skop (network sengaja terbuka
+> SAAT build, alasan isolasinya sudah lain). Firecracker/Kata Containers
+> DITUNDA sengaja: bukan `docker run --runtime` biasa, butuh stack
+> orkestrasi terpisah (`firecracker-containerd`/Kata/Ignite) yang sering tak
+> tersedia di VPS self-host tanpa nested virtualization — dicatat sebagai
+> backlog untuk deployment enterprise/multi-tenant masa depan, bukan lupa.
+
 **Output:**
 ```python
 {

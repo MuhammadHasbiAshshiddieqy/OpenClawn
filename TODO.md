@@ -1345,6 +1345,41 @@ Diverifikasi via `uv run --python 3.12`: **1047 passed** (+9: 5 di
 ditolak baca task/timeline user lain, member tetap baca task sendiri, admin
 tetap baca task siapa pun), ruff check/format bersih, tanpa dependency baru.
 
+**Susulan (2026-09-15): Fase 5 (runtime isolasi pluggable) — ✅ SELESAI,
+Fase 3 (sandbox lifecycle) TETAP DITUNDA.** Ditanya eksplisit lewat
+`AskUserQuestion`: Fase 3 (butuh persetujuan trade-off keamanan) vs Fase 5
+(rendah-risiko, satu config knob) vs berhenti — owner memilih Fase 5.
+
+`AppConfig.sandbox_runtime: str = "runc"` (baru, `infra/config.py`, env
+`OPENCLAWN_SANDBOX_RUNTIME`) — `tools/sandbox.py::_base_docker_args`
+meneruskannya sebagai `--runtime <value>` ke `docker run` HANYA bila NON-default
+(mis. `"runsc"` untuk [gVisor](https://gvisor.dev/), isolasi kernel-level
+lebih kuat) — default `"runc"` tak pernah menyentuh argv sama sekali,
+perilaku lama utuh. **Satu flag Docker, bukan perubahan arsitektur** — tak
+ada abstraksi "pluggable backend"/plugin interface yang dibangun (tak
+dibutuhkan untuk satu flag). Kode ini TIDAK memverifikasi runtime itu benar-
+benar terpasang di Docker daemon operator — tanggung jawab operator (`docker
+info --format '{{.Runtimes}}'`). Berlaku HANYA `run_python`/`run_shell`
+(eksekusi kode) — `build_project_image` (§ Prioritas 8.3) sengaja tak
+disentuh, beda skop (network sengaja terbuka SAAT build).
+
+**Firecracker/microVM TETAP direkomendasikan dilewati** (bukan bagian dari
+Fase 5 yang dikerjakan) — bukan `docker run --runtime` biasa, butuh stack
+orkestrasi terpisah (`firecracker-containerd`/Kata/Ignite) yang sering tak
+tersedia di VPS self-host tanpa nested virtualization. Dicatat sebagai
+backlog untuk deployment enterprise/multi-tenant masa depan, bukan lupa —
+bisa masuk lewat knob `sandbox_runtime` yang SAMA nanti bila runtime
+container-nya sendiri diganti (mis. `sandbox_runtime="kata"`).
+
+**Dengan ini, proposal `IMPROVEMENT-Sandbox-Isolation-Parallelization.md`
+SELESAI diproses**: Fase 1, 2, 4, 5 dikerjakan; Fase 3 (sandbox lifecycle)
+sengaja ditunda menunggu keputusan trade-off keamanan terpisah dari owner.
+
+Diverifikasi via `uv run --python 3.12`: **1049 passed** (+2:
+`test_base_docker_args_omits_runtime_flag_by_default`,
+`test_base_docker_args_passes_runtime_flag_when_non_default`), ruff
+check/format bersih, tanpa dependency baru.
+
 ---
 
 ## Sumber riset tren (dicari 2026-07-27)

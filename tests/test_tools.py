@@ -506,6 +506,30 @@ def test_base_docker_args_contains_every_required_flag():
         assert _flag_pair_present(args, flag, value), f"flag wajib hilang: {pair}"
 
 
+def test_base_docker_args_omits_runtime_flag_by_default():
+    """§ IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 5: default
+    'runc' TIDAK PERNAH diteruskan sebagai --runtime — perilaku lama utuh."""
+    from tools.sandbox import DockerSandbox
+
+    args = DockerSandbox()._base_docker_args("/x:/work:ro", "16m")
+    assert "--runtime" not in args
+
+
+def test_base_docker_args_passes_runtime_flag_when_non_default(monkeypatch):
+    """Operator mengisi OPENCLAWN_SANDBOX_RUNTIME=runsc (gVisor) → --runtime
+    runsc diteruskan ke docker run — satu flag Docker, tanpa perubahan lain."""
+    import dataclasses
+
+    from infra.config import CONFIG
+    from tools.sandbox import DockerSandbox
+
+    patched = dataclasses.replace(CONFIG, sandbox_runtime="runsc")
+    monkeypatch.setattr("tools.sandbox.CONFIG", patched)
+
+    args = DockerSandbox()._base_docker_args("/x:/work:ro", "16m")
+    assert _flag_pair_present(args, "--runtime", "runsc")
+
+
 # ── Approval gate integration ────────────────────────────────────────────────
 
 

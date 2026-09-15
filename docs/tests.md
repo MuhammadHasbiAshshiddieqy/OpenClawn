@@ -684,6 +684,8 @@ Test untuk `tools/`.
 | `test_run_python_fails_safe_when_docker_absent` | Docker absen → `SandboxUnavailable`, bukan eksekusi di host (keamanan #1) |
 | `test_run_shell_fails_safe_when_docker_absent` | Sama untuk `run_shell` |
 | `test_base_docker_args_contains_every_required_flag` | `_base_docker_args` (sumber argv tunggal) memuat semua `_REQUIRED_FLAGS` |
+| `test_base_docker_args_omits_runtime_flag_by_default` | **[§ Fase 5, runtime pluggable]** `sandbox_runtime="runc"` (default) → `--runtime` TIDAK ADA sama sekali di argv |
+| `test_base_docker_args_passes_runtime_flag_when_non_default` | `sandbox_runtime="runsc"` (gVisor) → `--runtime runsc` diteruskan ke `docker run` |
 | `test_tool_exception_returns_error_not_crash` | Tool melempar exception → error dict anggun (§1.3), turn tak mati |
 | `test_tool_timeout_returns_error` | Tool menggantung > `tool_timeout_sec` → error timeout |
 | `test_tool_output_truncated_uniformly` | Output panjang dipotong ke `tool_max_output` apa pun tool-nya |

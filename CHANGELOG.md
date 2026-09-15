@@ -7,6 +7,23 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Added — Sandbox: runtime isolasi pluggable (TODO.md § Prioritas 12 Fase 5)
+
+Terakhir dari proposal `IMPROVEMENT-Sandbox-Isolation-Parallelization.md` yang
+dikerjakan — dipilih owner secara eksplisit atas Fase 3 (sandbox lifecycle,
+butuh persetujuan trade-off keamanan terpisah, TETAP ditunda).
+
+- `AppConfig.sandbox_runtime: str = "runc"` (env `OPENCLAWN_SANDBOX_RUNTIME`)
+  — `tools/sandbox.py::_base_docker_args` meneruskannya sebagai `--runtime
+  <value>` ke `docker run` HANYA bila non-default (mis. `"runsc"` untuk
+  gVisor). Default tak pernah menyentuh argv, perilaku lama tak berubah.
+  Berlaku hanya untuk `run_python`/`run_shell`, bukan `build_project_image`.
+- Firecracker/microVM tetap direkomendasikan dilewati — bukan flag Docker
+  biasa, butuh stack orkestrasi terpisah jarang tersedia di VPS self-host.
+
+2 test baru (`tests/test_tools.py`). **1049 passed** (+2), ruff bersih,
+tanpa dependency baru.
+
 ### Added — Task Graph Fase 4: observability/replay (TODO.md § Prioritas 12)
 
 Susulan Fase 1+2 (DAG + concurrency) — dipilih karena eksplisit rendah-risiko

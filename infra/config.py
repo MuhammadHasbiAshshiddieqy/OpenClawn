@@ -175,6 +175,19 @@ class AppConfig:
     # (network, DB lock) tidak boleh membekukan turn. code_run/shell_run punya timeout
     # sandbox sendiri 30s, jadi batas ini sedikit di atasnya agar tidak memotong sandbox.
     tool_timeout_sec: int = 40
+    # § IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 5 (runtime isolasi
+    # pluggable — owner memilih ini, BUKAN Fase 3 sandbox lifecycle, TANPA
+    # Firecracker/microVM yang direkomendasikan dilewati eksplisit). Runtime
+    # container untuk `code_run`/`shell_run` (`tools/sandbox.py`) — default
+    # `"runc"` (bawaan Docker, TIDAK diteruskan sebagai `--runtime` sama sekali,
+    # perilaku lama tak berubah). Isi `"runsc"` (gVisor) untuk isolasi lebih kuat
+    # di deployment yang butuh (enterprise/multi-tenant) — HANYA satu flag Docker,
+    # bukan perubahan arsitektur; operator bertanggung jawab memastikan runtime
+    # itu benar-benar terpasang & terdaftar di Docker daemon-nya (`docker info
+    # --format '{{.Runtimes}}'`), tak diverifikasi kode ini. TIDAK berlaku untuk
+    # `docker build` (`build_project_image`) — beda skop, isolasi build-time
+    # sudah punya alasan lain (network sengaja terbuka SAAT build saja).
+    sandbox_runtime: str = "runc"
     # === Task Graph (DAG subtask, § IMPROVEMENT-Sandbox-Isolation-Parallelization.md
     # Fase 1+2) — core/task_graph.py + core/task_executor.py ===
     # Batas subtask BERSAMAAN dalam satu graph — konservatif karena tiap subtask
@@ -250,6 +263,7 @@ class AppConfig:
             anthropic_base=os.environ.get("ANTHROPIC_BASE", "https://api.anthropic.com"),
             gemini_base=os.environ.get("GEMINI_BASE", "https://generativelanguage.googleapis.com"),
             workspace_root=os.environ.get("OPENCLAWN_WORKSPACE", "."),
+            sandbox_runtime=os.environ.get("OPENCLAWN_SANDBOX_RUNTIME", "runc"),
             auth_token=auth_token,
             oidc_issuer=os.environ.get("OPENCLAWN_OIDC_ISSUER", ""),
             oidc_client_id=os.environ.get("OPENCLAWN_OIDC_CLIENT_ID", ""),

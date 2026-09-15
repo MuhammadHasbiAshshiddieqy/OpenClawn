@@ -4,6 +4,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from infra.config import CONFIG
 from infra.sandbox_image import effective_sandbox_image
 
 # Spesifikasi sandbox code_run (keamanan WAJIB):
@@ -49,7 +50,7 @@ class DockerSandbox:
         memverifikasi argv NYATA (bukan rekonstruksi manual yang bisa divergen).
         `mount` = spec `-v src:/work:ro`; selalu read-only.
         """
-        return [
+        args = [
             "docker",
             "run",
             "--rm",
@@ -70,11 +71,20 @@ class DockerSandbox:
             "nobody",
             "--security-opt",
             "no-new-privileges",
+        ]
+        # § IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 5 (runtime
+        # isolasi pluggable): HANYA diteruskan bila operator eksplisit memilih
+        # runtime non-default (mis. "runsc" untuk gVisor) — default "runc" tak
+        # pernah menyentuh argv sama sekali, perilaku lama utuh tak berubah.
+        if CONFIG.sandbox_runtime != "runc":
+            args += ["--runtime", CONFIG.sandbox_runtime]
+        args.append(
             # § Prioritas 8.3: image proyek (dibangun build_project_image) bila
             # sesi ini punya satu aktif, kalau tidak SANDBOX_IMAGE dasar —
             # perilaku lama tak berubah untuk sesi yang tak pernah membangun.
-            effective_sandbox_image(SANDBOX_IMAGE),
-        ]
+            effective_sandbox_image(SANDBOX_IMAGE)
+        )
+        return args
 
     async def run_python(self, code: str) -> dict:
         with tempfile.TemporaryDirectory() as workdir:
