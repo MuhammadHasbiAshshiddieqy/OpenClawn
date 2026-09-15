@@ -1471,6 +1471,110 @@ via stdin bukan argv, delegasi `run_python`↔`exec_persistent`), 1 di
 
 ---
 
+## 13. Audit lapisan `core/` — internal modul (2026-09-15)
+
+Babak audit lanjutan (setelah §10 `security/`, §11 `infra/`), atas
+permintaan eksplisit owner. Fokus: seluruh `core/` (26 file, ~6200 baris) —
+modul terbesar & paling sentral (agent loop, router, audit, crystallizer,
+multi-agent conversation, LLM client, task graph, autopilot), belum pernah
+diaudit langsung sesi-sesi sebelumnya. Metodologi sama §10/§11: baca kode +
+reproduksi terisolasi SEBELUM menindaklanjuti. Dibagi dua jalur paralel:
+`core/agent_loop.py` (file terbesar, paling sensitif keamanan) dibaca
+langsung; 25 file `core/` lainnya disurvei agent riset terpisah (read-only,
+tanpa edit) lalu tiap temuan diverifikasi ulang manual sebelum diperbaiki.
+
+**Diperbaiki:**
+
+1. **`AgentLoop.run()` — `SandboxUnavailable` tak tertangkap membuat sesi
+   dengan sandbox persisten `paused` crash total & permanen begitu Docker
+   tak tersedia.** Blok auto-resume sandbox persisten (§ Prioritas 12 Fase
+   3, ditambahkan sesi ini juga) memanggil `resume_persistent` SEBELUM
+   `try/finally` yang mereset ContextVar sempat mulai — Docker yang benar-
+   benar tak terpasang/daemon mati membuat `SandboxUnavailable` RAISE
+   (bukan return dict error), menjatuhkan SELURUH turn sebelum LLM sempat
+   dipanggil sama sekali (tak ada routing/audit/jawaban). Baris DB
+   `state='paused'` tak pernah berubah, jadi SETIAP turn berikutnya untuk
+   sesi itu gagal identik — rusak permanen tanpa jalan pulih sampai operator
+   turun tangan manual. Diverifikasi GAGAL dulu (reproduksi terisolasi:
+   sesi dengan container `paused` + Docker di-mock hilang → `AgentLoop.run()`
+   crash) sebelum diperbaiki: seluruh blok restore/resume dibungkus
+   try/except (pola sama `_maybe_compact`/`_generate_session_title` yang
+   sudah fail-safe di file yang sama) — gagal → log lalu turn jatuh ke
+   jalur ephemeral, bukan menjatuhkan turn. 4 test regresi baru
+   (`tests/test_sandbox_lifecycle.py`).
+2. **SSRF guard bisa dilewati via HTTP redirect** — `web_fetch`,
+   `http_request` (`tools/web.py`), dan `SkillPack.import_url`
+   (`core/skill_pack.py`) memvalidasi host lewat `_ssrf_guard` SEBELUM
+   request, lalu memakai `httpx.AsyncClient(follow_redirects=True)` — httpx
+   mengikuti redirect SENDIRI tanpa re-validasi apa pun, jadi URL publik
+   yang membalas 3xx ke host internal (metadata cloud, `localhost`,
+   RFC1918) lolos sepenuhnya karena guard hanya pernah melihat URL AWAL.
+   Diperbaiki: `_stream_capped` (dipakai bersama ketiga jalur) sekarang
+   mengikuti redirect MANUAL, me-re-validasi `_ssrf_guard` tiap hop
+   `Location` SEBELUM diikuti, dibatasi 5 hop. 11 test baru + 1 mock lama
+   (`test_skill_scanner.py`) yang jadi usang diperbaiki mengikuti bentuk
+   argv baru.
+3. **`ConversationOrchestrator._run_agent_turn` — deadlock permanen bila
+   giliran agent meledak di tengah stream.** Sentinel penanda selesai
+   (`queue.put(None)`) hanya dikirim di akhir jalur SUKSES — exception
+   apa pun dari `agent.run()` (pipeline penuh: LLM, tool, DB, sandbox)
+   membuat method berhenti tanpa mengirim sentinel, dan `run()` menunggu
+   `queue.get()` yang tak pernah datang: HANG SELAMANYA, bukan error yang
+   dilaporkan. Task pembawa exception itu sendiri juga tak pernah di-`await`
+   siapa pun (macet di `queue.get()` sebelum sempat `await run_task`), jadi
+   gagal sepenuhnya senyap. Diverifikasi GAGAL dulu (reproduksi terisolasi:
+   `FakeAgent` yang raise di tengah `run()` → `orch.run()` tak selesai dalam
+   5 detik) sebelum diperbaiki: sentinel dipindah ke `finally` (SELALU
+   terkirim), exception re-raise natural lewat `await run_task` di `run()`
+   — `web/main.py` sudah membungkus `orch.run()` dengan try/except yang
+   melaporkannya ke UI (pola sama chat single-agent). 2 test regresi baru
+   (`tests/test_conversation.py`).
+
+**Ditemukan, diverifikasi, TAPI tidak perlu tindakan kode** (sudah
+diputuskan/diterima sebelumnya atau sudah punya jaring pengaman):
+
+- **TOCTOU di `security/approval.py::finalize_orphan`** (approval yatim
+  bisa dieksekusi dua kali bila dua request approve bersamaan lolos cek
+  `decision='pending'` sebelum salah satunya sempat menulis keputusan) —
+  docstring method itu SENDIRI sudah secara eksplisit menyebut ini
+  "risiko fail-soft yang diterima, bukan double-execute yang disengaja"
+  (keputusan TODO.md § Prioritas 8.1). Tak ada temuan baru di luar yang
+  sudah dipertimbangkan; dicatat di sini agar owner tahu masih berlaku.
+- **`core/crystallizer.py` tak menerima `tenant_id`** (skill hasil
+  crystallization selalu masuk tenant `'default'`, tak peduli tenant
+  sesi sebenarnya) — konsisten dengan status Multi-Tenant yang SUDAH
+  didokumentasikan CLAUDE.md §7 sebagai "fondasi + bukti konsep"
+  (`ChatSessionStore`/`SkillDecayManager` "wired penuh SEBAGAI bukti
+  konsep", bukan klaim penegakan tenant di SETIAP modul). `AgentConfig`
+  memang tak punya field `tenant_id` sama sekali hari ini — gap sistemik
+  yang sudah diketahui, bukan regresi baru.
+- **Router memakai tier Gemini (`gemini-2.5-flash`/`-pro`), bukan cuma
+  Claude, untuk COMPLEX/CRITICAL** — sempat disalahpahami sebagai potensi
+  drift dari CLAUDE.md §7 ("Claude untuk berat"), tapi ternyata ini
+  bukan temuan baru: `EVALUATOR_FOR` SUDAH disinkronkan penuh dengan
+  roster ini (blocker 2026-07-27/28, lihat §2), LENGKAP dengan fail-safe
+  `verified=False` yang memaksa `draft` untuk generator model APA PUN di
+  luar peta — drift roster di masa depan sudah gagal aman, bukan cuma
+  hari ini.
+- **`EventBus.events` (antrian replay in-memory) tak pernah otomatis
+  di-drain** — awalnya terlihat seperti fitur setengah jadi/leak, tapi
+  `Event`/`self.events` didokumentasikan EKSPLISIT sebagai jalur
+  "replay/audit" opsional (dipakai manual, bukan otomatis) dan memang
+  ADA test yang membacanya (`test_events_replayable_from_bus_queue`).
+  Satu `EventBus` berumur satu `ConversationOrchestrator` (per-request),
+  jadi pertumbuhannya dibatasi umur SATU percakapan, bukan leak
+  seluruh-proses.
+
+Diverifikasi via `uv run --python 3.12`: **1096 passed** (+12 dari 1084
+sebelum audit ini: 4 di `test_sandbox_lifecycle.py` untuk bug #1, 4
+redirect-guard di `test_tools.py` + 2 di `test_skill_pack.py` untuk bug #2,
+2 di `test_conversation.py` untuk bug #3, plus perbaikan 1 mock usang di
+`test_skill_scanner.py` yang menargetkan bentuk argv lama), ruff
+check/format bersih, tanpa dependency baru. Ketiga bug diverifikasi GAGAL
+lebih dulu terhadap kode lama sebelum diperbaiki — bukan lolos kebetulan.
+
+---
+
 ## Sumber riset tren (dicari 2026-07-27)
 
 - [The best AI agent frameworks in 2026](https://www.langchain.com/resources/ai-agent-frameworks)

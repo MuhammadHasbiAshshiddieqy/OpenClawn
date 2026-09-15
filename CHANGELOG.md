@@ -7,6 +7,16 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Fixed — Audit lapisan `core/` (TODO.md § 13)
+
+Three real bugs found auditing all 26 files of `core/` for the first time — read code + isolated reproduction before fixing, same methodology as the `security/`/`infra/` audits.
+
+- **`AgentLoop.run()`**: uncaught `SandboxUnavailable` in the persistent-sandbox auto-resume path crashed every future turn of a session once Docker became unavailable, with no self-healing (the DB row stayed `paused` forever). Now wrapped in try/except, falling back to the ephemeral `code_run` path.
+- **SSRF guard bypass via redirect**: `web_fetch`, `http_request`, and `SkillPack.import_url` validated the target host before the request but used `follow_redirects=True`, letting a 3xx response silently redirect to an internal host (cloud metadata, localhost, RFC1918) with no re-validation. Redirects are now followed manually with the guard re-checked on every hop, capped at 5.
+- **Multi-agent deadlock**: `ConversationOrchestrator._run_agent_turn` only sent its queue sentinel on the success path — any exception from a sub-agent's turn left `run()` waiting on `queue.get()` forever, with the actual exception never retrieved or logged. The sentinel now sends from `finally`, and the exception propagates normally instead of hanging.
+
+12 new tests plus 1 outdated mock fixed, 1096 passed (from 1084), ruff clean.
+
 ### Added — Sandbox: persistent lifecycle, opt-in per sesi (TODO.md § Prioritas 12 Fase 3)
 
 Fase TERAKHIR dari proposal `IMPROVEMENT-Sandbox-Isolation-Parallelization.md`
