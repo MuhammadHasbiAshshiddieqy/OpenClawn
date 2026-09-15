@@ -178,6 +178,8 @@ def _fake_stream_client(text_chunks: list[str], status_code: int = 200):
     class FakeResp:
         def __init__(self):
             self.status_code = status_code
+            self.headers: dict = {}
+            self.is_redirect = status_code in (301, 302, 303, 307, 308)
 
         async def aiter_text(self):
             for chunk in text_chunks:
@@ -264,6 +266,139 @@ async def test_web_fetch_truncates_without_buffering_everything():
 
     assert result["truncated"] is True
     assert len(result["content"]) == MAX_BODY
+
+
+def _fake_redirect_chain_client(responses: list[tuple[int, dict, list[str]]]):
+    """Client httpx palsu yang mengembalikan respons BERBEDA tiap kali `stream()`
+    dipanggil (meniru rantai redirect nyata) — dipakai audit produksi 2026-09-15
+    untuk menguji `_stream_capped` mengikuti redirect MANUAL dengan `_ssrf_guard`
+    dicek ulang tiap hop, alih-alih `httpx` mengikutinya sendiri.
+
+    `responses` = list `(status_code, headers, text_chunks)` berurutan sesuai
+    urutan hop yang diharapkan.
+    """
+
+    class FakeResp:
+        def __init__(self, status_code, headers, chunks):
+            self.status_code = status_code
+            self.headers = headers
+            self.is_redirect = status_code in (301, 302, 303, 307, 308)
+            self._chunks = chunks
+
+        async def aiter_text(self):
+            for chunk in self._chunks:
+                yield chunk
+
+    class FakeStreamCtx:
+        def __init__(self, resp):
+            self._resp = resp
+
+        async def __aenter__(self):
+            return self._resp
+
+        async def __aexit__(self, *a):
+            return False
+
+    state = {"n": 0}
+
+    def _stream(*args, **kwargs):
+        idx = state["n"]
+        state["n"] += 1
+        status, headers, chunks = responses[idx]
+        return FakeStreamCtx(FakeResp(status, headers, chunks))
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.stream = MagicMock(side_effect=_stream)
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_follows_safe_redirect_to_public_host():
+    """302 ke host PUBLIK → diikuti manual, konten hop akhir dikembalikan."""
+    mock_client = _fake_redirect_chain_client(
+        [
+            (302, {"location": "http://example.com/final"}, []),
+            (200, {}, ["final content"]),
+        ]
+    )
+    tool = WebFetchTool()
+    with (
+        patch("tools.web.httpx.AsyncClient", return_value=mock_client),
+        patch("tools.web._ssrf_guard", return_value=None),
+    ):
+        result = await tool.execute({"url": "http://example.com/start"}, vault=None)
+
+    assert result["status"] == 200
+    assert "final content" in result["content"]
+    assert mock_client.stream.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_blocks_redirect_to_internal_host():
+    """Audit produksi 2026-09-15: sebelumnya `follow_redirects=True` membuat
+    SSRF guard hanya berlaku untuk URL AWAL — server publik yang membalas 3xx
+    ke host internal (cloud metadata, localhost, dst) lolos sepenuhnya karena
+    httpx mengikutinya sendiri tanpa validasi ulang. Sekarang redirect ke host
+    internal HARUS diblokir sebelum diikuti, walau URL awalnya publik & aman."""
+    mock_client = _fake_redirect_chain_client(
+        [
+            (302, {"location": "http://169.254.169.254/latest/meta-data/"}, []),
+        ]
+    )
+
+    def guard(url):
+        return "blocked" if "169.254.169.254" in url else None
+
+    tool = WebFetchTool()
+    with (
+        patch("tools.web.httpx.AsyncClient", return_value=mock_client),
+        patch("tools.web._ssrf_guard", side_effect=guard),
+    ):
+        result = await tool.execute({"url": "http://example.com/start"}, vault=None)
+
+    assert "error" in result
+    assert "SSRF" in result["error"] or "internal" in result["error"].lower()
+    # Hop kedua (ke host internal) TIDAK PERNAH diikuti.
+    assert mock_client.stream.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_blocks_after_too_many_redirects():
+    responses = [(302, {"location": f"http://example.com/hop{i}"}, []) for i in range(10)]
+    mock_client = _fake_redirect_chain_client(responses)
+    tool = WebFetchTool()
+    with (
+        patch("tools.web.httpx.AsyncClient", return_value=mock_client),
+        patch("tools.web._ssrf_guard", return_value=None),
+    ):
+        result = await tool.execute({"url": "http://example.com/start"}, vault=None)
+
+    assert "error" in result
+    assert "redirect" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_http_request_blocks_redirect_to_internal_host():
+    """Sama seperti web_fetch — http_request juga lewat _stream_capped bersama."""
+    mock_client = _fake_redirect_chain_client(
+        [
+            (302, {"location": "http://localhost:11434/api/tags"}, []),
+        ]
+    )
+
+    def guard(url):
+        return "blocked" if "localhost" in url else None
+
+    tool = HttpRequestTool()
+    with (
+        patch("tools.web.httpx.AsyncClient", return_value=mock_client),
+        patch("tools.web._ssrf_guard", side_effect=guard),
+    ):
+        result = await tool.execute({"url": "http://example.com/start"}, vault=None)
+
+    assert "error" in result
 
 
 # ── SSRF guard (web_fetch + http_request) ─────────────────────────────────────

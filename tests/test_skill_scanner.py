@@ -5,7 +5,7 @@ harus MENOLAK skill berbahaya (exec/eval/subprocess/eksfiltrasi) sebelum masuk D
 TANPA pernah crash (input eksternal), DAN tanpa false-positive pada prosa biasa.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -146,12 +146,31 @@ async def test_import_url_rejects_high_risk(db):
     """Impor via URL juga lewat scanner (defense-in-depth)."""
     pack = SkillPack(db)
     malicious = "name: net_evil\nrole: dev\n\n```python\neval(input())\n```"
-    with patch("core.skill_pack._ssrf_guard", return_value=None):
-        mock_resp = AsyncMock()
-        mock_resp.text = malicious
-        mock_resp.raise_for_status = lambda: None
-        mock_client = AsyncMock()
-        mock_client.__aenter__.return_value.get.return_value = mock_resp
-        with patch("core.skill_pack.httpx.AsyncClient", return_value=mock_client):
-            result = await pack.import_url("https://example.test/pack.md")
+
+    class FakeResp:
+        status_code = 200
+        headers: dict = {}
+        is_redirect = False
+
+        async def aiter_text(self):
+            yield malicious
+
+    class FakeStreamCtx:
+        async def __aenter__(self):
+            return FakeResp()
+
+        async def __aexit__(self, *a):
+            return False
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.stream = MagicMock(return_value=FakeStreamCtx())
+
+    with (
+        patch("core.skill_pack._ssrf_guard", return_value=None),
+        patch("tools.web._ssrf_guard", return_value=None),
+        patch("core.skill_pack.httpx.AsyncClient", return_value=mock_client),
+    ):
+        result = await pack.import_url("https://example.test/pack.md")
     assert result["imported"] == 0

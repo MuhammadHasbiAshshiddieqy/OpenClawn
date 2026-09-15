@@ -8,7 +8,7 @@ Yang kritis (CLAUDE.md §1): impor = teks eksternal → harus berlapis:
 DB :memory:, tanpa jaringan nyata (URL di-mock / SSRF di-bypass eksplisit).
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -158,27 +158,86 @@ async def test_import_url_rejects_non_http(db):
     assert "error" in result
 
 
+def _fake_skill_pack_stream_client(status_code: int, headers: dict, chunks: list[str]):
+    """Client httpx palsu untuk `client.stream(...)` — audit produksi 2026-09-15:
+    `import_url` sekarang lewat `_stream_capped` (redirect-aware SSRF guard,
+    sama jalur `web_fetch`/`http_request`) alih-alih `client.get()` langsung."""
+
+    class FakeResp:
+        def __init__(self):
+            self.status_code = status_code
+            self.headers = headers
+            self.is_redirect = status_code in (301, 302, 303, 307, 308)
+
+        async def aiter_text(self):
+            for chunk in chunks:
+                yield chunk
+
+    class FakeStreamCtx:
+        async def __aenter__(self):
+            return FakeResp()
+
+        async def __aexit__(self, *a):
+            return False
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.stream = MagicMock(return_value=FakeStreamCtx())
+    return mock_client
+
+
 async def test_import_url_fetches_and_imports(db):
     """URL publik (SSRF di-bypass) → fetch konten → impor sebagai draft."""
     cfg = AppConfig(db_path=":memory:", workspace_root="/tmp")
     pack_text = "name: remote_skill\nrole: dev\n\nKonten dari remote"
-
-    mock_resp = AsyncMock()
-    mock_resp.text = pack_text
-    mock_resp.raise_for_status = lambda: None
-    mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client = _fake_skill_pack_stream_client(200, {}, [pack_text])
 
     with (
         patch("core.skill_pack._ssrf_guard", return_value=None),
+        patch("tools.web._ssrf_guard", return_value=None),
         patch("core.skill_pack.httpx.AsyncClient", return_value=mock_client),
     ):
         result = await SkillPack(db, cfg).import_url("https://example.com/pack.md")
     assert result["imported"] == 1
     row = await db.fetchone("SELECT status FROM skills WHERE skill_name='remote_skill'")
     assert row["status"] == "draft"
+
+
+async def test_import_url_rejects_http_error_status(db):
+    cfg = AppConfig(db_path=":memory:", workspace_root="/tmp")
+    mock_client = _fake_skill_pack_stream_client(404, {}, [])
+
+    with (
+        patch("core.skill_pack._ssrf_guard", return_value=None),
+        patch("tools.web._ssrf_guard", return_value=None),
+        patch("core.skill_pack.httpx.AsyncClient", return_value=mock_client),
+    ):
+        result = await SkillPack(db, cfg).import_url("https://example.com/missing.md")
+    assert result["imported"] == 0
+    assert "error" in result
+
+
+async def test_import_url_blocks_redirect_to_internal_host(db):
+    """Audit produksi 2026-09-15: URL publik yang di-redirect ke host internal
+    (cloud metadata, localhost, dst) HARUS tetap diblokir — sebelumnya
+    `follow_redirects=True` membuat SSRF guard hanya berlaku untuk URL AWAL."""
+    cfg = AppConfig(db_path=":memory:", workspace_root="/tmp")
+    mock_client = _fake_skill_pack_stream_client(
+        302, {"location": "http://169.254.169.254/latest/meta-data/"}, []
+    )
+
+    def guard(url):
+        return "blocked" if "169.254.169.254" in url else None
+
+    with (
+        patch("core.skill_pack._ssrf_guard", side_effect=guard),
+        patch("tools.web._ssrf_guard", side_effect=guard),
+        patch("core.skill_pack.httpx.AsyncClient", return_value=mock_client),
+    ):
+        result = await SkillPack(db, cfg).import_url("https://example.com/pack.md")
+    assert result["imported"] == 0
+    assert "error" in result
 
 
 # ── Robustness ──────────────────────────────────────────────────────────────

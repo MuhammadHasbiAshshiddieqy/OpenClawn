@@ -51,6 +51,13 @@ def _ssrf_guard(url: str) -> str | None:
     return None
 
 
+MAX_REDIRECTS = 5
+
+
+class SSRFBlockedRedirect(Exception):
+    """Redirect chain mengarah ke host internal/privat — diblokir SEBELUM diikuti."""
+
+
 async def _stream_capped(
     client: httpx.AsyncClient, method: str, url: str, max_chars: int, **kwargs
 ) -> tuple[int, str, bool]:
@@ -62,18 +69,41 @@ async def _stream_capped(
     host yang mengirim body multi-GB (termasuk yang attacker-controlled,
     web_fetch tidak butuh approval) tetap membebani memori proses penuh
     sebelum dipotong. Berhenti membaca lebih awal via `client.stream()` +
-    `aiter_text()` menutup ini tanpa dependency baru."""
-    async with client.stream(method, url, **kwargs) as resp:
-        parts: list[str] = []
-        total = 0
-        async for chunk in resp.aiter_text():
-            parts.append(chunk)
-            total += len(chunk)
-            if total > max_chars:
-                break
-        text = "".join(parts)
-        truncated = len(text) > max_chars
-        return resp.status_code, text[:max_chars], truncated
+    `aiter_text()` menutup ini tanpa dependency baru.
+
+    Audit produksi 2026-09-15: `client` HARUS dibuat dengan `follow_redirects`
+    default (`False`) — redirect diikuti MANUAL di sini, tiap hop `Location`
+    di-re-validasi lewat `_ssrf_guard` SEBELUM diikuti. Sebelumnya
+    `follow_redirects=True` membuat guard hanya berlaku untuk URL AWAL: server
+    publik (atau yang disusupi) yang membalas 3xx ke host internal
+    (169.254.169.254, `localhost`, dst) lolos sepenuhnya karena httpx
+    mengikutinya sendiri tanpa validasi ulang — persis celah yang guard ini
+    ada untuk mencegah. Dibatasi `MAX_REDIRECTS` agar rantai redirect panjang/
+    melingkar tak menggantung permintaan.
+    """
+    current_url = url
+    for _ in range(MAX_REDIRECTS + 1):
+        async with client.stream(method, current_url, **kwargs) as resp:
+            if resp.is_redirect and resp.headers.get("location"):
+                next_url = str(httpx.URL(current_url).join(resp.headers["location"]))
+                blocked = _ssrf_guard(next_url)
+                if blocked:
+                    raise SSRFBlockedRedirect(
+                        f"Redirect ke host internal/privat diblokir (SSRF guard): {blocked}"
+                    )
+                current_url = next_url
+                continue
+            parts: list[str] = []
+            total = 0
+            async for chunk in resp.aiter_text():
+                parts.append(chunk)
+                total += len(chunk)
+                if total > max_chars:
+                    break
+            text = "".join(parts)
+            truncated = len(text) > max_chars
+            return resp.status_code, text[:max_chars], truncated
+    raise SSRFBlockedRedirect(f"Terlalu banyak redirect (maksimum {MAX_REDIRECTS})")
 
 
 class WebFetchTool(Tool):
@@ -91,11 +121,13 @@ class WebFetchTool(Tool):
         if blocked:
             return {"error": blocked}
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=30) as client:
                 # Truncation seragam via tool_max_output (token-first §1.4), bukan
                 # angka hardcoded. Jaring akhir di AgentLoop tetap berlaku.
                 status, content, truncated = await _stream_capped(client, "GET", url, MAX_BODY)
                 return {"status": status, "content": content, "truncated": truncated}
+        except SSRFBlockedRedirect as e:
+            return {"error": str(e)}
         except httpx.HTTPError as e:
             return {"error": str(e)}
 
@@ -212,7 +244,7 @@ class HttpRequestTool(Tool):
             return {"error": f"Kredensial vault tidak ditemukan: {e}"}
 
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=30) as client:
                 kwargs: dict = {"headers": resolved_headers}
                 if body is not None:
                     if isinstance(body, (dict, list)):
@@ -223,6 +255,8 @@ class HttpRequestTool(Tool):
                     client, method, url, MAX_BODY, **kwargs
                 )
             return {"status": status, "body": text, "truncated": truncated}
+        except SSRFBlockedRedirect as e:
+            return {"error": str(e)}
         except httpx.HTTPError as e:
             return {"error": str(e)}
 

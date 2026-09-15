@@ -30,7 +30,7 @@ from infra.database import DatabaseManager
 from infra.logging import log
 from security.shield import Shield
 from security.skill_scanner import scan_skill
-from tools.web import _ssrf_guard
+from tools.web import SSRFBlockedRedirect, _ssrf_guard, _stream_capped
 
 # Penanda batas antar-skill dalam satu pack Markdown.
 SKILL_DELIMITER = "\n---\n"
@@ -218,17 +218,29 @@ class SkillPack:
         }
 
     async def import_url(self, url: str, target_role: str | None = None) -> dict:
-        """Impor pack dari URL publik. Lapis 1: SSRF guard + scheme http(s)."""
+        """Impor pack dari URL publik. Lapis 1: SSRF guard (termasuk redirect) + scheme http(s).
+
+        Audit produksi 2026-09-15: sebelumnya `httpx.AsyncClient(follow_redirects=True)`
+        mengikuti 3xx tanpa re-validasi — URL publik yang di-redirect ke host
+        internal (169.254.169.254, localhost, dst) lolos SSRF guard yang hanya
+        memvalidasi URL AWAL. `_stream_capped` (`tools/web.py`, dipakai juga
+        `web_fetch`/`http_request`) sekarang mengikuti redirect manual dengan
+        `_ssrf_guard` dicek ulang tiap hop.
+        """
         if not url.startswith(("http://", "https://")):
             return {"imported": 0, "skipped": 0, "error": "url harus http:// atau https://"}
         blocked = _ssrf_guard(url)
         if blocked:
             return {"imported": 0, "skipped": 0, "error": blocked}
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                text = resp.text[:MAX_IMPORT_BYTES]
+            async with httpx.AsyncClient(timeout=30) as client:
+                status, text, _truncated = await _stream_capped(
+                    client, "GET", url, MAX_IMPORT_BYTES
+                )
+            if status >= 400:
+                return {"imported": 0, "skipped": 0, "error": f"fetch gagal: HTTP {status}"}
+        except SSRFBlockedRedirect as e:
+            return {"imported": 0, "skipped": 0, "error": str(e)}
         except httpx.HTTPError as e:
             return {"imported": 0, "skipped": 0, "error": f"fetch gagal: {e}"}
         return await self.import_pack(text, target_role)
