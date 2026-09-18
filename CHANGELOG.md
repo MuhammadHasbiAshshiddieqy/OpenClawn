@@ -7,6 +7,14 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Fixed — CRITICAL: path traversal via `role` → arbitrary soul.toml load (TODO.md § 16)
+
+Found while auditing the frontend (tracing where `chat.js`'s `role` form field ends up server-side). The `role` string was used completely unvalidated to build a filesystem path in four places — `core/agent_loop.py`, `core/router.py`, `core/late_execute.py`, `core/task_graph.py` all did the equivalent of `open(f"roles/{role}/soul.toml")` with no check that `role` was one of the actual configured roles.
+
+Verified with an isolated reproduction: a crafted `role` like `"../../../../tmp/pwn_dir"` made the app load an attacker-planted `soul.toml` from outside `roles/`, picking up an attacker-chosen system prompt and tool allow-list (`code_run`, `shell_run`, `file_write`, `http_request`) — full privilege escalation past the entire soul.toml/RBAC permission model. Reachable from `POST /chat/stream`'s `role` field and `POST /converse/stream`'s `participants` field, neither of which requires login by default (auth is off unless explicitly configured).
+
+Added `roles/registry.py::available_roles()`, a safe set-membership validator, and applied it independently at every vulnerable call site plus both web-layer entry points. 11 new tests, each verified to fail against the old code before the fix. 1118 passed, ruff clean.
+
 ### Fixed — Re-audit `web/main.py` (TODO.md § 14)
 
 Five real ownership/RBAC gaps found re-auditing the web layer (last dedicated pass was 2026-07-29; the file has grown substantially since — Task Graph, MCP, sandbox reaper, multi-agent conversations).

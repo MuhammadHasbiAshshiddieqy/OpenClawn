@@ -89,6 +89,23 @@ CONTRACT_REGISTRY = {
 
 Mengatur handoff antar role dengan validasi contract.
 
+> **`available_roles(roles_dir="roles") → set[str]`** — audit produksi
+> 2026-09-18 (kritis, privilege escalation): validator SATU-SATUNYA yang
+> aman untuk string `role` yang datang dari luar (form field
+> `/chat/stream`/`/converse/stream`, argumen tool `task_graph_submit`)
+> SEBELUM dipakai membangun path filesystem manapun. Glob satu-level
+> `roles_dir/*/soul.toml`, mengembalikan `p.parent.name` (selalu SATU
+> komponen path, tak pernah mengandung `/` atau `..`) — jadi `role in
+> available_roles()` menutup celah path traversal sepenuhnya, beda dari
+> sekadar `Path(...).exists()` yang tetap `True` untuk traversal yang
+> berujung ke `soul.toml` NYATA di luar `roles/`. Dipakai independen
+> (defense-in-depth) di `core/agent_loop.py::AgentLoop._load_soul_once`,
+> `core/router.py::SmartRouter._load_soul` (dilewati bila `soul_path`
+> eksplisit diberikan — jalur test/tooling internal, bukan role mentah dari
+> luar), `core/late_execute.py::execute_orphan_approval`, dan
+> `core/task_graph.py::TaskGraph.validate` (menggantikan cek `.exists()`
+> lama yang lemah).
+
 ### Kelas: `RoleNegotiator`
 
 **`__init__(db)`**

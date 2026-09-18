@@ -1709,6 +1709,72 @@ Tak ada perubahan kode/test (tak ada temuan untuk diperbaiki).
 
 ---
 
+## 16. Audit frontend (JS/templates) — path traversal KRITIS ditemukan (2026-09-18)
+
+Permintaan eksplisit owner: audit `web/static/*.js` (2290 baris —
+`highlight.min.js` 1212 baris adalah vendor pihak ketiga, dilewati) dan
+`web/templates/*.html` (14 file, 1420 baris), satu-satunya lapisan yang
+belum pernah diaudit sama sekali (semua audit sebelumnya §6/§7/§10/§11/§13/
+§14/§15 murni Python sisi server).
+
+**`chat.js` (1078 baris, dibaca penuh) — bersih dari XSS nyata:**
+`renderMarkdown()` memakai `marked` + `DOMPurify.sanitize()` (bukan
+`innerHTML` mentah dari teks LLM), keduanya dimuat dari CDN dengan versi
+terkunci + hash SRI (`marked@12.0.2`, `dompurify@3.1.6`) — tak bisa
+disusupi diam-diam via CDN compromise. `escapeHtml()` cukup untuk SEMUA
+konteks teks-node; satu titik di mana hasilnya disisipkan ke dalam atribut
+`title="..."` (riwayat chat, nilai `role`) TIDAK menghadapi risiko nyata
+lagi setelah perbaikan §16 di bawah (nilai `role` sekarang selalu anggota
+`available_roles()`, bukan lagi string bebas).
+
+**`web/templates/*.html` — bersih.** SEMUA pemakaian filter Jinja2 `|safe`
+(11 titik, `_sidebar.html`/`autopilots.html`/`router.html`/`settings.html`/
+`mcp.html`/`skills.html`) HANYA membungkus string dari `t(...)` (kamus i18n
+`infra/i18n.py`, hardcoded developer, bukan data user) atau literal HTML
+tetap (`'aria-current="page"'`) — tak ada satu pun yang mengalirkan data
+user/LLM lewat `|safe`. `t()` sendiri memakai `str.format(**kwargs)` di
+atas template STATIS; argumen yang disuntik (`tier`, `model`, `threshold`)
+juga selalu nilai tetap/config, bukan input user.
+
+### 🔴 KRITIS DITEMUKAN (bukan dari file JS/template, tapi DILACAK dari sana):
+**path traversal via `role` → soul.toml arbitrer → privilege escalation total**
+
+Menelusuri KE MANA field `role` yang dikirim `chat.js` (form
+`/chat/stream`, `/converse/stream`) berakhir di sisi server menemukan:
+`role` dipakai MENTAH untuk membangun path filesystem
+(`f"roles/{role}/soul.toml"`) di **EMPAT** tempat — `core/agent_loop.py`,
+`core/router.py`, `core/late_execute.py`, `core/task_graph.py` — TANPA
+validasi apa pun. Diverifikasi lewat reproduksi terisolasi SEBELUM
+diperbaiki: `AgentLoop(AgentConfig(role="../../../../../../tmp/pwn_dir"))`
+SUKSES memuat `soul.toml` bikinan sendiri di luar `roles/`, lengkap
+`[tools] allowed = ["code_run", "shell_run", "file_write", "http_request"]`
+— privilege escalation TOTAL yang membypass SELURUH model permission
+berbasis soul.toml/RBAC, reachable dari `POST /chat/stream`/
+`POST /converse/stream` TANPA login sama sekali (auth default OFF).
+`core/task_graph.py::TaskGraph.validate()` punya cek, tapi LEMAH
+(`Path(...).exists()` — tetap `True` untuk traversal yang benar-benar
+berujung ke `soul.toml`, tak mencegah traversal itu sendiri).
+
+**Diperbaiki:** `roles/registry.py::available_roles()` (baru) — validator
+keanggotaan-set yang aman (glob SATU level `roles/`, hasil selalu nama
+folder MURNI, tak pernah mengandung `/` atau `..`). Diterapkan independen
+di KEEMPAT titik rentan (defense-in-depth, pola sama `_TRUST_MODE_EXEMPT`)
+plus dua entry point web (`/chat/stream`'s `role`, `/converse/stream`'s
+`participants` CSV) agar client tak sah dapat error jelas, bukan 500
+mentah. `SmartRouter`'s parameter `soul_path` eksplisit (dipakai luas oleh
+test suite router sendiri) TETAP dilewati — caller yang secara sadar
+meneruskan path bukan target celah ini.
+
+Diverifikasi via `uv run --python 3.12`: **1118 passed** (+11: 9 di
+`tests/test_role_validation.py` baru — mencakup `available_roles()` dan
+KEEMPAT titik pertahanan independen — plus 2 di `tests/test_web.py` untuk
+respons lapisan web), ruff check/format bersih, tanpa dependency baru.
+Kerentanan diverifikasi GAGAL (soul.toml arbitrer termuat) terhadap kode
+lama sebelum diperbaiki, lalu diverifikasi BLOCKED setelahnya — bukan lolos
+kebetulan.
+
+---
+
 ## Sumber riset tren (dicari 2026-07-27)
 
 - [The best AI agent frameworks in 2026](https://www.langchain.com/resources/ai-agent-frameworks)
