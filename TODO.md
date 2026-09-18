@@ -1670,6 +1670,45 @@ sebelum diperbaiki.
 
 ---
 
+## 15. Audit `scripts/` — internal modul (2026-09-18)
+
+Babak audit terakhir untuk melengkapi cakupan seluruh codebase (setelah
+§6/§14 `web/`, §7 `memory/roles/tools/`, §10 `security/`, §11 `infra/`,
+§13 `core/`). `scripts/` (6 file, 857 baris) belum pernah diaudit langsung.
+Dibaca end-to-end sendiri (bukan agent riset — cukup kecil untuk dibaca
+langsung), metodologi sama: cek race/TOCTOU, exception ditelan diam-diam,
+resource leak, validasi input yang hilang.
+
+**Hasil: bersih, tak ada temuan baru.** Semua 6 file adalah tool CLI yang
+dijalankan operator sendiri di mesinnya (bukan endpoint web, tak melintasi
+batas privilese apa pun — konsisten dengan penilaian `infra/manifest.py`/
+`infra/backup.py` di §11):
+
+- `apply_manifest.py`, `backup_db.py`, `anchor_audit_chain.py` — wrapper
+  CLI tipis di atas `infra/manifest.py`/`infra/backup.py`/`core/audit_anchor.py`
+  yang SUDAH diaudit (§11/§13), tanpa logika sendiri yang perlu ditinjau
+  ulang.
+- `route_sensitivity.py` — alat analisis MURNI baca (tanpa DB/network,
+  memanggil API internal `SmartRouter` yang sengaja), tak ada permukaan
+  keamanan sama sekali.
+- `seed_routing.py` — hanya menulis ke path DB yang EKSPLISIT diberikan
+  operator lewat `--db`, jelas dilabeli data sintetis di docstring & output
+  CLI-nya sendiri, tak ada batas privilese yang dilintasi.
+- `run_evals.py` — sudah membawa dua insiden nyata yang DIDOKUMENTASIKAN
+  lengkap di komentar sendiri (`config=` yang tak diteruskan; DB ditutup
+  sebelum background task `_post_turn` selesai, § Prioritas 8.2) — ditelusuri
+  ulang logika task-tracking/cleanup-nya saat ini, tak ditemukan yang baru
+  rusak.
+
+Dengan ini, **seluruh folder kode OpenCLAWN (`core/`, `infra/`, `memory/`,
+`roles/`, `security/`, `tools/`, `web/`, `scripts/`) sudah melalui minimal
+satu babak audit dedicated** — bukan cuma disentuh insidental lewat
+pengembangan fitur.
+
+Tak ada perubahan kode/test (tak ada temuan untuk diperbaiki).
+
+---
+
 ## Sumber riset tren (dicari 2026-07-27)
 
 - [The best AI agent frameworks in 2026](https://www.langchain.com/resources/ai-agent-frameworks)
