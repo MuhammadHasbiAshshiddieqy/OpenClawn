@@ -879,3 +879,279 @@ def test_member_can_download_own_session_file(client_oidc, tmp_path):
     )
     assert resp.status_code == 200
     assert resp.text == "milik bob"
+
+
+# ── Audit produksi 2026-09-18: web/main.py re-audit (§13 core/ selesai, web/
+# tumbuh besar sejak audit 2026-07-29) — beberapa endpoint yang ditambahkan
+# BELAKANGAN drift dari pola kepemilikan/RBAC yang sudah ditegakkan di atas. ──
+
+
+def test_converse_stream_threads_requesting_user_id_into_agent_config(client_oidc):
+    """`/converse/stream` SEBELUMNYA tak mengisi `AgentConfig.user_id` sama
+    sekali — approval dari tool butuh-approval di percakapan multi-agent
+    SELALU tercatat `owner_user_id=None`, yang oleh `_can_access_owned_resource`
+    diperlakukan "terlihat semua orang" (fail-safe untuk resource lama tanpa
+    owner, BUKAN dimaksudkan untuk resource yang seharusnya punya owner) —
+    melumpuhkan HITL untuk seluruh jalur percakapan multi-agent. Di sini
+    `AgentLoop` di-mock (bukan `ConversationOrchestrator`, agar `agent_factory`
+    beneran dieksekusi) untuk menangkap `AgentConfig` yang dibangun, tanpa
+    memanggil LLM sungguhan (CLAUDE.md §5)."""
+    import asyncio
+
+    from core.agent_loop import AgentEvent
+    from infra.users import UserStore
+
+    asyncio.run(_bootstrap_admin_and_get_id())
+    _login_via_oidc(client_oidc, "user-bob")
+
+    import web.main as web_main
+
+    bob = asyncio.run(UserStore(web_main.db).get_by_subject("user-bob"))
+    captured_configs: list = []
+
+    class FakeAgentLoop:
+        def __init__(self, agent_cfg, db=None, config=None, approval=None, question_gate=None):
+            captured_configs.append(agent_cfg)
+
+        async def run(self, message):
+            yield AgentEvent(type="token", text="ok")
+
+    original = web_main.AgentLoop
+    web_main.AgentLoop = FakeAgentLoop
+    try:
+        resp = client_oidc.post(
+            "/converse/stream",
+            data={"message": "halo", "pattern": "pipeline", "participants": "dev"},
+        )
+        assert resp.status_code == 200
+    finally:
+        web_main.AgentLoop = original
+
+    assert len(captured_configs) >= 1
+    assert captured_configs[0].user_id == str(bob.id)
+
+
+def test_member_forbidden_from_interjecting_other_users_conversation(client_oidc):
+    """`/converse/interject` SEBELUMNYA tak digerbangi kepemilikan sama sekali
+    — user login mana pun bisa menyuntik pesan palsu ke percakapan multi-agent
+    user lain hanya dengan menebak/mengetahui `session_id` (pola bug sama
+    `/answer` sebelum diaudit 2026-08-27)."""
+    import asyncio
+
+    from core.conversation import ConversationControl
+
+    alice_id = asyncio.run(_bootstrap_admin_and_get_id())
+
+    import web.main as web_main
+
+    control = ConversationControl()
+    web_main._conversations["s-alice-conv"] = control
+    web_main._conversation_owners["s-alice-conv"] = str(alice_id)
+    try:
+        _login_via_oidc(client_oidc, "user-bob")
+        resp = client_oidc.post(
+            "/converse/interject", data={"session_id": "s-alice-conv", "message": "halo palsu"}
+        )
+        assert resp.status_code == 403
+        assert control.pop_interjection() is None
+    finally:
+        web_main._conversations.pop("s-alice-conv", None)
+        web_main._conversation_owners.pop("s-alice-conv", None)
+
+
+def test_member_forbidden_from_stopping_other_users_conversation(client_oidc):
+    """`/converse/stop` — sama bug & fix dengan interject di atas."""
+    import asyncio
+
+    from core.conversation import ConversationControl
+
+    alice_id = asyncio.run(_bootstrap_admin_and_get_id())
+
+    import web.main as web_main
+
+    control = ConversationControl()
+    web_main._conversations["s-alice-conv2"] = control
+    web_main._conversation_owners["s-alice-conv2"] = str(alice_id)
+    try:
+        _login_via_oidc(client_oidc, "user-bob")
+        resp = client_oidc.post("/converse/stop", data={"session_id": "s-alice-conv2"})
+        assert resp.status_code == 403
+        assert control._stopped is False
+    finally:
+        web_main._conversations.pop("s-alice-conv2", None)
+        web_main._conversation_owners.pop("s-alice-conv2", None)
+
+
+def test_member_can_still_interject_and_stop_own_conversation(client_oidc):
+    """Isolasi kepemilikan tak berarti user tak bisa mengontrol percakapan
+    MILIKNYA SENDIRI."""
+    import asyncio
+
+    from core.conversation import ConversationControl
+    from infra.users import UserStore
+
+    asyncio.run(_bootstrap_admin_and_get_id())
+    _login_via_oidc(client_oidc, "user-bob")
+
+    import web.main as web_main
+
+    bob = asyncio.run(UserStore(web_main.db).get_by_subject("user-bob"))
+    control = ConversationControl()
+    web_main._conversations["s-bob-conv"] = control
+    web_main._conversation_owners["s-bob-conv"] = str(bob.id)
+    try:
+        resp = client_oidc.post(
+            "/converse/interject", data={"session_id": "s-bob-conv", "message": "fokus"}
+        )
+        assert resp.status_code == 200
+        assert control.pop_interjection() == "fokus"
+
+        resp2 = client_oidc.post("/converse/stop", data={"session_id": "s-bob-conv"})
+        assert resp2.status_code == 200
+        assert control._stopped is True
+    finally:
+        web_main._conversations.pop("s-bob-conv", None)
+        web_main._conversation_owners.pop("s-bob-conv", None)
+
+
+def _seed_approval_log_row(db, approval_id: str, owner_user_id: str | None) -> None:
+    asyncio_run = __import__("asyncio").run
+    asyncio_run(
+        db.execute(
+            """INSERT INTO approval_log (session_id, tool_name, tool_input, decision, approval_id, owner_user_id)
+               VALUES ('s-test', 'code_run', '{"code": "x"}', 'pending', ?, ?)""",
+            (approval_id, owner_user_id),
+        )
+    )
+
+
+def test_member_forbidden_from_reading_other_users_approval_status(client_oidc):
+    """`GET /approval/{approval_id}` SEBELUMNYA tak digerbangi kepemilikan sama
+    sekali (beda dari `POST /approve`, diaudit 2026-07-29) walau `approval_log`
+    sudah punya kolom `owner_user_id` sejak itu."""
+    import asyncio
+
+    alice_id = asyncio.run(_bootstrap_admin_and_get_id())
+
+    import web.main as web_main
+
+    _seed_approval_log_row(web_main.db, "appr-alice", str(alice_id))
+
+    _login_via_oidc(client_oidc, "user-bob")
+    resp = client_oidc.get("/approval/appr-alice")
+    assert resp.status_code == 403
+
+
+def test_member_can_still_read_own_approval_status(client_oidc):
+    import asyncio
+
+    from infra.users import UserStore
+
+    asyncio.run(_bootstrap_admin_and_get_id())
+    _login_via_oidc(client_oidc, "user-bob")
+
+    import web.main as web_main
+
+    bob = asyncio.run(UserStore(web_main.db).get_by_subject("user-bob"))
+    _seed_approval_log_row(web_main.db, "appr-bob", str(bob.id))
+
+    resp = client_oidc.get("/approval/appr-bob")
+    assert resp.status_code == 200
+    assert resp.json()["approval_id"] == "appr-bob"
+
+
+def _seed_routing_event_row(db, session_id: str, user_id: str | None) -> int:
+    asyncio_run = __import__("asyncio").run
+    cursor = asyncio_run(
+        db.execute(
+            """INSERT INTO routing_events (session_id, role, user_id, query_text, evidence_json)
+               VALUES (?, 'dev', ?, 'test query', '{}')""",
+            (session_id, user_id),
+        )
+    )
+    return cursor.lastrowid
+
+
+def test_member_forbidden_from_reading_other_users_evidence(client_oidc):
+    """`GET /evidence/{event_id}` SEBELUMNYA tak digerbangi kepemilikan sama
+    sekali, DAN `event_id` adalah integer autoincrement berurutan — trivial
+    dienumerasi untuk membaca evidence (policy/skill/guardrail) lintas user."""
+    import asyncio
+
+    alice_id = asyncio.run(_bootstrap_admin_and_get_id())
+
+    import web.main as web_main
+
+    event_id = _seed_routing_event_row(web_main.db, "s-alice-evidence", str(alice_id))
+
+    _login_via_oidc(client_oidc, "user-bob")
+    resp = client_oidc.get(f"/evidence/{event_id}")
+    assert resp.status_code == 403
+
+
+def test_member_can_still_read_own_evidence(client_oidc):
+    import asyncio
+
+    from infra.users import UserStore
+
+    asyncio.run(_bootstrap_admin_and_get_id())
+    _login_via_oidc(client_oidc, "user-bob")
+
+    import web.main as web_main
+
+    bob = asyncio.run(UserStore(web_main.db).get_by_subject("user-bob"))
+    event_id = _seed_routing_event_row(web_main.db, "s-bob-evidence", str(bob.id))
+
+    resp = client_oidc.get(f"/evidence/{event_id}")
+    assert resp.status_code == 200
+    assert resp.json()["event_id"] == event_id
+
+
+def test_evidence_with_unrecorded_owner_stays_visible(client_oidc):
+    """Regresi negatif: event lama/tak terautentikasi (`user_id='default'`,
+    perilaku SEBELUM audit produksi 2026-07-29 mengisi ini) TETAP terlihat
+    semua orang — fail-safe untuk resource TANPA owner tercatat, beda dari
+    resource yang SEHARUSNYA punya owner tapi lupa diisi (bug yang diperbaiki
+    di atas)."""
+    import asyncio
+
+    asyncio.run(_bootstrap_admin_and_get_id())
+
+    import web.main as web_main
+
+    event_id = _seed_routing_event_row(web_main.db, "s-legacy", "default")
+
+    _login_via_oidc(client_oidc, "user-bob")
+    resp = client_oidc.get(f"/evidence/{event_id}")
+    assert resp.status_code == 200
+
+
+def test_member_forbidden_from_applying_skill_merge(client_oidc):
+    """`POST /skills/apply-merge` SEBELUMNYA tak digerbangi admin — drift dari
+    `/skills/set-visibility` (kelas mutasi sama, corpus skill bersama satu role)."""
+    import asyncio
+
+    asyncio.run(_bootstrap_first_user_directly())
+    _login_via_oidc(client_oidc, "user-bob")
+    csrf = client_oidc.cookies.get("openclawn_csrf")
+    resp = client_oidc.post(
+        "/skills/apply-merge",
+        data={"csrf_token": csrf, "role": "dev", "curation_id": "1"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+
+
+def test_member_forbidden_from_reverting_skill_merge(client_oidc):
+    """`POST /skills/revert-merge` — sama bug & fix dengan apply-merge di atas."""
+    import asyncio
+
+    asyncio.run(_bootstrap_first_user_directly())
+    _login_via_oidc(client_oidc, "user-bob")
+    csrf = client_oidc.cookies.get("openclawn_csrf")
+    resp = client_oidc.post(
+        "/skills/revert-merge",
+        data={"csrf_token": csrf, "role": "dev"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403

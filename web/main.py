@@ -109,6 +109,16 @@ question_gate = QuestionGate(CONFIG)
 # Registry kontrol percakapan per session — agar /converse/interject & /stop bisa
 # mencapai loop yang sedang berjalan di /converse/stream (pola sama ApprovalGate._pending).
 _conversations: dict[str, ConversationControl] = {}
+# Audit produksi 2026-09-18: pemilik tiap percakapan multi-agent AKTIF, agar
+# /converse/interject & /converse/stop bisa digerbangi _can_access_owned_resource
+# sama seperti /answer & /approve — SEBELUMNYA endpoint ini tak digerbangi sama
+# sekali (user login mana pun bisa menyela/menghentikan percakapan user lain
+# hanya dengan menebak/mengetahui session_id). Percakapan multi-agent TIDAK
+# punya baris `chat_sessions` (persist_history=False, `ensure_created` tak
+# pernah dipanggil di /converse/stream) — beda dari /answer yang bisa memakai
+# `ChatSessionStore.get_owner`, jadi kepemilikan dilacak in-memory di sini,
+# pola sama `_conversations` sendiri (registry sementara, bukan tabel DB baru).
+_conversation_owners: dict[str, str | None] = {}
 
 
 async def _run_autopilot(ap: dict) -> int:
@@ -943,20 +953,37 @@ async def delete_chat_session(request: Request, session_id: str):
 
 
 @app.get("/evidence/{event_id}")
-async def get_turn_evidence(event_id: int):
+async def get_turn_evidence(request: Request, event_id: int):
     """Evidence-Based Response (TODO.md § Prioritas 2): snapshot policy/skill/
     guardrail yang berlaku untuk satu turn, disimpan `RoutingAuditor.finalize()`.
     `event_id` = id baris `routing_events` (sama dengan yang dicatat `log_decision`).
 
     404 bila event tidak ada; `evidence: null` bila event ada tapi turn belum
     selesai (finalize belum jalan) atau turn ini dari versi lama tanpa evidence.
+
+    Audit produksi 2026-09-18: kepemilikan dicek SEBELUM mengembalikan evidence
+    — SEBELUMNYA endpoint ini (beda dari `/chat-sessions/{id}/turns` & `/approve`
+    yang sudah diaudit 2026-07-29) tak digerbangi kepemilikan sama sekali,
+    DAN `event_id` adalah integer AUTOINCREMENT berurutan — user login mana pun
+    (termasuk role terendah) bisa mengiterasi 1, 2, 3, ... untuk membaca evidence
+    (policy/model/skill/guardrail) SEMUA sesi lintas tenant. `routing_events`
+    tak punya kolom `owner_user_id` sendiri, tapi SUDAH punya `user_id`
+    (`AgentConfig.user_id` — kolom yang sama dipakai `ToolAudit`/`approval_log`)
+    yang cukup untuk kepemilikan tanpa join tambahan; `"default"` diperlakukan
+    sebagai "tak tercatat" (sama seperti `core/agent_loop.py` memperlakukan
+    `AgentConfig.user_id == "default"` sebagai `owner_user_id=None` saat
+    memanggil `ApprovalGate.request`).
     """
     row = await db.fetchone(
-        "SELECT id, session_id, role, evidence_json, created_at FROM routing_events WHERE id=?",
+        "SELECT id, session_id, role, user_id, evidence_json, created_at "
+        "FROM routing_events WHERE id=?",
         (event_id,),
     )
     if row is None:
         raise StarletteHTTPException(status_code=404, detail="evidence not found")
+    owner = row["user_id"] if row["user_id"] and row["user_id"] != "default" else None
+    if not _can_access_owned_resource(request, owner):
+        raise StarletteHTTPException(status_code=403, detail="forbidden")
     return {
         "event_id": row["id"],
         "session_id": row["session_id"],
@@ -967,7 +994,7 @@ async def get_turn_evidence(event_id: int):
 
 
 @app.get("/approval/{approval_id}")
-async def get_approval_status(approval_id: str):
+async def get_approval_status(request: Request, approval_id: str):
     """Human Approval Pipeline sebagai node query-able (TODO.md § Prioritas 2).
 
     Sebelumnya `approval_id` hanya tersirat sebagai substring sementara di
@@ -976,14 +1003,24 @@ async def get_approval_status(approval_id: str):
     lintas status pending→approved/rejected/timeout setelah faktanya. Kolom
     `approval_log.approval_id` (baru) membuat ini query-able secara mandiri,
     independen dari mekanisme `asyncio.Future` in-memory `ApprovalGate`.
+
+    Audit produksi 2026-09-18: kepemilikan dicek SEBELUM mengembalikan detail
+    — SEBELUMNYA endpoint ini (beda dari `POST /approve` yang sudah diaudit
+    2026-07-29) tak digerbangi kepemilikan sama sekali, walau `approval_log`
+    sudah punya kolom `owner_user_id` sejak audit itu. `approval_id` adalah
+    `uuid4().hex` acak (tak semudah `/evidence/{id}` untuk dienumerasi), tapi
+    tanpa gate ini approval_id yang bocor lewat jalur MANAPUN (log, riwayat
+    browser) memberi akses baca `tool_input` (path/command/code) siapa pun.
     """
     row = await db.fetchone(
-        """SELECT approval_id, session_id, tool_name, tool_input, decision, created_at
+        """SELECT approval_id, session_id, tool_name, tool_input, decision, created_at, owner_user_id
            FROM approval_log WHERE approval_id=?""",
         (approval_id,),
     )
     if row is None:
         raise StarletteHTTPException(status_code=404, detail="approval not found")
+    if not _can_access_owned_resource(request, row["owner_user_id"]):
+        raise StarletteHTTPException(status_code=403, detail="forbidden")
     return {
         "approval_id": row["approval_id"],
         "session_id": row["session_id"],
@@ -1142,9 +1179,24 @@ async def converse_stream(request: Request):
     except ValueError as e:
         return HTMLResponse(f"event: error\ndata: {json.dumps({'text': str(e)})}\n\n")
 
+    # Audit produksi 2026-09-18: identitas user pemicu percakapan ini — SAMA
+    # alasan `/chat/stream` (lihat komentar di sana). SEBELUMNYA tak pernah
+    # diisi, jadi SETIAP approval yang muncul dari tool butuh-approval di
+    # percakapan multi-agent tercatat `owner_user_id=None` — dan
+    # `_can_access_owned_resource` memperlakukan `None` sebagai "terlihat
+    # semua orang" (fail-safe untuk resource lama tanpa owner tercatat, BUKAN
+    # dimaksudkan untuk resource yang SEHARUSNYA punya owner). Efeknya: siapa
+    # pun yang login (role apa pun, tenant sama) bisa melihat approval itu
+    # lewat `GET /approvals` biasa (filter kepemilikan di sana SENGAJA
+    # meloloskan baris tanpa owner) lalu memutuskannya — melumpuhkan HITL
+    # untuk seluruh jalur multi-agent.
+    _current_user = getattr(request.state, "user", None)
+    owner_user_id = str(_current_user.id) if _current_user else None
+
     # STOP: implicit lewat disconnect; INTERJECT lewat registry per session.
     control = ConversationControl(disconnect_check=request.is_disconnected)
     _conversations[session_id] = control
+    _conversation_owners[session_id] = owner_user_id
 
     def agent_factory(role: str) -> AgentLoop:
         return AgentLoop(
@@ -1154,6 +1206,7 @@ async def converse_stream(request: Request):
             AgentConfig(
                 role=role,
                 session_id=session_id,
+                user_id=owner_user_id or "default",
                 workspace_override=workdir,
                 persist_history=False,
                 trust_mode=trust_mode,
@@ -1205,7 +1258,16 @@ async def converse_stream(request: Request):
             log.error("converse_stream_failed", session=session_id, error=str(exc))
             yield f"event: error\ndata: {json.dumps({'text': str(exc)})}\n\n"
         finally:
-            _conversations.pop(session_id, None)
+            # Audit produksi 2026-09-18: hapus HANYA bila registry masih menunjuk
+            # ke control INSTANCE milik request ini — dua /converse/stream
+            # bersamaan dengan session_id yang SAMA (mis. localStorage dibagi
+            # dua tab) sebelumnya bisa membuat permintaan yang selesai lebih
+            # dulu menghapus entri milik permintaan LAIN yang masih berjalan
+            # (pop() tanpa cek identitas), mematikan diam-diam interject/stop
+            # untuk percakapan yang sebenarnya masih aktif.
+            if _conversations.get(session_id) is control:
+                _conversations.pop(session_id, None)
+                _conversation_owners.pop(session_id, None)
             yield "event: done\ndata: [DONE]\n\n"
 
     return StreamingResponse(
@@ -1217,25 +1279,41 @@ async def converse_stream(request: Request):
 
 @app.post("/converse/interject")
 async def converse_interject(request: Request):
-    """User menyela percakapan yang sedang berjalan; disuntik ke giliran berikutnya."""
+    """User menyela percakapan yang sedang berjalan; disuntik ke giliran berikutnya.
+
+    Audit produksi 2026-09-18: kepemilikan dicek SEBELUM menyuntik pesan —
+    SEBELUMNYA endpoint ini tak digerbangi sama sekali, user login mana pun
+    bisa menyuntikkan pesan PALSU ke percakapan multi-agent user lain hanya
+    dengan menebak/mengetahui `session_id`-nya (pola bug sama `/answer`
+    sebelum diaudit 2026-08-27).
+    """
     form = await request.form()
     session_id = (form.get("session_id") or "").strip()
     message = (form.get("message") or "").strip()
     control = _conversations.get(session_id)
     if not control or not message:
         return {"ok": False, "error": "sesi tidak aktif atau pesan kosong"}
+    if not _can_access_owned_resource(request, _conversation_owners.get(session_id)):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
     control.add_interjection(message)
     return {"ok": True}
 
 
 @app.post("/converse/stop")
 async def converse_stop(request: Request):
-    """Hentikan percakapan (cadangan; STOP utama lewat AbortController di frontend)."""
+    """Hentikan percakapan (cadangan; STOP utama lewat AbortController di frontend).
+
+    Audit produksi 2026-09-18: kepemilikan dicek SEBELUM menghentikan — pola
+    bug & fix sama `/converse/interject` di atas (user login mana pun
+    sebelumnya bisa menghentikan percakapan user lain).
+    """
     form = await request.form()
     session_id = (form.get("session_id") or "").strip()
     control = _conversations.get(session_id)
     if not control:
         return {"ok": False, "error": "sesi tidak aktif"}
+    if not _can_access_owned_resource(request, _conversation_owners.get(session_id)):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
     control.stop()
     return {"ok": True}
 
@@ -1606,7 +1684,15 @@ async def skills_page(request: Request):
 
 @app.post("/skills/revert-merge")
 async def skills_revert_merge(request: Request):
-    """Batalkan merge skill terakhir untuk satu role (I1 revertible)."""
+    """Batalkan merge skill terakhir untuk satu role (I1 revertible).
+
+    Audit produksi 2026-09-18: `_require_role("admin")` — endpoint ini mutasi
+    corpus skill BERSAMA satu role (memengaruhi SEMUA turn berikutnya untuk
+    role itu), kelas mutasi yang sama dengan `/skills/set-visibility`
+    (digerbangi admin sejak 2026-07-29) & `/skills/import` — sebelumnya
+    kosong, drift yang lolos saat endpoint ini ditambahkan belakangan.
+    """
+    _require_role(request, "admin")
     form = await request.form()
     role = (form.get("role") or "").strip()
     if role in available_roles():
@@ -1621,7 +1707,12 @@ async def skills_revert_merge(request: Request):
 
 @app.post("/skills/apply-merge")
 async def skills_apply_merge(request: Request):
-    """Terapkan usulan merge pending (curation_auto=False, default §8 — manusia klik apply)."""
+    """Terapkan usulan merge pending (curation_auto=False, default §8 — manusia klik apply).
+
+    Audit produksi 2026-09-18: `_require_role("admin")` — sama alasan
+    `/skills/revert-merge` di atas (kelas mutasi sama `/skills/set-visibility`).
+    """
+    _require_role(request, "admin")
     form = await request.form()
     role = (form.get("role") or "").strip()
     curation_id_raw = (form.get("curation_id") or "").strip()
