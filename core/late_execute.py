@@ -28,6 +28,7 @@ from infra.config import AppConfig
 from infra.database import DatabaseManager
 from infra.logging import log
 from infra.workspace import CURRENT_WORKSPACE_ROOT, SessionWorkspaceStore
+from roles.registry import available_roles
 from security.approval import ApprovalGate
 from security.policy_engine import PolicyEngine
 from security.vault import Vault
@@ -71,6 +72,18 @@ async def execute_orphan_approval(
             "error": "sesi sumber approval ini tidak ditemukan — ditolak (fail-closed)",
         }
     role = session_row["role"]
+
+    # Audit produksi 2026-09-18 (kritis, privilege escalation): `role` disimpan
+    # MENTAH dari form field `/chat/stream` ke `chat_sessions.role` tanpa
+    # validasi apa pun — string traversal ("../../../tmp/evil") bisa memuat
+    # soul.toml ARBITRER dari luar roles/ di sini juga. Cek keanggotaan
+    # (bukan sekadar exists()) SEBELUM open() — lihat roles/registry.py.
+    if role not in available_roles():
+        await approval_gate.finalize_orphan(approval_id, "rejected")
+        return {
+            "ok": False,
+            "error": f"role '{role}' tidak dikenal — ditolak (fail-closed)",
+        }
 
     try:
         with open(f"roles/{role}/soul.toml", "rb") as f:

@@ -707,3 +707,36 @@ def test_router_save_then_reflected(client):
     resp = client.post("/router", data={"action": "reset"})
     assert resp.status_code == 200
     assert "default map" in resp.text
+
+
+# ── Audit produksi 2026-09-18 (kritis, privilege escalation): `role` sebelumnya
+# diteruskan mentah ke AgentConfig/agent_factory tanpa validasi — string
+# traversal memuat soul.toml arbitrer dari luar roles/. Lihat
+# tests/test_role_validation.py untuk cakupan penuh (roles/registry.py,
+# AgentLoop, SmartRouter, late_execute, TaskGraph); dua test di bawah menguji
+# gate di lapisan web itu sendiri (respons yang dilihat client, bukan hanya
+# bahwa core/agent_loop.py menolak). ──────────────────────────────────────
+
+
+def test_chat_stream_rejects_unknown_role(client):
+    resp = client.post(
+        "/chat/stream",
+        data={"message": "halo", "role": "../../../../etc", "session_id": "s-pwn"},
+    )
+    assert resp.status_code == 400
+
+
+def test_converse_stream_rejects_unknown_participant_role(client):
+    """Sama celah dengan /chat/stream, tapi lewat CSV `participants`."""
+    resp = client.post(
+        "/converse/stream",
+        data={
+            "message": "halo",
+            "pattern": "pipeline",
+            "participants": "dev,../../../../etc",
+            "session_id": "s-pwn-convo",
+        },
+    )
+    assert resp.status_code == 200  # SSE frame, bukan HTTP error status
+    assert "event: error" in resp.text
+    assert "role tidak dikenal" in resp.text

@@ -786,6 +786,16 @@ async def chat_stream(request: Request):
     session_id = form.get("session_id", str(uuid.uuid4()))
     if not message:
         return HTMLResponse("")
+    # Audit produksi 2026-09-18 (kritis, privilege escalation): `role` sebelumnya
+    # diteruskan MENTAH ke AgentConfig tanpa validasi apa pun — string traversal
+    # ("../../../tmp/evil") membuat AgentLoop memuat soul.toml ARBITRER dari
+    # luar roles/ (tool allow-list/system-prompt bikinan penyerang), reachable
+    # TANPA login sama sekali (auth default OFF). `core/agent_loop.py` sekarang
+    # menolaknya juga (pertahanan utama, melindungi semua caller), tapi dicek
+    # di sini SUPAYA client tak sah dapat error jelas alih-alih 500 mentah dari
+    # AgentLoop(...) yang dibangun eager di bawah (di luar generate()).
+    if role not in available_roles():
+        raise StarletteHTTPException(status_code=400, detail="role tidak dikenal")
 
     # Working directory adaptif (§ user request): folder pilihan user untuk sesi
     # ini, divalidasi SEBELUM masuk AgentConfig (fail-closed — lihat _validate_workdir).
@@ -1175,6 +1185,16 @@ async def converse_stream(request: Request):
     trust_mode = (form.get("trust_mode") or "").strip().lower() in ("true", "1", "on")
 
     try:
+        # Audit produksi 2026-09-18 (kritis, privilege escalation): tiap
+        # elemen `participants` akhirnya jadi `role` di `agent_factory` di
+        # bawah → `AgentLoop` → soul.toml — sama celah traversal dengan
+        # `/chat/stream` (lihat komentar di sana), tapi lewat CSV alih-alih
+        # field tunggal. `core/agent_loop.py` menolaknya juga (pertahanan
+        # utama), dicek di sini SUPAYA lolos lewat jalur error ValueError yang
+        # SUDAH ADA untuk `make_strategy` (respons SSE rapi, bukan 500 mentah).
+        unknown = [p for p in (participants or []) if p not in available_roles()]
+        if unknown:
+            raise ValueError(f"role tidak dikenal: {', '.join(unknown)}")
         strategy = make_strategy(pattern, participants, rounds, CONFIG)
     except ValueError as e:
         return HTMLResponse(f"event: error\ndata: {json.dumps({'text': str(e)})}\n\n")

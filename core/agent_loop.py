@@ -36,6 +36,7 @@ from security.shield import Shield
 from security.guardrails import GuardrailEngine, RailStage
 from security.policy_engine import PolicyEngine
 from core.guardrails_config import GuardrailConfigStore
+from roles.registry import available_roles
 
 
 @dataclass
@@ -286,6 +287,16 @@ class AgentLoop:
         self.policy_engine = PolicyEngine(self._soul.get("policy", {}))
 
     def _load_soul_once(self) -> dict:
+        # Audit produksi 2026-09-18 (kritis, privilege escalation): `role`
+        # bisa datang MENTAH dari form field (`/chat/stream`, `/converse/stream`
+        # participants) atau argumen tool (`task_graph_submit`) — TANPA
+        # validasi apa pun sebelumnya, string traversal memuat soul.toml
+        # ARBITRER dari luar roles/ (tool allow-list/system-prompt bikinan
+        # penyerang). Lihat roles/registry.py::available_roles untuk detail
+        # & reproduksi. Ini titik pertahanan UTAMA — melindungi SEMUA caller
+        # AgentLoop, bukan cuma web/main.py.
+        if self.cfg.role not in available_roles():
+            raise ValueError(f"role tidak dikenal: '{self.cfg.role}'")
         with open(f"roles/{self.cfg.role}/soul.toml", "rb") as f:
             return tomllib.load(f)
 

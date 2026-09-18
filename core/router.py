@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from infra.config import CONFIG, AppConfig
+from roles.registry import available_roles
 
 
 class Complexity(Enum):
@@ -87,6 +88,15 @@ class SmartRouter:
         return sorted({str(k).lower() for k in (*defaults, *extra)})
 
     def _load_soul(self, role: str, soul_path: str | None) -> dict:
+        # Audit produksi 2026-09-18 (kritis): `role` TIDAK PERNAH divalidasi
+        # sebelum ini sebelumnya — string traversal ("../../../tmp/evil") bisa
+        # memuat soul.toml ARBITRER dari luar roles/, privilege escalation
+        # total (lihat roles/registry.py::available_roles). Validasi HANYA
+        # saat `soul_path` tak diberikan eksplisit — caller yang secara sadar
+        # meneruskan path (test/tooling internal) tetap dipercaya, sama pola
+        # trust-boundary yang sudah ada di parameter ini.
+        if soul_path is None and role not in available_roles():
+            raise ValueError(f"role tidak dikenal: '{role}'")
         path = soul_path or f"roles/{role}/soul.toml"
         with open(path, "rb") as f:
             return tomllib.load(f)

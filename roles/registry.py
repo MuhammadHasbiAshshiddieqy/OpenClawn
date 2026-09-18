@@ -1,9 +1,39 @@
 import json
+from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
 from infra.database import DatabaseManager
 from roles.contracts import CONTRACT_REGISTRY
+
+_DEFAULT_ROLES_DIR = "roles"
+
+
+def available_roles(roles_dir: str = _DEFAULT_ROLES_DIR) -> set[str]:
+    """Nama role yang BENAR-BENAR ada (subdirektori `roles_dir` berisi `soul.toml`).
+
+    Audit produksi 2026-09-18 — path traversal kritis: `role` yang datang dari
+    luar (form field `/chat/stream`/`/converse/stream`, argumen tool
+    `task_graph_submit`) SEBELUMNYA dipakai MENTAH untuk membangun path
+    filesystem (`f"roles/{role}/soul.toml"`) di `core/agent_loop.py`,
+    `core/router.py`, `core/late_execute.py` — TANPA validasi apa pun. String
+    seperti `"../../../../tmp/evil"` memuat `soul.toml` ARBITRER dari mana pun
+    di filesystem yang bisa dibaca proses (dikonfirmasi lewat reproduksi
+    terisolasi: `AgentLoop` sukses memuat `[tools] allowed` bikinan sendiri
+    dari luar `roles/`) — privilege escalation TOTAL, membypass seluruh model
+    permission berbasis soul.toml/RBAC, dan bisa dipicu tanpa login sama
+    sekali (auth default OFF).
+
+    Fungsi ini SATU-SATUNYA validasi yang aman: `role in available_roles()`
+    HARUS dicek SEBELUM `role` menyentuh path filesystem apa pun. Sekadar cek
+    `Path(...).exists()` (pola lama `core/task_graph.py::TaskGraph.validate`)
+    TIDAK CUKUP — exists() tetap True untuk path traversal yang benar-benar
+    punya `soul.toml` di ujungnya, tidak mencegah traversal itu sendiri.
+    `p.parent.name` selalu SATU komponen path (hasil glob satu-level, tak
+    pernah mengandung `/` atau `..`), jadi keanggotaan set ini aman dipakai
+    sebagai allow-list tertutup.
+    """
+    return {p.parent.name for p in Path(roles_dir).glob("*/soul.toml")}
 
 
 def parse_contract(raw: str, contract_cls: type[BaseModel]) -> tuple[dict, bool]:

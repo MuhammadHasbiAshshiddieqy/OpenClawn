@@ -12,7 +12,8 @@ subtask sudah terlanjur jalan (§1, keamanan/kebenaran dulu).
 """
 
 from dataclasses import dataclass, field
-from pathlib import Path
+
+from roles.registry import available_roles
 
 VALID_NODE_STATUS = {"pending", "running", "completed", "failed", "blocked"}
 
@@ -69,10 +70,17 @@ class TaskGraph:
                     raise TaskGraphError(f"node '{node_id}' depends_on node tak dikenal: '{dep}'")
                 if dep == node_id:
                     raise TaskGraphError(f"node '{node_id}' depends_on dirinya sendiri")
-            # Role harus punya soul.toml — cek sama persis dengan
-            # infra/manifest.py::apply_manifest (satu sumber kebenaran "role
-            # dikenal" = folder roles/<role>/soul.toml ada), bukan registry baru.
-            if not (Path(self._roles_dir) / node.role / "soul.toml").exists():
+            # Audit produksi 2026-09-18 (kritis, privilege escalation): role
+            # datang dari argumen tool `task_graph_submit` — bisa dipengaruhi
+            # oleh giliran LLM (prompt injection dari konten tak tepercaya
+            # dalam context). Sebelumnya cek `Path(...).exists()` — TIDAK
+            # cukup, sebab tetap True untuk path traversal ("../../tmp/evil")
+            # yang benar-benar berujung ke `soul.toml` di luar roles/, sama
+            # celah yang ditemukan di core/agent_loop.py/core/router.py/
+            # core/late_execute.py (lihat roles/registry.py::available_roles).
+            # Keanggotaan set (bukan exists()) menutup celah traversal ini
+            # sepenuhnya, bukan hanya kasus "role belum dibuat".
+            if node.role not in available_roles(self._roles_dir):
                 raise TaskGraphError(f"node '{node_id}' pakai role tak dikenal: '{node.role}'")
 
         self.detect_cycle()
