@@ -7,6 +7,20 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Fixed — Re-audit `web/main.py` (TODO.md § 14)
+
+Five real ownership/RBAC gaps found re-auditing the web layer (last dedicated pass was 2026-07-29; the file has grown substantially since — Task Graph, MCP, sandbox reaper, multi-agent conversations).
+
+- **`/converse/stream`** never populated `AgentConfig.user_id`, so every approval raised inside a multi-agent conversation was recorded with `owner_user_id=None` — which the existing ownership filter treats as visible to any logged-in user via a normal `GET /approvals` poll, fully bypassing HITL for that path. Now threads the requesting user's id through, same as `/chat/stream`.
+- **`/converse/interject`** and **`/converse/stop`** had no ownership check at all — any authenticated user could inject fake messages into, or kill, another user's live conversation by guessing/knowing its `session_id`. Now gated via a new in-memory `_conversation_owners` registry (multi-agent conversations have no `chat_sessions` row to check against).
+- **`GET /approval/{approval_id}`** and **`GET /evidence/{event_id}`** had no `Request` parameter at all, hence no ownership check — despite sibling endpoints (`POST /approve`, `/chat-sessions/{id}/turns`) already enforcing it. `evidence_id` is a sequential autoincrement integer, making it trivially enumerable across the whole tenant.
+- **`/skills/apply-merge`** and **`/skills/revert-merge`** were missing the `_require_role("admin")` gate their sibling `/skills/set-visibility` has, despite mutating the same shared skill corpus.
+- A minor reliability fix: two concurrent `/converse/stream` calls sharing a `session_id` (e.g. two tabs) could let the one that finishes first tear down the still-running other's control object.
+
+One finding — `GET /workspace/download` "bypassable" by omitting `session_id` — was investigated and left alone: the underlying default workspace is already a shared folder with no per-user isolation at the tool level (`file_read` et al.), so patching just this endpoint would be a false sense of security. Flagged as an architecture question for the owner, not fixed unilaterally.
+
+11 new tests, 1107 passed (from 1096), ruff clean.
+
 ### Fixed — Audit lapisan `core/` (TODO.md § 13)
 
 Three real bugs found auditing all 26 files of `core/` for the first time — read code + isolated reproduction before fixing, same methodology as the `security/`/`infra/` audits.

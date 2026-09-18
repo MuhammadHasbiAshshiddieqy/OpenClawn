@@ -1575,6 +1575,101 @@ lebih dulu terhadap kode lama sebelum diperbaiki — bukan lolos kebetulan.
 
 ---
 
+## 14. Re-audit `web/main.py` — endpoint yang tumbuh sejak §6 (2026-09-18)
+
+Babak audit lanjutan (setelah §13 `core/` selesai), atas permintaan eksplisit
+owner. `web/main.py` (2105 baris, seluruh HTTP/SSE endpoint) terakhir diaudit
+khusus di §6 (2026-07-29), tapi sudah tumbuh besar sejak itu (RBAC, Task
+Graph, MCP registry, sandbox reaper, percakapan multi-agent). Metodologi sama
+§10/§11/§13: baca kode + reproduksi terisolasi SEBELUM menindaklanjuti —
+kali ini file dibaca end-to-end oleh satu agent riset (read-only, tanpa
+edit), dua temuan bahkan dikonfirmasi lewat reproduksi hidup via `TestClient`
+sebelum dilaporkan; SETIAP temuan diverifikasi ulang manual terhadap kode
+sungguhan sebelum diperbaiki — bukan diterima mentah-mentah.
+
+**Diperbaiki (5 gap kepemilikan/RBAC nyata — SEMUA drift endpoint yang
+ditambahkan BELAKANGAN dari pola yang sudah ditegakkan endpoint sejenis):**
+
+1. **`/converse/stream` tak pernah mengisi `AgentConfig.user_id`** — approval
+   dari tool butuh-approval di PERCAKAPAN MULTI-AGENT selalu tercatat
+   `owner_user_id=None` di `approval_log`. Parah karena `pending_list()`
+   (dipakai `GET /approvals`, polling normal UI) SENGAJA meloloskan baris
+   tanpa owner ke SIAPA PUN yang login (fail-safe untuk resource lama tanpa
+   owner tercatat) — jadi bukan cuma "butuh tebak approval_id", tapi
+   LANGSUNG terlihat siapa pun yang polling `/approvals` biasa, lengkap
+   `tool_input` (path/command/code) dan bisa langsung `POST /approve`-nya.
+   Melumpuhkan HITL (§1) untuk SELURUH jalur multi-agent. Diperbaiki:
+   `agent_factory` sekarang mengisi `user_id` dari `request.state.user`,
+   pola SAMA `/chat/stream` (yang sudah benar sejak audit 2026-07-29).
+2. **`/converse/interject` & `/converse/stop` tanpa gate kepemilikan sama
+   sekali** — user login mana pun bisa menyuntik pesan palsu ke, atau
+   menghentikan, percakapan multi-agent user lain hanya dengan
+   menebak/mengetahui `session_id` (pola bug sama `/answer` sebelum diaudit
+   2026-08-27). `ConversationControl` (extractable, web-agnostic per
+   docstringnya) sengaja tak diberi field owner — kepemilikan dilacak
+   `_conversation_owners` (dict in-memory BARU, pola sama `_conversations`
+   sendiri) karena percakapan multi-agent (`persist_history=False`) tak
+   punya baris `chat_sessions` untuk dijadikan sumber kepemilikan seperti
+   `/answer`.
+3. **`GET /approval/{approval_id}` tanpa `Request` param sama sekali** —
+   beda dari `POST /approve` (digerbangi 2026-07-29), endpoint GET ini
+   tak pernah membaca `owner_user_id` walau kolomnya sudah ada di
+   `approval_log` sejak audit itu. Diperbaiki: tambah `request: Request` +
+   `_can_access_owned_resource`.
+4. **`GET /evidence/{event_id}` tanpa gate kepemilikan, DAN `event_id`
+   integer autoincrement BERURUTAN** — jauh lebih parah dari #3: user login
+   mana pun (termasuk role `viewer`) bisa mengiterasi `1, 2, 3, ...` untuk
+   membaca evidence (policy/model/skill/guardrail) SELURUH sesi lintas
+   tenant tanpa perlu menebak apa pun. `routing_events` tak punya kolom
+   `owner_user_id` sendiri, tapi sudah punya `user_id` (`AgentConfig.user_id`)
+   yang cukup untuk kepemilikan tanpa join tambahan — `"default"`
+   diperlakukan sebagai "tak tercatat", pola sama `core/agent_loop.py`
+   memperlakukan `user_id=="default"` sebagai `owner_user_id=None`.
+5. **`POST /skills/apply-merge` & `POST /skills/revert-merge` tanpa
+   `_require_role("admin")`** — drift dari `/skills/set-visibility`
+   (digerbangi admin 2026-07-29, kelas mutasi SAMA: corpus skill bersama
+   satu role). Diperbaiki: tambah gate identik.
+
+**Diperbaiki (1 reliability, bukan security):**
+
+6. **`_conversations`/`_conversation_owners` race pada `session_id` yang
+   SAMA** — dua `/converse/stream` bersamaan dengan session_id sama (mis.
+   `localStorage` dibagi dua tab) sebelumnya bisa membuat request yang
+   selesai lebih dulu menghapus entri milik request LAIN yang masih
+   berjalan (`pop()` tanpa cek identitas), mematikan diam-diam
+   interject/stop untuk percakapan yang sebenarnya masih aktif. Diperbaiki:
+   `finally` hanya menghapus bila registry masih menunjuk ke `control`
+   instance milik request itu sendiri.
+
+**Ditemukan, diverifikasi, TAPI SENGAJA tidak diperbaiki secara sepihak**
+(butuh keputusan arsitektur owner, bukan bug sempit satu endpoint):
+
+- **`GET /workspace/download` bisa "melewati" cek kepemilikan hanya dengan
+  TIDAK mengirim `session_id`** — pada pandangan pertama terlihat seperti
+  bug (parameter opsional yang menonaktifkan pemeriksaan keamanan), TAPI
+  diverifikasi lebih dalam: `CONFIG.workspace_root` (folder default,
+  dipakai SEMUA sesi yang tak pernah `set_workdir`) memang SATU folder
+  BERSAMA di level tool juga — `tools/file_ops.py::FileReadTool` sendiri
+  memakai `resolve_in_current_workspace(path, CONFIG.workspace_root)` TANPA
+  isolasi per-user apa pun. Artinya: sesi mana pun yang memakai folder
+  default SUDAH bisa saling `file_read` file satu sama lain lewat chat
+  biasa, independen dari endpoint download ini — menambal HANYA endpoint
+  download akan memberi rasa aman palsu (tool `file_read` tetap terbuka)
+  sambil merusak backward-compat link lama. Ini gejala keputusan
+  arsitektur "satu folder default dibagi semua sesi" yang sudah ada JAUH
+  sebelum RBAC/multi-tenant, bukan regresi endpoint tunggal — dicatat di
+  sini agar owner sadar & bisa memutuskan apakah workspace default perlu
+  di-scope per-tenant/user (perubahan besar, di luar skop audit ini).
+
+Diverifikasi via `uv run --python 3.12`: **1107 passed** (+11: 1 untuk bug
+#1, 3 untuk bug #2, 2 untuk bug #3, 3 untuk bug #4 termasuk regresi negatif
+"owner tak tercatat tetap terlihat", 2 untuk bug #5), ruff check/format
+bersih, tanpa dependency baru. SEMUA 5 bug kepemilikan/RBAC diverifikasi
+GAGAL lebih dulu (403 yang seharusnya muncul tapi tidak) terhadap kode lama
+sebelum diperbaiki.
+
+---
+
 ## Sumber riset tren (dicari 2026-07-27)
 
 - [The best AI agent frameworks in 2026](https://www.langchain.com/resources/ai-agent-frameworks)

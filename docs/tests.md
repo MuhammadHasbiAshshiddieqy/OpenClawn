@@ -1156,6 +1156,17 @@ config sistem (`/settings`, `/skills/import`, `/mcp/*`, `/router`,
 | `test_member_forbidden_from_reading_other_users_task_timeline` | `GET /tasks/{id}/timeline` milik user lain → `403` |
 | `test_member_can_still_read_own_task` | User tetap bisa baca task MILIKNYA SENDIRI (kedua endpoint) |
 | `test_admin_can_read_member_task` | Admin (oversight) tetap bisa baca task milik user lain |
+| `test_converse_stream_threads_requesting_user_id_into_agent_config` | **[Audit produksi 2026-09-18]** `agent_factory` di `/converse/stream` mengisi `AgentConfig.user_id` dari user yang login — SEBELUMNYA selalu default, membuat approval percakapan multi-agent tercatat `owner_user_id=None` (terlihat semua orang) |
+| `test_member_forbidden_from_interjecting_other_users_conversation` | `POST /converse/interject` ke `session_id` milik user lain → `403`, pesan TIDAK masuk antrian interjection |
+| `test_member_forbidden_from_stopping_other_users_conversation` | `POST /converse/stop` ke `session_id` milik user lain → `403`, `control._stopped` tetap `False` |
+| `test_member_can_still_interject_and_stop_own_conversation` | Isolasi kepemilikan tak menghalangi user mengontrol percakapan MILIKNYA SENDIRI |
+| `test_member_forbidden_from_reading_other_users_approval_status` | `GET /approval/{id}` milik user lain → `403` — SEBELUMNYA tak digerbangi sama sekali walau `approval_log.owner_user_id` sudah ada |
+| `test_member_can_still_read_own_approval_status` | User tetap bisa baca status approval MILIKNYA SENDIRI |
+| `test_member_forbidden_from_reading_other_users_evidence` | `GET /evidence/{event_id}` milik user lain → `403` — `event_id` autoincrement BERURUTAN, sebelumnya trivial dienumerasi lintas tenant |
+| `test_member_can_still_read_own_evidence` | User tetap bisa baca evidence turn MILIKNYA SENDIRI |
+| `test_evidence_with_unrecorded_owner_stays_visible` | Regresi negatif: `routing_events.user_id='default'` (event lama/tak terautentikasi) TETAP terlihat semua orang — fail-safe resource tanpa owner, beda dari resource yang seharusnya punya owner |
+| `test_member_forbidden_from_applying_skill_merge` | `POST /skills/apply-merge` oleh member → `403` — SEBELUMNYA tak digerbangi admin sama sekali (drift dari `/skills/set-visibility`) |
+| `test_member_forbidden_from_reverting_skill_merge` | `POST /skills/revert-merge` oleh member → `403`, sama bug & fix |
 
 > **Catatan:** tabel di atas belum mencakup semua test di file ini (mis. `test_member_forbidden_from_calibration_apply/revert`, `test_member_forbidden_from_skills_set_visibility`, `test_member_forbidden_from_autopilots_*`, dan test kepemilikan chat-session/approval) — gap dokumentasi dari sesi sebelumnya, dicatat di sini agar tak disalahartikan sebagai test yang hilang, bukan cuma belum terdaftar.
 

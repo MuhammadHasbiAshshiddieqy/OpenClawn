@@ -572,8 +572,10 @@ konsumen utamanya): raise `HTTPException(403)` bila `request.state.user` None
 atau `role_at_least(user.access_role, minimum)` False. **Fail-safe bila
 `CONFIG.auth_active` False** (auth nonaktif sepenuhnya) → gate DILEWATI, RBAC
 tak bermakna tanpa auth (perilaku lama, semua endpoint terbuka). Dipanggil di
-AWAL endpoint admin-only: `/settings`, `/skills/import`, `/mcp/add|toggle|delete`,
-`/router`, `/autopilots/delete`, `/admin/users`, `/admin/users/set-role`. Chat,
+AWAL endpoint admin-only: `/settings`, `/skills/import`, `/skills/apply-merge`,
+`/skills/revert-merge`, `/skills/set-visibility`, `/mcp/add|toggle|delete`,
+`/router`, `/calibration/apply|revert`, `/audit/anchor|verify`,
+`/autopilots/delete`, `/admin/users`, `/admin/users/set-role`. Chat,
 lihat skills/metrics/conversations TETAP terbuka untuk semua role login.
 
 Middleware (`auth_and_csrf_middleware`) memuat `request.state.user` via
@@ -686,6 +688,6 @@ Dievaluasi di **DUA titik** (defense-in-depth, pola sama `_TRUST_MODE_EXEMPT`):
 | `QuestionGate` | (bukan keamanan) klarifikasi interaktif `ask_user` | Tool execution |
 | `security/auth.py` | Akses tanpa login saat self-host publik (opt-in) | Semua route (kecuali `/health`, `/login`, `/login/oidc`, `/auth/callback`, `/static/*`) |
 | `security/oidc.py` | Login via SSO enterprise (Google/Microsoft/Okta/dsb), opt-in | `/login/oidc`, `/auth/callback` |
-| `infra/users.py` (`_require_role`) | User non-admin mengubah config sistem | `/settings`, `/skills/import`, `/mcp/*`, `/router`, `/autopilots/delete`, `/admin/users*` |
+| `infra/users.py` (`_require_role`) | User non-admin mengubah config sistem | `/settings`, `/skills/import\|apply-merge\|revert-merge\|set-visibility`, `/mcp/*`, `/router`, `/autopilots/delete`, `/admin/users*` |
 | `security/rate_limit.py` | Biaya LLM tak terkendali / DoS sederhana | `/chat/stream`, `/converse/stream` |
 | `DockerSandbox` | Kode berbahaya akses host/network | **Pertahanan utama** |

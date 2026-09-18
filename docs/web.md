@@ -204,7 +204,9 @@ Form data: `message`, `pattern` (`pipeline`|`debate`|`orchestrator`), `participa
 - `orchestrator`: **elemen pertama = lead**, sisanya = workers. Lead tidak harus `pm` — UI menandai chip lead dengan ★ dan memindahkannya ke depan. Tanpa `participants`, default `config.conversation_default_participants` dipakai (lead = `pm`).
 - `debate`: urutan giliran round-robin; `rounds` menentukan jumlah siklus.
 
-Membangun `TurnStrategy` via `make_strategy` (`participants[0]` jadi lead untuk orchestrator), `ConversationControl(disconnect_check=request.is_disconnected)`, mendaftarkannya di `_conversations[session_id]` (registry modul-level, pola sama `ApprovalGate._pending`), lalu stream SSE. `finally`: deregister.
+Membangun `TurnStrategy` via `make_strategy` (`participants[0]` jadi lead untuk orchestrator), `ConversationControl(disconnect_check=request.is_disconnected)`, mendaftarkannya di `_conversations[session_id]` DAN `_conversation_owners[session_id]` (registry modul-level, pola sama `ApprovalGate._pending`), lalu stream SSE. `finally`: deregister KEDUA registry — tapi hanya bila `_conversations[session_id]` masih menunjuk ke `ConversationControl` instance milik request INI (audit produksi 2026-09-18: dua `/converse/stream` bersamaan dengan `session_id` sama, mis. dua tab berbagi `localStorage`, sebelumnya bisa membuat request yang selesai lebih dulu menghapus entri milik request LAIN yang masih berjalan).
+
+**Kepemilikan (audit produksi 2026-09-18):** `agent_factory` sekarang mengisi `AgentConfig.user_id` dari `request.state.user` — SEBELUMNYA tak pernah diisi, sehingga approval dari tool butuh-approval di percakapan multi-agent SELALU tercatat `owner_user_id=None` di `approval_log`, dan `_can_access_owned_resource` memperlakukan `None` sebagai "terlihat semua orang" (fail-safe untuk resource lama TANPA owner, bukan untuk resource yang seharusnya punya satu) — user login mana pun bisa melihatnya lewat `GET /approvals` biasa lalu memutuskannya, melumpuhkan HITL untuk seluruh jalur multi-agent. `_conversation_owners` (in-memory, bukan tabel DB — percakapan multi-agent `persist_history=False`, tak punya baris `chat_sessions` untuk dijadikan sumber kepemilikan seperti `/answer`) dipakai `/converse/interject`/`/converse/stop` di bawah.
 
 Frame SSE (tambahan dari `/chat/stream`):
 ```
@@ -220,11 +222,11 @@ event: done               data: [DONE]
 
 #### `POST /converse/interject`
 
-User menyela percakapan aktif. Form: `session_id`, `message` → `control.add_interjection(message)`. Disuntik ke giliran berikutnya. Return `{ok}`.
+User menyela percakapan aktif. Form: `session_id`, `message` → `control.add_interjection(message)`. Disuntik ke giliran berikutnya. Return `{ok}`. **RBAC (audit produksi 2026-09-18):** `_can_access_owned_resource(request, _conversation_owners.get(session_id))` sebelum menyuntik — SEBELUMNYA tak digerbangi sama sekali (pola bug sama `/answer` sebelum diaudit 2026-08-27), user login mana pun bisa menyuntikkan pesan palsu ke percakapan user lain hanya dengan menebak/mengetahui `session_id`.
 
 #### `POST /converse/stop`
 
-Hentikan percakapan (cadangan; STOP utama lewat `AbortController.abort()` di frontend yang memicu `is_disconnected`). Form: `session_id` → `control.stop()`. Return `{ok}`.
+Hentikan percakapan (cadangan; STOP utama lewat `AbortController.abort()` di frontend yang memicu `is_disconnected`). Form: `session_id` → `control.stop()`. Return `{ok}`. **RBAC (audit produksi 2026-09-18):** sama gate & alasan `/converse/interject` di atas.
 
 ---
 
@@ -356,6 +358,16 @@ Response: `{"ok": true}`. Soft-delete metadata sidebar (`chat_sessions.deleted_a
 ```
 `evidence: null` bila turn belum selesai (finalize belum jalan) atau berasal dari sebelum fitur ini ada — dibedakan dari `404` (event benar-benar tak ada). Confidence SENGAJA tidak disertakan — crystallizer jalan async di `_post_turn` (hanya saat ≥3 tool call & kondisi tertentu terpenuhi), bukan sinkron per-turn, jadi menyertakannya di sini akan menyesatkan (§ `core/agent_loop.py::run()` komentar evidence).
 
+**Kepemilikan (audit produksi 2026-09-18):** `_can_access_owned_resource(request, owner)`
+sebelum mengembalikan evidence, `owner` = `routing_events.user_id` (kolom
+`AgentConfig.user_id`, `"default"` diperlakukan sebagai "tak tercatat" — pola
+sama `core/agent_loop.py` saat memanggil `ApprovalGate.request`). SEBELUMNYA
+endpoint ini tak digerbangi sama sekali, DAN `event_id` adalah integer
+autoincrement BERURUTAN — user login mana pun (termasuk role terendah) bisa
+mengiterasi `1, 2, 3, ...` untuk membaca evidence (policy/model/skill/guardrail)
+seluruh sesi lintas tenant, jauh lebih mudah dieksploitasi daripada endpoint
+by-ID lain yang memakai UUID acak.
+
 ---
 
 #### `POST /approve`
@@ -446,6 +458,14 @@ Berbeda dari `GET /approvals` (list SEMUA yang masih pending, sumber `ApprovalGa
 }
 ```
 `404` bila `approval_id` tak pernah tercatat sama sekali. Catatan: baris dari jalur `ApprovalGate.auto_approve()` (trust mode) TIDAK punya `approval_id` (tidak ada manusia menunggu ID untuk di-resolve) — hanya baris dari `request()` (approval interaktif) yang query-able lewat endpoint ini.
+
+**Kepemilikan (audit produksi 2026-09-18):** `_can_access_owned_resource(request,
+row["owner_user_id"])` sebelum mengembalikan detail — `403` bila bukan
+pemilik/admin. SEBELUMNYA endpoint ini (beda dari `POST /approve` yang sudah
+diaudit 2026-07-29) tak digerbangi sama sekali walau `approval_log` sudah
+punya kolom `owner_user_id` sejak audit itu. `approval_id` acak (`uuid4().hex`,
+tak semudah `/evidence/{id}` untuk dienumerasi), tapi tanpa gate ini id yang
+bocor lewat jalur MANAPUN tetap memberi akses baca `tool_input` siapa pun.
 
 ---
 
@@ -735,9 +755,9 @@ membocorkan struktur filesystem di luar workspace). Dipicu dari chip download di
 
 `POST /skills/import` → impor pack dari `pack_text` (tempel) atau `url`, opsional `target_role`. **Berlapis keamanan (§1):** `_require_role(request, "admin")` (TODO.md § Prioritas 5, RBAC — impor kode/konten pihak ketiga adalah config sistem) → SSRF guard (URL) → Shield scan → status **`draft`** (tak auto-masuk context, user aktifkan manual) → hash. Redirect `/skills?import_msg=...` dengan ringkasan. UI ada di `skills.html` (panel `<details>` ekspor/impor).
 
-`POST /skills/apply-merge` → terapkan satu usulan merge `pending` (I1, gated `curation_auto=False` §8 default): winner menyerap konten sintesis, loser → `merged`. Form: `role`, `curation_id`. Redirect `/skills`. Panel "Curation" menampilkan tombol **Terapkan** untuk usulan `pending` terbaru.
+`POST /skills/apply-merge` → terapkan satu usulan merge `pending` (I1, gated `curation_auto=False` §8 default): winner menyerap konten sintesis, loser → `merged`. Form: `role`, `curation_id`. Redirect `/skills`. Panel "Curation" menampilkan tombol **Terapkan** untuk usulan `pending` terbaru. **RBAC (audit produksi 2026-09-18):** `_require_role(request, "admin")` — mutasi corpus skill bersama satu role, kelas sama `/skills/set-visibility` di bawah; sebelumnya tak digerbangi sama sekali (drift saat endpoint ini ditambahkan belakangan).
 
-`POST /skills/revert-merge` → batalkan merge skill yang **sudah diterapkan** (I1, `status='applied'`) untuk satu role: loser kembali `active`, winner ke konten/versi sebelum merge. Form: `role`. Redirect `/skills`. Panel "Curation" di `skills.html` menampilkan `curation_log` + tombol Batalkan untuk baris `applied` terbaru. `/metrics` menampilkan badge `auto-tune ON/OFF` (I4, `CONFIG.calibration_auto_apply`).
+`POST /skills/revert-merge` → batalkan merge skill yang **sudah diterapkan** (I1, `status='applied'`) untuk satu role: loser kembali `active`, winner ke konten/versi sebelum merge. Form: `role`. Redirect `/skills`. Panel "Curation" di `skills.html` menampilkan `curation_log` + tombol Batalkan untuk baris `applied` terbaru. `/metrics` menampilkan badge `auto-tune ON/OFF` (I4, `CONFIG.calibration_auto_apply`). **RBAC (audit produksi 2026-09-18):** `_require_role(request, "admin")`, sama alasan `/skills/apply-merge` di atas.
 
 `POST /skills/set-visibility` → Skill Marketplace lintas-role (TODO.md § Prioritas 6): toggle `visibility` satu skill antara `private` (default, hanya role pemilik) dan `shared` (terlihat semua role — lihat `SkillDecayManager.get_active_skills`, `docs/memory.md`). Form: `skill_id`, `visibility` (`private`|`shared`). `visibility='inherited'` (hasil impor skill pack) TIDAK bisa diubah lewat endpoint ini — query `WHERE ... AND visibility != 'inherited'` membuat UPDATE jadi no-op untuk baris begitu (sudah lintas-role sejak asalnya, bukan toggle sadar user). Redirect `/skills`. Tombol toggle di tabel skill `skills.html`, tersembunyi (diganti label statis) untuk skill `inherited`.
 
