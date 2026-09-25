@@ -99,6 +99,12 @@ class LLMChunk:
     usage: dict = field(default_factory=dict)
     fallback_used: bool = False
     fallback_model: str = ""
+    # ID tool call dari provider (Anthropic `toolu_...`) — dipakai AgentLoop untuk
+    # memasangkan hasil tool ke panggilannya. Kosong → AgentLoop membuat sendiri.
+    tool_id: str = ""
+    # Gemini `thoughtSignature` pada part functionCall — harus dikirim balik apa
+    # adanya di giliran berikutnya agar konteks reasoning model tak putus.
+    tool_signature: str = ""
 
 
 class ProviderUnavailable(Exception):
@@ -170,6 +176,171 @@ class ThinkTagSplitter:
             return safe
         safe, self._buf = self._buf, ""
         return safe
+
+
+# ── Adapter format pesan per provider ──────────────────────────────────────────
+# Audit 2026-09-25 (#7-#9): AgentLoop menyusun riwayat tool dalam format internal
+# bergaya OpenAI/Ollama:
+#   {"role": "assistant", "content": str, "tool_calls": [{"id", "function": {"name", "arguments"}}]}
+#   {"role": "tool", "tool_call_id": str, "name": str, "content": str}
+# dan schema tool bergaya Anthropic ({name, description, input_schema}). Sebelumnya
+# format itu dikirim APA ADANYA ke semua provider: Anthropic menolak role "tool"
+# (400 → retry → fallback, tool calling Claude tak pernah jalan), Gemini membuang
+# pesan tool (model tak pernah melihat hasil tool → memanggil ulang sampai loop
+# detector), dan Ollama menerima schema tanpa `type/function/parameters` (model
+# lokal praktis tak melihat definisi tool). Fungsi di bawah menerjemahkan
+# eksplisit per provider — satu tempat, bisa dites tanpa jaringan.
+
+
+def _as_blocks(content) -> list:
+    if isinstance(content, list):
+        return list(content)
+    return [{"type": "text", "text": content}] if content else []
+
+
+def to_anthropic_messages(messages: list) -> list:
+    """Format internal → Messages API Anthropic (tool_use / tool_result blocks).
+
+    Giliran ber-role sama yang berurutan digabung (Anthropic mensyaratkan
+    user/assistant bergantian), konten kosong dibuang (ditolak API)."""
+    out: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        if role == "system":
+            continue
+        if role == "assistant" and m.get("tool_calls"):
+            blocks = _as_blocks(m.get("content") or "")
+            for tc in m["tool_calls"]:
+                fn = tc.get("function", {})
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": tc.get("id") or "",
+                        "name": fn.get("name", ""),
+                        "input": fn.get("arguments") or {},
+                    }
+                )
+            entry = {"role": "assistant", "content": blocks}
+        elif role == "tool":
+            entry = {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": m.get("tool_call_id") or "",
+                        "content": m.get("content") or "",
+                    }
+                ],
+            }
+        else:
+            content = m.get("content")
+            if not content:
+                continue
+            entry = {"role": "assistant" if role == "assistant" else "user", "content": content}
+        if out and out[-1]["role"] == entry["role"]:
+            out[-1]["content"] = _as_blocks(out[-1]["content"]) + _as_blocks(entry["content"])
+        else:
+            out.append(entry)
+    return out
+
+
+def to_gemini_contents(messages: list) -> list:
+    """Format internal → `contents` Gemini (functionCall / functionResponse parts)."""
+    out: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        if role == "system":
+            continue
+        if role == "assistant" and m.get("tool_calls"):
+            parts: list[dict] = [{"text": m["content"]}] if m.get("content") else []
+            for tc in m["tool_calls"]:
+                fn = tc.get("function", {})
+                part: dict = {
+                    "functionCall": {"name": fn.get("name", ""), "args": fn.get("arguments") or {}}
+                }
+                if tc.get("thought_signature"):
+                    part["thoughtSignature"] = tc["thought_signature"]
+                parts.append(part)
+            entry = {"role": "model", "parts": parts}
+        elif role == "tool":
+            entry = {
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": m.get("name", ""),
+                            "response": {"content": m.get("content") or ""},
+                        }
+                    }
+                ],
+            }
+        else:
+            if not m.get("content"):
+                continue
+            entry = {
+                "role": "model" if role == "assistant" else "user",
+                "parts": [{"text": m["content"]}],
+            }
+        if out and out[-1]["role"] == entry["role"]:
+            out[-1]["parts"] = out[-1]["parts"] + entry["parts"]
+        else:
+            out.append(entry)
+    return out
+
+
+def to_ollama_tools(tools: list) -> list:
+    """Schema internal (Anthropic-style) → format tools Ollama /api/chat."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "parameters": t.get("input_schema", {"type": "object", "properties": {}}),
+            },
+        }
+        for t in tools
+    ]
+
+
+def to_ollama_messages(messages: list) -> list:
+    """Format internal → pesan Ollama (`tool_name` di pesan tool, tanpa field asing)."""
+    out: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        if role == "assistant" and m.get("tool_calls"):
+            out.append(
+                {
+                    "role": "assistant",
+                    "content": m.get("content") or "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": tc.get("function", {}).get("name", ""),
+                                "arguments": tc.get("function", {}).get("arguments") or {},
+                            }
+                        }
+                        for tc in m["tool_calls"]
+                    ],
+                }
+            )
+        elif role == "tool":
+            out.append(
+                {"role": "tool", "content": m.get("content") or "", "tool_name": m.get("name", "")}
+            )
+        else:
+            out.append({"role": role, "content": m.get("content") or ""})
+    return out
+
+
+def _is_transient(err: httpx.HTTPError) -> bool:
+    """Audit 2026-09-25: hanya error SEMENTARA yang layak di-retry (CLAUDE.md §3).
+    4xx seperti 400 (payload salah) / 401 (key salah) sebelumnya di-retry 3×
+    dengan backoff — membuang waktu dan tak pernah berhasil."""
+    if isinstance(err, httpx.HTTPStatusError):
+        code = err.response.status_code
+        return code in (408, 409, 425, 429) or code >= 500
+    return True
 
 
 class LLMClient:
@@ -295,7 +466,9 @@ class LLMClient:
                     yield chunk
                 return  # sukses
 
-            except (httpx.HTTPError, ProviderUnavailable) as e:
+            except (httpx.HTTPError, ProviderUnavailable, json.JSONDecodeError) as e:
+                # JSONDecodeError: baris stream korup dari provider — sama perlakuannya
+                # dengan error transport (coba provider berikutnya), bukan crash turn.
                 last_error = e
                 log.error("llm_provider_failed", provider=prov, model=mdl, error=str(e))
                 continue
@@ -347,7 +520,7 @@ class LLMClient:
                 return
             except httpx.HTTPError as e:
                 last_error = e
-                if started or attempt_num == _STREAM_RETRY_ATTEMPTS - 1:
+                if started or attempt_num == _STREAM_RETRY_ATTEMPTS - 1 or not _is_transient(e):
                     raise
                 log.warning(
                     "llm_stream_retry",
@@ -377,18 +550,35 @@ class LLMClient:
         elif provider == "gemini":
             async for c in self._gemini(model, messages, tools, max_tokens):
                 yield c
+        else:
+            # Sebelumnya provider tak dikenal (typo di /router) diam-diam
+            # menghasilkan jawaban KOSONG tanpa error apa pun.
+            raise ProviderUnavailable(f"provider tidak dikenal: {provider}")
+
+    async def _api_key(self, name: str, provider: str) -> str:
+        """Ambil API key dari Vault; key tak diset → ProviderUnavailable.
+
+        Audit 2026-09-25 (#6): Vault.get me-raise ValueError, yang TIDAK
+        ditangkap stream_with_fallback — satu provider tanpa key (mis.
+        ANTHROPIC_API_KEY kosong, padahal EVALUATOR_FOR memetakan beberapa
+        model ke Claude) menjatuhkan seluruh turn tanpa mencoba fallback
+        chain sama sekali. Melanggar CLAUDE.md §1.3."""
+        try:
+            return await self.vault.get(name)
+        except ValueError as e:
+            raise ProviderUnavailable(f"{provider}: {e}") from e
 
     async def _ollama(
         self, model: str, messages: list, tools: list | None, max_tokens: int
     ) -> AsyncGenerator[LLMChunk, None]:
         payload: dict = {
             "model": model,
-            "messages": messages,
+            "messages": to_ollama_messages(messages),
             "stream": True,
             "options": {"num_predict": max_tokens},
         }
         if tools:
-            payload["tools"] = tools
+            payload["tools"] = to_ollama_tools(tools)
         client = get_shared_http_client()
         async with client.stream(
             "POST", f"{self.config.ollama_base}/api/chat", json=payload, timeout=120
@@ -459,14 +649,13 @@ class LLMClient:
     async def _claude(
         self, model: str, messages: list, tools: list | None, max_tokens: int
     ) -> AsyncGenerator[LLMChunk, None]:
-        api_key = await self.vault.get("ANTHROPIC_API_KEY")
+        api_key = await self._api_key("ANTHROPIC_API_KEY", "anthropic")
         headers = {
             "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
         system = next((m["content"] for m in messages if m["role"] == "system"), "")
-        user_msgs = [m for m in messages if m["role"] != "system"]
 
         # Prompt caching: system prompt stabil → cache_control ephemeral
         # Hemat hingga 90% biaya untuk bagian yang berulang (audit gap)
@@ -475,10 +664,11 @@ class LLMClient:
         payload: dict = {
             "model": model,
             "max_tokens": max_tokens,
-            "system": system_blocks,
-            "messages": user_msgs,
+            "messages": to_anthropic_messages(messages),
             "stream": True,
         }
+        if system:
+            payload["system"] = system_blocks
         if tools:
             payload["tools"] = tools
 
@@ -491,17 +681,30 @@ class LLMClient:
             timeout=180,
         ) as resp:
             resp.raise_for_status()
+            # Audit 2026-09-25 (#7): input tool_use datang bertahap lewat
+            # `input_json_delta` dan baru lengkap di `content_block_stop` —
+            # sebelumnya tool_call di-yield di `content_block_start` dengan input
+            # {} (SETIAP tool dari Claude dijalankan tanpa argumen). input_tokens
+            # ada di `message_start`, bukan `message_delta` (sebelumnya hilang →
+            # biaya Claude tercatat hanya output).
+            tool_blocks: dict[int, dict] = {}
+            input_tokens = 0
             async for line in resp.aiter_lines():
                 if not line.startswith("data:"):
                     continue
                 data = json.loads(line[5:].strip())
                 etype = data.get("type", "")
-                if etype == "content_block_start":
+                if etype == "message_start":
+                    usage = data.get("message", {}).get("usage", {}) or {}
+                    input_tokens = usage.get("input_tokens", 0) or 0
+                elif etype == "content_block_start":
                     block = data.get("content_block", {})
                     if block.get("type") == "tool_use":
-                        yield LLMChunk(
-                            type="tool_call", tool_name=block.get("name", ""), tool_input={}
-                        )
+                        tool_blocks[data.get("index", 0)] = {
+                            "id": block.get("id", ""),
+                            "name": block.get("name", ""),
+                            "json": "",
+                        }
                 elif etype == "content_block_delta":
                     delta = data.get("delta", {})
                     if delta.get("type") == "text_delta":
@@ -509,9 +712,41 @@ class LLMClient:
                     elif delta.get("type") == "thinking_delta":
                         # Extended thinking Anthropic → blok reasoning terpisah.
                         yield LLMChunk(type="thinking", text=delta.get("thinking", ""))
+                    elif delta.get("type") == "input_json_delta":
+                        blk = tool_blocks.get(data.get("index", 0))
+                        if blk is not None:
+                            blk["json"] += delta.get("partial_json", "")
+                elif etype == "content_block_stop":
+                    blk = tool_blocks.pop(data.get("index", 0), None)
+                    if blk is not None:
+                        try:
+                            tool_input = json.loads(blk["json"]) if blk["json"].strip() else {}
+                        except json.JSONDecodeError:
+                            log.warning("anthropic_tool_input_parse_failed", tool=blk["name"])
+                            tool_input = {}
+                        yield LLMChunk(
+                            type="tool_call",
+                            tool_name=blk["name"],
+                            tool_input=tool_input if isinstance(tool_input, dict) else {},
+                            tool_id=blk["id"],
+                        )
                 elif etype == "message_delta":
-                    if data.get("usage"):
-                        yield LLMChunk(type="usage", usage=data["usage"])
+                    usage = data.get("usage") or {}
+                    if usage:
+                        yield LLMChunk(
+                            type="usage",
+                            usage={
+                                "input_tokens": input_tokens,
+                                "output_tokens": usage.get("output_tokens", 0) or 0,
+                            },
+                        )
+                elif etype == "error":
+                    # Error di TENGAH stream (mis. overloaded_error) sebelumnya
+                    # diabaikan diam-diam → jawaban terpotong/kosong tanpa jejak.
+                    err = data.get("error", {}) or {}
+                    raise ProviderUnavailable(
+                        f"anthropic stream error: {err.get('type', '?')}: {err.get('message', '')}"
+                    )
 
     async def _gemini(
         self, model: str, messages: list, tools: list | None, max_tokens: int
@@ -529,17 +764,13 @@ class LLMClient:
         butuh `functionDeclarations` dengan key `parameters` — dikonversi di sini,
         bukan di tools/*.py, agar tools/ tetap provider-agnostic.
         """
-        api_key = await self.vault.get("GOOGLE_API_KEY")
+        api_key = await self._api_key("GOOGLE_API_KEY", "gemini")
 
         system = next((m["content"] for m in messages if m["role"] == "system"), "")
-        contents = [
-            {
-                "role": "model" if m["role"] == "assistant" else "user",
-                "parts": [{"text": m["content"]}],
-            }
-            for m in messages
-            if m["role"] in ("user", "assistant") and m.get("content")
-        ]
+        # Audit 2026-09-25 (#8): sebelumnya pesan tool & giliran assistant yang
+        # hanya berisi tool call DIBUANG — Gemini (tier default COMPLEX/CRITICAL)
+        # tak pernah melihat hasil tool, jadi memanggil tool yang sama berulang.
+        contents = to_gemini_contents(messages)
 
         payload: dict = {
             "contents": contents,
@@ -581,6 +812,7 @@ class LLMClient:
                                 type="tool_call",
                                 tool_name=fc.get("name", ""),
                                 tool_input=fc.get("args", {}),
+                                tool_signature=part.get("thoughtSignature", ""),
                             )
                         elif part.get("text"):
                             # parts dengan thought=true adalah reasoning Gemini.
