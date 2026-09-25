@@ -153,3 +153,70 @@ async def test_stream_one_no_retry_after_first_chunk_sent(client, monkeypatch):
             pass
 
     assert len(attempts) == 1, "tidak boleh retry setelah sebagian stream terkirim"
+
+
+# ── Audit 2026-09-25 (#6): API key hilang = provider tak tersedia ───────────
+
+
+@pytest.mark.asyncio
+async def test_missing_api_key_falls_back_instead_of_crashing(config):
+    """Reproduksi temuan: Vault.get me-raise ValueError yang lolos dari fallback
+    chain — Ollama tak pernah dicoba, turn crash."""
+    vault = AsyncMock()
+    vault.get.side_effect = ValueError("Credential 'ANTHROPIC_API_KEY' tidak ditemukan")
+    client = LLMClient(vault=vault, config=config)
+
+    async def mock_health(provider: str) -> bool:
+        return True
+
+    client._health_check = mock_health
+
+    async def fake_ollama(model, messages, tools, max_tokens):
+        yield LLMChunk(type="text", text="lokal ok")
+
+    client._ollama = fake_ollama
+
+    chunks = [
+        c
+        async for c in client.stream_with_fallback(
+            "anthropic", "claude-haiku-4-5-20251001", [{"role": "user", "content": "x"}]
+        )
+    ]
+    assert any(c.type == "text" and c.text == "lokal ok" for c in chunks)
+    assert any(c.type == "fallback" for c in chunks)
+
+
+@pytest.mark.asyncio
+async def test_unknown_provider_raises_instead_of_silent_empty(client):
+    with pytest.raises(ProviderUnavailable):
+        async for _ in client._stream_one_attempt("typo-provider", "m", [], None, 10):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_resolve_previous_refine_failure_does_not_crash_turn():
+    """Refine (LLM evaluator) gagal → baris pending TETAP ditandai resolved,
+    tak dicoba ulang (dan gagal) di setiap turn berikutnya."""
+    from infra.database import DatabaseManager
+    from memory.skill_decay import SkillDecayManager
+    from memory.skill_feedback import SkillFeedback
+
+    cfg = AppConfig(db_path=":memory:")
+    db = DatabaseManager(cfg)
+    conn = await db.conn()
+    with open("migrations/001_initial.sql") as f:
+        await conn.executescript(f.read())
+        await conn.commit()
+    try:
+        cur = await db.execute(
+            "INSERT INTO skills (role, skill_name, skill_content, status) VALUES ('pm','s','x','active')"
+        )
+        crystallizer = AsyncMock()
+        crystallizer.refine_on_correction.side_effect = ProviderUnavailable("semua gagal")
+        fb = SkillFeedback("pm", db, SkillDecayManager("pm", db, cfg), crystallizer, cfg)
+        await fb.record_usage("s1", [cur.lastrowid])
+        await fb.resolve_previous("s1", corrected=True, correction_trace="salah")
+        row = await db.fetchone("SELECT resolved FROM skill_usage_pending")
+        assert row["resolved"] == 1
+    finally:
+        await db.close()

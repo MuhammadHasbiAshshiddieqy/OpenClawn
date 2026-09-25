@@ -1,7 +1,39 @@
-import time
-from datetime import datetime
+import re
+
 from infra.database import DatabaseManager
 from infra.config import AppConfig
+
+# Audit 2026-09-25: pencocokan trigger skill. SEBELUMNYA `query LIKE
+# '%' || trigger || '%'` dengan trigger = 60 char pertama task asli — query baru
+# harus memuat kalimat itu PERSIS, sehingga skill praktis tak pernah terpicu
+# ulang (Inovasi 2 revive & Inovasi 3 promote jarang terjadi), dan `%`/`_` di
+# teks task diperlakukan sebagai wildcard. Sekarang: substring literal ATAU
+# tumpang-tindih kata (≥ TRIGGER_OVERLAP dari kata bermakna di trigger).
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
+_MIN_WORD_LEN = 3
+TRIGGER_OVERLAP = 0.6
+# Kandidat yang dinilai di Python per query (urut decay_score) — batas atas
+# agar role dengan ribuan skill tak memuat semuanya tiap turn.
+_CANDIDATE_LIMIT = 200
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in _WORD_RE.findall(text.lower()) if len(w) >= _MIN_WORD_LEN}
+
+
+def trigger_matches(query: str, trigger: str | None) -> bool:
+    """True bila skill dengan `trigger` relevan untuk `query`. Trigger kosong =
+    selalu relevan (perilaku lama `trigger_pattern IS NULL`)."""
+    if not trigger or not trigger.strip():
+        return True
+    q = query.lower()
+    t = trigger.lower().strip()
+    if t in q:
+        return True
+    t_words = _words(t)
+    if len(t_words) < 2:
+        return False  # satu kata pendek → hanya substring, hindari false positive
+    return len(t_words & _words(q)) / len(t_words) >= TRIGGER_OVERLAP
 
 
 class SkillDecayManager:
@@ -16,11 +48,15 @@ class SkillDecayManager:
         self.role = role
         self.db = db
         self.config = config
-        self._last_decay_ts: float = 0.0
         # Multi-Tenant (TODO.md § Prioritas 5) — bukti konsep wiring penuh: semua
         # query skill (baca & decay) di-scope ke tenant ini. Deployment single-tenant
         # existing tetap jalan tanpa perubahan (default 'default').
         self.tenant_id = tenant_id
+        # Audit 2026-09-25 (#4): timestamp pass terakhir disimpan di DB, BUKAN
+        # atribut instance — AgentLoop (dan manager ini) dibuat BARU tiap request
+        # web, jadi throttle per-instance lama tak pernah menahan apa pun: decay
+        # jalan TIAP turn. Pola sama curator/calibration (app_settings).
+        self._last_pass_key = f"decay_last_pass:{tenant_id}:{role}"
 
     async def get_active_skills(self, query: str) -> list[dict]:
         """Skill aktif yang trigger-nya cocok query, untuk disuntik ke context.
@@ -36,33 +72,33 @@ class SkillDecayManager:
         relevan). `private` (default) TETAP hanya terlihat role pemiliknya,
         perilaku lama tak berubah untuk skill yang belum di-share sadar.
         """
-        active = await self.db.fetchall(
-            """SELECT id, skill_name, skill_content, trigger_pattern, decay_score, status
-               FROM skills
+        cols = "id, skill_name, skill_content, trigger_pattern, decay_score, status"
+        active_rows = await self.db.fetchall(
+            f"""SELECT {cols} FROM skills
                WHERE tenant_id=? AND role=? AND status='active'
-                 AND (trigger_pattern IS NULL OR ? LIKE '%' || trigger_pattern || '%')
                ORDER BY decay_score DESC, use_count DESC LIMIT ?""",
-            (self.tenant_id, self.role, query, self.config.max_active_skills),
+            (self.tenant_id, self.role, _CANDIDATE_LIMIT),
         )
+        active = [r for r in active_rows if trigger_matches(query, r["trigger_pattern"])]
+        active = active[: self.config.max_active_skills]
         # I2: beri 1 slot percobaan untuk draft yang trigger-nya cocok — satu-satunya
         # cara draft bisa terbukti & dipromosikan. Draft trial TIDAK menggusur active.
-        trial = await self.db.fetchall(
-            """SELECT id, skill_name, skill_content, trigger_pattern, decay_score, status
-               FROM skills
-               WHERE tenant_id=? AND role=? AND status='draft'
-                 AND trigger_pattern IS NOT NULL AND ? LIKE '%' || trigger_pattern || '%'
-               ORDER BY draft_success_count DESC, id DESC LIMIT 1""",
-            (self.tenant_id, self.role, query),
+        draft_rows = await self.db.fetchall(
+            f"""SELECT {cols} FROM skills
+               WHERE tenant_id=? AND role=? AND status='draft' AND trigger_pattern IS NOT NULL
+               ORDER BY draft_success_count DESC, id DESC LIMIT ?""",
+            (self.tenant_id, self.role, _CANDIDATE_LIMIT),
         )
-        shared = await self.db.fetchall(
-            """SELECT id, skill_name, skill_content, trigger_pattern, decay_score, status
-               FROM skills
+        trial = [r for r in draft_rows if trigger_matches(query, r["trigger_pattern"])][:1]
+        shared_rows = await self.db.fetchall(
+            f"""SELECT {cols} FROM skills
                WHERE tenant_id=? AND role!=? AND status='active'
                  AND visibility IN ('shared','inherited')
-                 AND (trigger_pattern IS NULL OR ? LIKE '%' || trigger_pattern || '%')
                ORDER BY decay_score DESC, use_count DESC LIMIT ?""",
-            (self.tenant_id, self.role, query, self.config.max_shared_skills),
+            (self.tenant_id, self.role, _CANDIDATE_LIMIT),
         )
+        shared = [r for r in shared_rows if trigger_matches(query, r["trigger_pattern"])]
+        shared = shared[: self.config.max_shared_skills]
         return active + trial + shared
 
     async def mark_used(self, skill_id: int) -> None:
@@ -73,11 +109,11 @@ class SkillDecayManager:
         ChatSessionStore.soft_delete)."""
         await self.db.execute(
             """UPDATE skills
-               SET use_count = use_count + 1, last_used_at = ?,
+               SET use_count = use_count + 1, last_used_at = datetime('now'),
                    decay_score = MIN(1.0, decay_score + ?),
                    status = CASE WHEN status='archived' THEN 'active' ELSE status END
                WHERE id = ? AND tenant_id = ?""",
-            (datetime.now().isoformat(), self.config.skill_revive_boost, skill_id, self.tenant_id),
+            (self.config.skill_revive_boost, skill_id, self.tenant_id),
         )
 
     async def mark_many_used(self, skill_ids: list[int]) -> None:
@@ -118,8 +154,8 @@ class SkillDecayManager:
             promoted_conf = max(row["confidence"] or 0.0, self.config.confidence_threshold / 5.0)
             await self.db.execute(
                 """UPDATE skills SET status='active', draft_success_count=?,
-                       confidence=?, last_used_at=? WHERE id=? AND tenant_id=?""",
-                (new_count, promoted_conf, datetime.now().isoformat(), skill_id, self.tenant_id),
+                       confidence=?, last_used_at=datetime('now') WHERE id=? AND tenant_id=?""",
+                (new_count, promoted_conf, skill_id, self.tenant_id),
             )
             return {"skill_id": skill_id, "action": "promoted", "uses": new_count}
 
@@ -133,21 +169,62 @@ class SkillDecayManager:
         """
         Audit #7: throttle — hanya jalan jika sudah lewat decay_interval_sec.
         Dipanggil tiap turn, tapi mayoritas no-op.
-        """
-        now = time.monotonic()
-        if now - self._last_decay_ts < self.config.decay_interval_sec:
-            return {"skipped": True}
-        self._last_decay_ts = now
-        return await self._run_decay_pass()
 
-    async def _run_decay_pass(self) -> dict:
+        Audit 2026-09-25 (#4): throttle kini persisten di `app_settings` dan
+        diklaim ATOMIK (compare-and-set) — dua turn bersamaan tak bisa sama-sama
+        menjalankan pass untuk jendela waktu yang sama.
+        """
+        now_row = await self.db.fetchone("SELECT julianday('now') AS now")
+        now = float(now_row["now"])
+        row = await self.db.fetchone(
+            "SELECT value FROM app_settings WHERE key=?", (self._last_pass_key,)
+        )
+        last: float | None = None
+        if row and row["value"]:
+            try:
+                last = float(row["value"])
+            except (ValueError, TypeError):
+                last = None
+        if last is not None and (now - last) * 86400 < self.config.decay_interval_sec:
+            return {"skipped": True}
+
+        if row is None:
+            claim = await self.db.execute(
+                "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
+                (self._last_pass_key, repr(now)),
+            )
+        else:
+            claim = await self.db.execute(
+                """UPDATE app_settings SET value=?, updated_at=CURRENT_TIMESTAMP
+                   WHERE key=? AND value IS ?""",
+                (repr(now), self._last_pass_key, row["value"]),
+            )
+        if claim.rowcount != 1:
+            return {"skipped": True}  # pass lain sudah mengklaim jendela ini
+        return await self._run_decay_pass(since=last, now=now)
+
+    async def _run_decay_pass(self, since: float | None = None, now: float | None = None) -> dict:
+        """Satu pass decay.
+
+        Audit 2026-09-25 (#4): eksponen = hari sejak MAX(terakhir dipakai, pass
+        sebelumnya) — BUKAN hari sejak terakhir dipakai saja. Formula lama
+        `score *= 0.97^hari_sejak_dipakai` di setiap pass MENGGANDAKAN decay
+        (skill 2 hari tak dipakai kehilangan 0.97^2 LAGI tiap pass → terarsip
+        dalam hitungan jam/turn, bukan ~40 hari). Dengan eksponen inkremental,
+        total decay kumulatif tetap tepat `0.97^hari_sejak_dipakai` seperti spec.
+        `since`/`now` dalam julian day; None → pass pertama (perilaku lama).
+        """
+        now_expr = "?" if now is not None else "julianday('now')"
+        params: tuple = (self.config.skill_decay_base,)
+        params += (now,) if now is not None else ()
+        params += (since if since is not None else 0.0, self.tenant_id, self.role)
         # Audit #6: exponential decay via POWER() — didaftarkan sebagai custom function di DatabaseManager
         await self.db.execute(
-            """UPDATE skills
-               SET decay_score = decay_score * POWER(?,
-                   julianday('now') - julianday(COALESCE(last_used_at, created_at)))
+            f"""UPDATE skills
+               SET decay_score = decay_score * POWER(?, MAX(0.0, {now_expr} - MAX(
+                   julianday(COALESCE(last_used_at, created_at)), ?)))
                WHERE tenant_id=? AND role=? AND status='active'""",
-            (self.config.skill_decay_base, self.tenant_id, self.role),
+            params,
         )
         cursor = await self.db.execute(
             """UPDATE skills SET status='archived'

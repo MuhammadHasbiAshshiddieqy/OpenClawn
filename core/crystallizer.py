@@ -33,10 +33,15 @@ class ConfidenceCrystallizer:
     Confidence < 4 atau ada critical_gaps → status draft, bukan active.
     """
 
-    def __init__(self, role: str, llm, db: DatabaseManager):
+    def __init__(self, role: str, llm, db: DatabaseManager, tenant_id: str = "default"):
         self.role = role
         self.llm = llm
         self.db = db
+        # Audit 2026-09-25: skill hasil kristalisasi SEBELUMNYA selalu masuk tenant
+        # default (INSERT tanpa tenant_id) dan refine mengubah skill by-id tanpa
+        # filter tenant — tak konsisten dengan SkillDecayManager yang sudah
+        # di-scope penuh per tenant (Prioritas 5).
+        self.tenant_id = tenant_id
 
     def should_attempt(self, history: list) -> bool:
         tool_calls = sum(len(t.tool_calls) for t in history if t.tool_calls)
@@ -48,6 +53,19 @@ class ConfidenceCrystallizer:
         # Audit #4: pilih evaluator minimal setara generator
         eval_provider, eval_model, verified = self._resolve_evaluator(generator_model)
         evaluation = await self._self_evaluate(task, solution, eval_provider, eval_model)
+        # Audit 2026-09-25 (#5): evaluator yang JATUH ke fallback chain (mis.
+        # gemini-2.5-pro gagal → gemma4:e4b) bukan lagi evaluator yang dijamin
+        # setara generator — hasilnya tak boleh membuat skill 'active'.
+        fallback_model = evaluation.pop("_fallback_model", None)
+        if fallback_model:
+            log.warning(
+                "crystallizer_evaluator_fell_back",
+                generator_model=generator_model,
+                intended=eval_model,
+                actual=fallback_model,
+            )
+            verified = False
+            eval_model = fallback_model
 
         status = (
             "active"
@@ -70,11 +88,12 @@ class ConfidenceCrystallizer:
         try:
             await self.db.execute(
                 """
-                INSERT INTO skills (role, skill_name, trigger_pattern, skill_content,
+                INSERT INTO skills (tenant_id, role, skill_name, trigger_pattern, skill_content,
                                     status, confidence, generator_model, decay_score)
-                VALUES (?,?,?,?,?,?,?,1.0)
+                VALUES (?,?,?,?,?,?,?,?,1.0)
                 """,
                 (
+                    self.tenant_id,
                     self.role,
                     skill_name,
                     task[:60],
@@ -111,8 +130,9 @@ class ConfidenceCrystallizer:
         (fail-safe — jangan belajar dari sinyal lemah, biarkan decay bekerja).
         """
         row = await self.db.fetchone(
-            "SELECT skill_name, skill_content, generator_model, version FROM skills WHERE id=?",
-            (skill_id,),
+            "SELECT skill_name, skill_content, generator_model, version FROM skills "
+            "WHERE id=? AND tenant_id=?",
+            (skill_id, self.tenant_id),
         )
         if not row:
             return {"skill_id": skill_id, "action": "noop"}
@@ -131,12 +151,11 @@ class ConfidenceCrystallizer:
             f'{{"improved": <true/false>, "confidence": <1-5>, '
             f'"new_content": "<konten skill yang diperbaiki>", "reasoning": "<satu kalimat>"}}'
         )
-        response = ""
-        async for chunk in self.llm.stream_with_fallback(
-            eval_provider, eval_model, [{"role": "user", "content": prompt}]
-        ):
-            if chunk.type == "text":
-                response += chunk.text
+        response, fallback_model = await self._ask_evaluator(eval_provider, eval_model, prompt)
+        if fallback_model:
+            # Audit 2026-09-25 (#5): sama alasan crystallize — jangan tulis ulang
+            # skill pakai evaluator pengganti yang kekuatannya tak terjamin.
+            return {"skill_id": skill_id, "action": "skipped", "confidence": 0}
         ev = self._parse_refine(response)
 
         if not ev["improved"] or ev["confidence"] < CONFIDENCE_THRESHOLD or not ev["new_content"]:
@@ -149,8 +168,8 @@ class ConfidenceCrystallizer:
             (skill_id, row["version"], row["skill_content"]),
         )
         await self.db.execute(
-            "UPDATE skills SET skill_content=?, version=version+1 WHERE id=?",
-            (ev["new_content"], skill_id),
+            "UPDATE skills SET skill_content=?, version=version+1 WHERE id=? AND tenant_id=?",
+            (ev["new_content"], skill_id, self.tenant_id),
         )
         return {"skill_id": skill_id, "action": "refined", "confidence": ev["confidence"]}
 
@@ -216,13 +235,26 @@ class ConfidenceCrystallizer:
             f"Jawab HANYA JSON valid, tanpa teks lain:\n"
             f'{{"confidence": <1-5>, "critical_gaps": <true/false>, "reasoning": "<satu kalimat>"}}'
         )
+        response, fallback_model = await self._ask_evaluator(provider, model, prompt)
+        result = self._parse(response)
+        if fallback_model:
+            result["_fallback_model"] = fallback_model
+        return result
+
+    async def _ask_evaluator(self, provider: str, model: str, prompt: str) -> tuple[str, str]:
+        """Panggil evaluator; kembalikan (teks, model_fallback_atau_""). Chunk
+        `fallback` dari stream_with_fallback menandai evaluator yang DIMINTA tak
+        dipakai — caller wajib memperlakukan hasilnya sebagai tak terverifikasi."""
         response = ""
+        fallback_model = ""
         async for chunk in self.llm.stream_with_fallback(
             provider, model, [{"role": "user", "content": prompt}]
         ):
-            if chunk.type == "text":
+            if chunk.type == "fallback" and chunk.fallback_used:
+                fallback_model = chunk.fallback_model or "unknown"
+            elif chunk.type == "text":
                 response += chunk.text
-        return self._parse(response)
+        return response, fallback_model
 
     def _parse(self, raw: str) -> dict:
         try:

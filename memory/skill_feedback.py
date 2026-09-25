@@ -94,10 +94,20 @@ class SkillFeedback:
                     await self.decay.record_draft_outcome(sid, success=False)
                 elif status == "active" and self.config.refine_on_correction:
                     if refined < self.config.refine_max_per_pass:
-                        res = await self.crystallizer.refine_on_correction(sid, correction_trace)
+                        refined += 1
+                        # Audit 2026-09-25 (#6): refine memanggil LLM evaluator —
+                        # kegagalannya (semua provider down) tak boleh membatalkan
+                        # resolusi baris pending ini, atau baris yang sama akan
+                        # dicoba (dan gagal) lagi di SETIAP turn berikutnya.
+                        try:
+                            res = await self.crystallizer.refine_on_correction(
+                                sid, correction_trace
+                            )
+                        except Exception as e:  # noqa: BLE001 — refine opsional
+                            log.warning("skill_refine_failed", skill_id=sid, error=str(e))
+                            continue
                         if res.get("action") == "refined":
                             summary["refined"] += 1
-                        refined += 1
 
         await self.db.execute("UPDATE skill_usage_pending SET resolved=1 WHERE id=?", (row["id"],))
         return summary

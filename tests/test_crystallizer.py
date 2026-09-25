@@ -198,3 +198,59 @@ async def test_crystallization_log_records_draft(db):
     row = await db.fetchone("SELECT status, confidence FROM crystallization_log WHERE role='qa'")
     assert row["status"] == "draft"
     assert row["confidence"] == 2
+
+
+# ── Audit 2026-09-25 (#5): fallback tak boleh melemahkan evaluator ──────────
+
+
+def _mock_llm_with_fallback(confidence: int = 5):
+    """Evaluator yang diminta gagal → stream_with_fallback turun ke model lain."""
+
+    async def _stream(provider, model, messages, tools=None, max_tokens=4096):
+        from core.llm_client import LLMChunk
+
+        yield LLMChunk(type="fallback", fallback_used=True, fallback_model="gemma4:e4b")
+        yield LLMChunk(
+            type="text",
+            text=f'{{"confidence": {confidence}, "critical_gaps": false, "reasoning": "x"}}',
+        )
+
+    mock = AsyncMock()
+    mock.stream_with_fallback = _stream
+    return mock
+
+
+@pytest.mark.asyncio
+async def test_evaluator_fallback_forces_draft(db):
+    """SEBELUMNYA: gemini-2.5-flash dinilai gemma4:e4b (fallback) tapi tetap
+    'verified' → skill 'active'. Kini evaluator pengganti = unverified = draft."""
+    c = ConfidenceCrystallizer("pm", _mock_llm_with_fallback(5), db)
+    res = await c.crystallize("tugas uji fallback", "solusi", [], "gemini-2.5-flash")
+    assert res["status"] == "draft"
+    assert res["evaluator"] == "gemma4:e4b"
+
+
+@pytest.mark.asyncio
+async def test_refine_skipped_when_evaluator_falls_back(db):
+    cur = await db.execute(
+        """INSERT INTO skills (role, skill_name, skill_content, status, generator_model)
+           VALUES ('pm','sk','isi lama','active','gemini-2.5-flash')"""
+    )
+    c = ConfidenceCrystallizer("pm", _mock_llm_with_fallback(5), db)
+    res = await c.refine_on_correction(cur.lastrowid, "salah")
+    assert res["action"] == "skipped"
+    row = await db.fetchone("SELECT skill_content FROM skills WHERE id=?", (cur.lastrowid,))
+    assert row["skill_content"] == "isi lama"
+
+
+@pytest.mark.asyncio
+async def test_crystallize_writes_tenant_and_refine_is_tenant_scoped(db):
+    """Audit 2026-09-25: INSERT sebelumnya tanpa tenant_id; refine mengubah skill
+    by-id tanpa filter tenant."""
+    c = ConfidenceCrystallizer("pm", _mock_llm(5), db, tenant_id="tenant-a")
+    await c.crystallize("tugas tenant a", "solusi", [], "gemma4:e2b")
+    row = await db.fetchone("SELECT id, tenant_id FROM skills WHERE role='pm'")
+    assert row["tenant_id"] == "tenant-a"
+
+    other = ConfidenceCrystallizer("pm", _mock_llm(5), db, tenant_id="tenant-b")
+    assert (await other.refine_on_correction(row["id"], "salah"))["action"] == "noop"

@@ -733,3 +733,25 @@ async def test_identity_report_config_change_shows_as_two_identities():
     identities = {r["agent_identity"] for r in report}
     assert identities == {identity_v1, identity_v2}
     await db.close()
+
+
+# ── Audit 2026-09-25: sinyal koreksi tak boleh terlalu longgar ──────────────
+
+
+@pytest.mark.parametrize(
+    "msg,expected",
+    [
+        ("salah, bukan itu maksudku", True),
+        ("harusnya pakai tabel, bukan list", True),
+        ("no, that's not it", True),
+        ("the title should be 'Report' — please redo", True),
+        ("buat file yang harusnya berisi ringkasan", False),
+        ("pilih salah satu dari tiga opsi ini", False),
+        ("the output should be a csv file", False),
+        ("I have no, uh, idea", False),
+    ],
+)
+def test_is_correction_precision(msg, expected):
+    from core.audit import is_correction
+
+    assert is_correction(msg) is expected

@@ -1,4 +1,5 @@
 import json
+import re
 
 from infra.database import DatabaseManager
 from core.audit_chain import (
@@ -22,7 +23,6 @@ CORRECTION_SIGNALS = [
     "ulangi",
     "keliru",
     "bukan begitu",
-    "harusnya",
     # English (core harus locale-neutral, §1.5)
     "that's wrong",
     "thats wrong",
@@ -30,11 +30,29 @@ CORRECTION_SIGNALS = [
     "try again",
     "incorrect",
     "i meant",
-    "no, ",
     "redo",
     "not right",
-    "should be",
 ]
+
+# Audit 2026-09-25: sinyal LEMAH — kata yang juga lazim di permintaan biasa
+# ("harusnya file ini berisi...", "the title should be...", "no, thanks").
+# Sebelumnya dicocokkan di MANA SAJA dalam pesan, memicu koreksi palsu → reset
+# draft/refine skill (Inovasi 3) & data kalibrasi router (Inovasi 1) tercemar.
+# Kini hanya dihitung bila MEMBUKA pesan.
+CORRECTION_SIGNALS_LEADING = ["harusnya", "should be", "no,", "no.", "nope"]
+# Frasa umum yang mengandung sinyal kuat tapi BUKAN koreksi ("salah satu" = "one of").
+_CORRECTION_FALSE_FRIENDS = re.compile(r"\bsalah\s+satu(nya)?\b")
+_SIGNAL_PATTERNS = [re.compile(rf"(?<!\w){re.escape(sig)}(?!\w)") for sig in CORRECTION_SIGNALS]
+
+
+def is_correction(user_message: str) -> bool:
+    """True bila pesan ini tampak mengoreksi jawaban sebelumnya (heuristik)."""
+    msg = user_message.lower().strip()
+    if any(msg.startswith(sig) for sig in CORRECTION_SIGNALS_LEADING):
+        return True
+    msg = _CORRECTION_FALSE_FRIENDS.sub(" ", msg)
+    # Batas kata: "salah" tak boleh cocok di dalam kata lain, "redo" tak cocok "redone".
+    return any(p.search(msg) for p in _SIGNAL_PATTERNS)
 
 
 class RoutingAuditor:
@@ -196,8 +214,7 @@ class RoutingAuditor:
         di teks pesan) — SELECT id eksplisit di bawah ini cuma dibutuhkan untuk
         `ref_id` rantai audit, bukan mengubah kapan fungsi ini return True/False.
         """
-        msg = user_message.lower()
-        if not any(sig in msg for sig in CORRECTION_SIGNALS):
+        if not is_correction(user_message):
             return False
         row = await self.db.fetchone(
             "SELECT id FROM routing_events WHERE session_id=? ORDER BY id DESC LIMIT 1",

@@ -85,10 +85,43 @@ async def test_maybe_run_decay_throttled(db):
     # interval 9999 detik agar pasti di-throttle
     cfg = AppConfig(db_path=":memory:", decay_interval_sec=9999)
     decay = SkillDecayManager(role="pm", db=db, config=cfg)
-    decay._last_decay_ts = 999_999_999_999.0  # timestamp jauh di masa depan
+    first = await decay.maybe_run_decay_pass()
+    assert "archived" in first  # pass pertama jalan
 
-    result = await decay.maybe_run_decay_pass()
-    assert result == {"skipped": True}
+    # Audit 2026-09-25 (#4): instance BARU (seperti AgentLoop baru tiap request)
+    # tetap di-throttle — throttle kini di DB, bukan atribut instance.
+    again = await SkillDecayManager(role="pm", db=db, config=cfg).maybe_run_decay_pass()
+    assert again == {"skipped": True}
+
+
+@pytest.mark.asyncio
+async def test_decay_not_compounded_across_passes(db):
+    """Reproduksi temuan #4: 10 turn beruntun (AgentLoop baru tiap turn) SEBELUMNYA
+    menurunkan skill 2-hari-tak-dipakai 1.0 → 0.54. Kini tetap ≈ 0.97^2."""
+    cfg = AppConfig(db_path=":memory:", decay_interval_sec=0)
+    await db.execute(
+        """INSERT INTO skills (role, skill_name, skill_content, decay_score, last_used_at)
+           VALUES ('pm','s','isi',1.0, datetime('now','-2 days'))"""
+    )
+    for _ in range(10):
+        await SkillDecayManager(role="pm", db=db, config=cfg).maybe_run_decay_pass()
+    row = await db.fetchone("SELECT decay_score, status FROM skills")
+    assert row["status"] == "active"
+    assert row["decay_score"] == pytest.approx(0.97**2, abs=0.005)
+
+
+@pytest.mark.asyncio
+async def test_mark_used_writes_utc_timestamp(db, config):
+    """last_used_at harus UTC (sama basis julianday('now')) — waktu lokal membuat
+    eksponen negatif di zona UTC+ sehingga skor malah NAIK saat decay."""
+    decay = SkillDecayManager(role="pm", db=db, config=config)
+    sid = await _insert_skill(db, "pm", "utc-check")
+    await decay.mark_used(sid)
+    row = await db.fetchone(
+        "SELECT (julianday('now') - julianday(last_used_at)) * 86400 AS age FROM skills WHERE id=?",
+        (sid,),
+    )
+    assert abs(row["age"]) < 60
 
 
 @pytest.mark.asyncio
@@ -322,3 +355,34 @@ async def test_shared_skill_scoped_to_tenant(db, config):
     skills = await decay_tenant_b.get_active_skills("buat laporan")
     names = [s["skill_name"] for s in skills]
     assert "shared-a" not in names
+
+
+# ── Audit 2026-09-25: pencocokan trigger ─────────────────────────────────────
+
+
+def test_trigger_matches_word_overlap_not_only_exact_prefix():
+    """SEBELUMNYA query harus memuat 60 char pertama task asli PERSIS."""
+    from memory.skill_decay import trigger_matches
+
+    trigger = "buat laporan penjualan bulanan dari file csv"
+    assert trigger_matches("tolong buat laporan penjualan bulanan dari csv terbaru", trigger)
+    assert not trigger_matches("apa kabar hari ini", trigger)
+    assert trigger_matches("halo", None)
+
+
+def test_trigger_percent_is_literal_not_wildcard():
+    from memory.skill_decay import trigger_matches
+
+    assert not trigger_matches("diskon besar", "diskon 50%")
+    assert trigger_matches("hitung diskon 50% dari harga", "diskon 50%")
+
+
+@pytest.mark.asyncio
+async def test_get_active_skills_matches_reworded_query(db, config):
+    decay = SkillDecayManager(role="pm", db=db, config=config)
+    await db.execute(
+        "INSERT INTO skills (role, skill_name, skill_content, status, trigger_pattern) "
+        "VALUES ('pm','lap','isi','active','buat laporan penjualan bulanan dari file csv')"
+    )
+    hits = await decay.get_active_skills("buatkan laporan penjualan bulanan dari csv ini")
+    assert [h["skill_name"] for h in hits] == ["lap"]
