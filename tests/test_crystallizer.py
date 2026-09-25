@@ -243,6 +243,17 @@ async def test_refine_skipped_when_evaluator_falls_back(db):
     assert row["skill_content"] == "isi lama"
 
 
+def test_generator_model_of_mixed_turn_is_unverified():
+    """Turn yang sebagian dijawab model fallback → generator gabungan yang tak
+    dikenal EVALUATOR_FOR (jadi draft), bukan model pilihan router."""
+    from core.agent_loop import Turn, generator_model_of
+
+    t = Turn(role="assistant", model_used="gemma4:e2b", models_used=["gemma4:e2b"])
+    assert generator_model_of(t) == "gemma4:e2b"
+    t.models_used = ["gemma4:e2b", "gemini-2.5-flash"]
+    assert generator_model_of(t) not in EVALUATOR_FOR
+
+
 @pytest.mark.asyncio
 async def test_crystallize_writes_tenant_and_refine_is_tenant_scoped(db):
     """Audit 2026-09-25: INSERT sebelumnya tanpa tenant_id; refine mengubah skill

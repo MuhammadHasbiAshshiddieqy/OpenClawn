@@ -55,6 +55,7 @@ from infra.users import SHARED_SECRET_SUBJECT, UserStore, role_at_least
 from infra.workspace import (
     SessionWorkspaceStore,
     WorkspaceViolation,
+    default_workdir_roots,
     resolve_in_workspace,
     validate_workdir_candidate,
 )
@@ -70,6 +71,7 @@ from security.auth import (
 )
 from security.oidc import (
     OIDCError,
+    is_login_allowed,
     build_authorize_url,
     exchange_code,
     generate_nonce,
@@ -282,6 +284,13 @@ async def lifespan(app: FastAPI):
             hint="Ollama down dan tak ada API key cloud terkonfigurasi — "
             "agent tak akan bisa menjawab sampai salah satu tersedia.",
         )
+    if _oidc_configured() and not (CONFIG.oidc_allowed_emails or CONFIG.oidc_allowed_domains):
+        log.warning(
+            "startup_oidc_no_allowlist",
+            hint="OIDC aktif tanpa OPENCLAWN_OIDC_ALLOWED_EMAILS/_DOMAINS — akun "
+            "APA PUN yang lolos di provider bisa login (user pertama jadi admin). "
+            "Wajib diisi bila provider publik (mis. Google).",
+        )
     if not CONFIG.auth_active:
         log.warning(
             "startup_auth_disabled",
@@ -462,6 +471,24 @@ def _oidc_configured() -> bool:
     return bool(CONFIG.oidc_issuer and CONFIG.oidc_client_id and CONFIG.oidc_client_secret)
 
 
+def _safe_next(url: str) -> str:
+    """Tujuan redirect pasca-login yang aman: path relatif same-origin saja.
+
+    Audit 2026-09-25: cek lama (`startswith("/") and not startswith("//")`)
+    meloloskan `/\\evil.com` — browser menormalisasi backslash jadi slash
+    (`//evil.com`) → open redirect ke domain luar. Karakter kontrol ditolak
+    juga (header injection pada Location)."""
+    url = (url or "").strip()
+    if (
+        not url.startswith("/")
+        or url.startswith("//")
+        or "\\" in url
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url)
+    ):
+        return "/"
+    return url
+
+
 def _is_secure_request(request: Request) -> bool:
     """Audit produksi 2026-07-29/30: cookie sesi/CSRF/OIDC sebelumnya TAK PERNAH
     set `secure=True`, sekalipun deployment sungguhan berjalan di HTTPS —
@@ -545,6 +572,31 @@ def _can_access_owned_resource(request: Request, owner_user_id: str | None) -> b
     return filt == owner_user_id
 
 
+def _workdir_roots_for(request: Request) -> tuple[str, ...]:
+    """Allowlist root folder kerja untuk request ini (audit 2026-09-25 #1).
+
+    Auth nonaktif → default config (home + workspace, atau
+    OPENCLAWN_WORKDIR_ROOTS). Auth aktif → HANYA admin, dan hanya root yang
+    diisi eksplisit operator; member/viewer dapat tuple kosong (tak bisa pindah
+    folder sama sekali — memilih folder di host server adalah hak operator)."""
+    if not CONFIG.auth_active:
+        return default_workdir_roots(CONFIG)
+    user = getattr(request.state, "user", None)
+    if user is None or not role_at_least(user.access_role, "admin"):
+        return ()
+    return tuple(CONFIG.workdir_allowed_roots)
+
+
+def _access_role_of(request: Request) -> str | None:
+    """access_role user sesi ini bila auth aktif (None = auth nonaktif atau
+    user tak dikenal — tool yang butuh RBAC memperlakukan None saat auth aktif
+    sebagai DENY)."""
+    if not CONFIG.auth_active:
+        return None
+    user = getattr(request.state, "user", None)
+    return user.access_role if user else None
+
+
 def _issue_session_cookies(request: Request, resp: RedirectResponse, user_id: int) -> None:
     """Set cookie sesi + CSRF — dipakai KEDUA jalur login (shared-secret & OIDC),
     karena setelah verifikasi identitas berhasil, mekanisme sesi sama persis.
@@ -579,7 +631,7 @@ async def login_page(request: Request, next: str = "/", error: bool = False):
         "login.html",
         {
             "t": translator(locale),
-            "next": next,
+            "next": _safe_next(next),
             "error": error,
             "shared_secret_enabled": bool(CONFIG.auth_token),
             "oidc_enabled": _oidc_configured(),
@@ -591,9 +643,7 @@ async def login_page(request: Request, next: str = "/", error: bool = False):
 async def login_submit(request: Request):
     form = await request.form()
     token = (form.get("token") or "").strip()
-    next_url = (form.get("next") or "/").strip()
-    if not next_url.startswith("/") or next_url.startswith("//"):
-        next_url = "/"  # cegah open-redirect via ?next= ke domain eksternal
+    next_url = _safe_next(form.get("next") or "/")  # cegah open-redirect
 
     if not CONFIG.auth_token or not verify_login_token(token, CONFIG.auth_token):
         log.warning("login_failed", ip=request.client.host if request.client else "unknown")
@@ -622,8 +672,7 @@ async def login_oidc_start(request: Request, next: str = "/"):
     """Mulai alur OIDC: redirect ke authorization_endpoint provider dengan state/nonce baru."""
     if not _oidc_configured():
         return RedirectResponse(url="/login", status_code=303)
-    if not next.startswith("/") or next.startswith("//"):
-        next = "/"
+    next = _safe_next(next)
 
     state = generate_state()
     nonce = generate_nonce()
@@ -671,7 +720,7 @@ async def oidc_callback(request: Request, code: str = "", state: str = ""):
     cookie_state_raw = request.cookies.get(_OIDC_STATE_COOKIE, "")
     cookie_nonce = request.cookies.get(_OIDC_NONCE_COOKIE, "")
     cookie_state, _, next_url = cookie_state_raw.partition(":")
-    next_url = next_url or "/"
+    next_url = _safe_next(next_url or "/")
 
     # Audit 2026-08-27: `hmac.compare_digest` (bukan `!=`) — konsisten dengan
     # perbandingan CSRF/login token lain di codebase ini (audit produksi
@@ -693,6 +742,11 @@ async def oidc_callback(request: Request, code: str = "", state: str = ""):
         )
     except OIDCError as e:
         log.warning("oidc_login_failed", error=str(e))
+        return RedirectResponse(url="/login?error=true", status_code=303)
+
+    allowed, why = is_login_allowed(claims, CONFIG.oidc_allowed_emails, CONFIG.oidc_allowed_domains)
+    if not allowed:
+        log.warning("oidc_login_denied", subject=claims.subject, email=claims.email, reason=why)
         return RedirectResponse(url="/login?error=true", status_code=303)
 
     log.info("oidc_login_ok", subject=claims.subject, email=claims.email)
@@ -780,6 +834,9 @@ async def health():
 
 @app.post("/chat/stream")
 async def chat_stream(request: Request):
+    # Audit 2026-09-25 (#11): role `viewer` SEBELUMNYA tak ditegakkan di endpoint
+    # mana pun — viewer bisa chat, menjalankan tool, dan memberi approval.
+    _require_role(request, "member")
     form = await request.form()
     message = (form.get("message") or "").strip()
     role = form.get("role", "pm")
@@ -796,10 +853,17 @@ async def chat_stream(request: Request):
     # AgentLoop(...) yang dibangun eager di bawah (di luar generate()).
     if role not in available_roles():
         raise StarletteHTTPException(status_code=400, detail="role tidak dikenal")
+    # Audit 2026-09-25: `session_id` datang dari client — SEBELUMNYA tak dicek
+    # kepemilikannya, jadi siapa pun yang tahu UUID sesi user lain bisa memuat
+    # riwayatnya ke context agent (dan menambah giliran ke transkrip mereka).
+    existing_owner = await ChatSessionStore(db).get_owner(session_id)
+    if not _can_access_owned_resource(request, existing_owner):
+        raise StarletteHTTPException(status_code=403, detail="forbidden")
 
     # Working directory adaptif (§ user request): folder pilihan user untuk sesi
     # ini, divalidasi SEBELUM masuk AgentConfig (fail-closed — lihat _validate_workdir).
-    workdir, workdir_err = validate_workdir_candidate(form.get("workdir", ""))
+    workdir_roots = _workdir_roots_for(request)
+    workdir, workdir_err = validate_workdir_candidate(form.get("workdir", ""), workdir_roots)
     # Trust mode (§ user request otonomi): toggle sesi eksplisit dari UI — bukan
     # default, harus dipilih sadar tiap pengiriman. "true"/"1" dari checkbox HTML.
     trust_mode = (form.get("trust_mode") or "").strip().lower() in ("true", "1", "on")
@@ -817,6 +881,8 @@ async def chat_stream(request: Request):
             session_id=session_id,
             user_id=owner_user_id or "default",
             workspace_override=workdir,
+            workdir_roots=workdir_roots,
+            access_role=_access_role_of(request),
             trust_mode=trust_mode,
         ),
         db=db,
@@ -955,6 +1021,9 @@ async def delete_chat_session(request: Request, session_id: str):
     Audit produksi 2026-07-29: cek kepemilikan SEBELUM menghapus — SEBELUMNYA
     user manapun bisa hapus riwayat chat siapa pun (IDOR).
     """
+    # Audit 2026-09-25 (#11): role `viewer` SEBELUMNYA tak ditegakkan di endpoint
+    # mana pun — viewer bisa chat, menjalankan tool, dan memberi approval.
+    _require_role(request, "member")
     owner = await ChatSessionStore(db).get_owner(session_id)
     if not _can_access_owned_resource(request, owner):
         raise StarletteHTTPException(status_code=403, detail="forbidden")
@@ -1165,6 +1234,9 @@ async def get_task_graph_timeline(request: Request, task_id: str):
 @app.post("/converse/stream")
 async def converse_stream(request: Request):
     """Multi-agent conversation: beberapa role saling mengobrol, di-stream per giliran."""
+    # Audit 2026-09-25 (#11): role `viewer` SEBELUMNYA tak ditegakkan di endpoint
+    # mana pun — viewer bisa chat, menjalankan tool, dan memberi approval.
+    _require_role(request, "member")
     form = await request.form()
     message = (form.get("message") or "").strip()
     pattern = (form.get("pattern") or "pipeline").strip()
@@ -1176,7 +1248,8 @@ async def converse_stream(request: Request):
         return HTMLResponse("")
 
     # Working directory adaptif (§ user request) — sama seperti /chat/stream.
-    workdir, workdir_err = validate_workdir_candidate(form.get("workdir", ""))
+    workdir_roots = _workdir_roots_for(request)
+    workdir, workdir_err = validate_workdir_candidate(form.get("workdir", ""), workdir_roots)
     if workdir_err:
         return HTMLResponse(
             f"event: error\ndata: {json.dumps({'text': workdir_err})}\n\nevent: done\ndata: [DONE]\n\n"
@@ -1213,6 +1286,13 @@ async def converse_stream(request: Request):
     _current_user = getattr(request.state, "user", None)
     owner_user_id = str(_current_user.id) if _current_user else None
 
+    # Audit 2026-09-25: percakapan aktif dengan session_id SAMA milik user lain
+    # tak boleh diambil alih (registry di bawah akan menimpa owner-nya).
+    if session_id in _conversation_owners and not _can_access_owned_resource(
+        request, _conversation_owners[session_id]
+    ):
+        raise StarletteHTTPException(status_code=403, detail="forbidden")
+
     # STOP: implicit lewat disconnect; INTERJECT lewat registry per session.
     control = ConversationControl(disconnect_check=request.is_disconnected)
     _conversations[session_id] = control
@@ -1228,6 +1308,8 @@ async def converse_stream(request: Request):
                 session_id=session_id,
                 user_id=owner_user_id or "default",
                 workspace_override=workdir,
+                workdir_roots=workdir_roots,
+                access_role=_access_role_of(request),
                 persist_history=False,
                 trust_mode=trust_mode,
             ),
@@ -1307,6 +1389,9 @@ async def converse_interject(request: Request):
     dengan menebak/mengetahui `session_id`-nya (pola bug sama `/answer`
     sebelum diaudit 2026-08-27).
     """
+    # Audit 2026-09-25 (#11): role `viewer` SEBELUMNYA tak ditegakkan di endpoint
+    # mana pun — viewer bisa chat, menjalankan tool, dan memberi approval.
+    _require_role(request, "member")
     form = await request.form()
     session_id = (form.get("session_id") or "").strip()
     message = (form.get("message") or "").strip()
@@ -1327,6 +1412,9 @@ async def converse_stop(request: Request):
     bug & fix sama `/converse/interject` di atas (user login mana pun
     sebelumnya bisa menghentikan percakapan user lain).
     """
+    # Audit 2026-09-25 (#11): role `viewer` SEBELUMNYA tak ditegakkan di endpoint
+    # mana pun — viewer bisa chat, menjalankan tool, dan memberi approval.
+    _require_role(request, "member")
     form = await request.form()
     session_id = (form.get("session_id") or "").strip()
     control = _conversations.get(session_id)
@@ -1361,7 +1449,7 @@ async def approvals(request: Request, session_id: str | None = None):
 
 
 @app.get("/workdir/check")
-async def workdir_check(path: str = ""):
+async def workdir_check(request: Request, path: str = ""):
     """Validasi folder kerja pilihan user secara live (§ working directory adaptif).
 
     Dipanggil UI saat user mengetik path agar dapat umpan balik segera (valid /
@@ -1369,7 +1457,7 @@ async def workdir_check(path: str = ""):
     _validate_workdir yang SAMA dengan jalur eksekusi (fail-closed), jadi hasil di
     UI konsisten dengan yang benar-benar dipakai. Kosong = pakai default server.
     """
-    resolved, err = validate_workdir_candidate(path)
+    resolved, err = validate_workdir_candidate(path, _workdir_roots_for(request))
     if err:
         return {"ok": False, "error": err}
     if resolved is None:
@@ -1384,6 +1472,9 @@ async def approve(request: Request):
     Audit produksi 2026-07-29: cek kepemilikan SEBELUM resolve — SEBELUMNYA
     approval_id APA PUN bisa di-approve/reject user manapun (hijack lintas-user,
     melumpuhkan gate HITL §1)."""
+    # Audit 2026-09-25 (#11): role `viewer` SEBELUMNYA tak ditegakkan di endpoint
+    # mana pun — viewer bisa chat, menjalankan tool, dan memberi approval.
+    _require_role(request, "member")
     form = await request.form()
     approval_id = (form.get("approval_id") or "").strip()
     decision = (form.get("decision") or "").strip().lower()
@@ -1442,6 +1533,9 @@ async def answer(request: Request):
     via `chat_sessions.owner_user_id`, tabel yang SAMA dipakai endpoint sesi
     lain, bukan menambah state baru).
     """
+    # Audit 2026-09-25 (#11): role `viewer` SEBELUMNYA tak ditegakkan di endpoint
+    # mana pun — viewer bisa chat, menjalankan tool, dan memberi approval.
+    _require_role(request, "member")
     form = await request.form()
     session_id = (form.get("session_id") or "").strip()
     text = (form.get("answer") or "").strip()
@@ -1546,6 +1640,9 @@ async def submit_human_feedback(event_id: int, request: Request):
     Form data: `rating` (int 1-5). 400 bila di luar rentang / bukan angka,
     404 bila event_id tidak ditemukan.
     """
+    # Audit 2026-09-25 (#11): role `viewer` SEBELUMNYA tak ditegakkan di endpoint
+    # mana pun — viewer bisa chat, menjalankan tool, dan memberi approval.
+    _require_role(request, "member")
     form = await request.form()
     try:
         rating = int(form.get("rating") or 0)
@@ -1804,7 +1901,12 @@ async def workspace_download(request: Request, path: str, session_id: str = ""):
             raise StarletteHTTPException(status_code=403, detail="forbidden")
         custom_root = await SessionWorkspaceStore(db).get(session_id)
         if custom_root:
-            root = custom_root
+            # Audit 2026-09-25 (#1): folder tersimpan divalidasi ULANG terhadap
+            # allowlist requester — baris lama (mis. "/") atau milik user dengan
+            # hak berbeda tak boleh jadi root download.
+            validated, _err = validate_workdir_candidate(custom_root, _workdir_roots_for(request))
+            if validated:
+                root = validated
     try:
         safe = resolve_in_workspace(path, root)
     except WorkspaceViolation:
@@ -1918,6 +2020,9 @@ async def activity_page(request: Request, role: str | None = None):
 @app.post("/blockers/resolve")
 async def blockers_resolve(request: Request):
     """Tandai blocker sebagai resolved (user sudah menanggapi)."""
+    # Audit 2026-09-25 (#11): role `viewer` SEBELUMNYA tak ditegakkan di endpoint
+    # mana pun — viewer bisa chat, menjalankan tool, dan memberi approval.
+    _require_role(request, "member")
     form = await request.form()
     try:
         blocker_id = int(form.get("blocker_id") or 0)

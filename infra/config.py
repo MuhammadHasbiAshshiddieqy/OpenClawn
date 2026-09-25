@@ -40,6 +40,11 @@ class AppConfig:
     # (`{oidc_redirect_base}/auth/callback`) — perlu eksplisit karena self-host
     # di belakang reverse proxy/domain kustom, tak bisa diasumsikan dari request.
     oidc_redirect_base: str = "http://localhost:8000"
+    # Audit 2026-09-25 (#12): siapa yang boleh login via OIDC. Kosong keduanya →
+    # semua akun yang lolos di IdP (perilaku lama, di-log sebagai peringatan).
+    # Env: OPENCLAWN_OIDC_ALLOWED_EMAILS / OPENCLAWN_OIDC_ALLOWED_DOMAINS (koma).
+    oidc_allowed_emails: tuple = ()
+    oidc_allowed_domains: tuple = ()
     # Secret HMAC untuk menandatangani cookie sesi (`create_session_token`/
     # `verify_session_token`, security/auth.py). SEBELUM OIDC ada, `auth_token`
     # dipakai langsung sebagai secret (aman karena hanya SATU deployment shared-
@@ -169,6 +174,19 @@ class AppConfig:
     # Workspace root: semua tool file (read/write/edit/glob/grep/list_dir) dibatasi
     # ke folder ini. Path di luar root ditolak (anti ../ & symlink escape). Keamanan #1.
     workspace_root: str = "."
+    # Audit 2026-09-25 (#1, kritis): allowlist folder yang BOLEH dipilih sebagai
+    # folder kerja per-sesi (field UI `workdir` / tool `set_workdir`). Sebelumnya
+    # path APA PUN diterima (termasuk `/`) — user login mana pun bisa membaca
+    # `/proc/self/environ`/DB lewat tool file tanpa approval. Kosong → default
+    # `infra/workspace.py::default_workdir_roots` (home + workspace_root bila auth
+    # nonaktif; TIDAK ADA override sama sekali bila auth aktif). Env:
+    # `OPENCLAWN_WORKDIR_ROOTS` (dipisah `os.pathsep`, mis. `/srv/a:/srv/b`).
+    workdir_allowed_roots: tuple = ()
+    # Audit 2026-09-25 (#3): allowlist nama env var yang boleh dipakai sebagai
+    # `vault:KEY` di header http_request. Kosong → semua KECUALI credential
+    # aplikasi sendiri (`OPENCLAWN_*`, API key LLM/Tavily — lihat tools/web.py).
+    # Env: `OPENCLAWN_HTTP_VAULT_KEYS` (dipisah koma).
+    http_vault_allowed_keys: tuple = ()
     # Batas hasil tool agar tidak membanjiri context (token-first §1.4).
     tool_max_output: int = 10_000
     # Timeout keras per eksekusi tool (§1.3 kegagalan anggun): tool yang menggantung
@@ -274,11 +292,31 @@ class AppConfig:
             anthropic_base=os.environ.get("ANTHROPIC_BASE", "https://api.anthropic.com"),
             gemini_base=os.environ.get("GEMINI_BASE", "https://generativelanguage.googleapis.com"),
             workspace_root=os.environ.get("OPENCLAWN_WORKSPACE", "."),
+            workdir_allowed_roots=tuple(
+                p.strip()
+                for p in os.environ.get("OPENCLAWN_WORKDIR_ROOTS", "").split(os.pathsep)
+                if p.strip()
+            ),
+            http_vault_allowed_keys=tuple(
+                k.strip()
+                for k in os.environ.get("OPENCLAWN_HTTP_VAULT_KEYS", "").split(",")
+                if k.strip()
+            ),
             sandbox_runtime=os.environ.get("OPENCLAWN_SANDBOX_RUNTIME", "runc"),
             auth_token=auth_token,
             oidc_issuer=os.environ.get("OPENCLAWN_OIDC_ISSUER", ""),
             oidc_client_id=os.environ.get("OPENCLAWN_OIDC_CLIENT_ID", ""),
             oidc_client_secret=os.environ.get("OPENCLAWN_OIDC_CLIENT_SECRET", ""),
+            oidc_allowed_emails=tuple(
+                e.strip().lower()
+                for e in os.environ.get("OPENCLAWN_OIDC_ALLOWED_EMAILS", "").split(",")
+                if e.strip()
+            ),
+            oidc_allowed_domains=tuple(
+                d.strip().lower().lstrip("@")
+                for d in os.environ.get("OPENCLAWN_OIDC_ALLOWED_DOMAINS", "").split(",")
+                if d.strip()
+            ),
             oidc_redirect_base=os.environ.get(
                 "OPENCLAWN_OIDC_REDIRECT_BASE", "http://localhost:8000"
             ),

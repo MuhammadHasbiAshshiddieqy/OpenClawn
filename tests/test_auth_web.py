@@ -408,3 +408,22 @@ def test_rate_limit_blocks_after_quota_exhausted(client_no_auth):
     assert resp.status_code == 429
     assert resp.json()["error"] == "rate_limited"
     assert resp.headers["retry-after"] == "60"
+
+
+# ── Audit 2026-09-25: open redirect via backslash ────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "target,expected",
+    [
+        ("/skills", "/skills"),
+        ("//evil.com", "/"),
+        ("/\\evil.com", "/"),
+        ("https://evil.com", "/"),
+        ("/a\r\nSet-Cookie: x=1", "/"),
+    ],
+)
+def test_safe_next(target, expected):
+    import web.main as web_main
+
+    assert web_main._safe_next(target) == expected

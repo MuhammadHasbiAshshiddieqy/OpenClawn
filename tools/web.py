@@ -1,7 +1,10 @@
+import asyncio
 import ipaddress
+import os
 import socket
 from urllib.parse import urlparse
 
+import httpcore
 import httpx
 
 from infra.config import CONFIG
@@ -54,6 +57,97 @@ def _ssrf_guard(url: str) -> str | None:
 MAX_REDIRECTS = 5
 
 
+def _is_public_ip(addr: str) -> bool:
+    ip = ipaddress.ip_address(addr)
+    # IPv4-mapped IPv6 (::ffff:127.0.0.1) dinilai sebagai IPv4 aslinya.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_global
+
+
+class _PublicOnlyBackend(httpcore.AsyncNetworkBackend):
+    """Network backend httpcore yang me-resolve host, menolak bila ADA alamat
+    non-publik, lalu connect ke IP yang SUDAH divalidasi itu.
+
+    Audit 2026-09-25: `_ssrf_guard` me-resolve DNS, lalu httpx me-resolve LAGI
+    saat connect — domain dengan TTL 0 bisa menjawab IP publik untuk guard lalu
+    169.254.169.254 untuk koneksi (DNS rebinding). Validasi di titik connect
+    menutup celah waktu itu; TLS tetap memakai hostname asli (SNI + verifikasi
+    sertifikat dilakukan httpcore setelah connect_tcp)."""
+
+    def __init__(self) -> None:
+        self._inner = httpcore.AnyIOBackend()
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        loop = asyncio.get_running_loop()
+        try:
+            infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except socket.gaierror as e:
+            raise httpcore.ConnectError(f"Host '{host}' tidak dapat di-resolve") from e
+        addrs = [info[4][0] for info in infos]
+        if not addrs or not all(_is_public_ip(a) for a in addrs):
+            raise httpcore.ConnectError(
+                f"Akses ke host internal/privat ditolak (SSRF guard saat connect): {host}"
+            )
+        return await self._inner.connect_tcp(
+            addrs[0],
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    async def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        raise httpcore.ConnectError("unix socket tidak diizinkan untuk tool web")
+
+    async def sleep(self, seconds: float) -> None:
+        await self._inner.sleep(seconds)
+
+
+_PROXY_ENV = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+
+
+def _outbound_client() -> httpx.AsyncClient:
+    """Client httpx untuk tool web dengan validasi IP di titik connect.
+
+    Bila operator memakai proxy keluar (env *_PROXY), koneksi TCP menuju proxy
+    (biasanya IP privat) — pinning dilewati dan resolusi tujuan jadi tanggung
+    jawab proxy; `_ssrf_guard` di depan tetap berlaku."""
+    if any(os.environ.get(k) for k in _PROXY_ENV):
+        return httpx.AsyncClient(timeout=30)
+    transport = httpx.AsyncHTTPTransport()
+    # httpx 0.28 tak mengekspos parameter network_backend; atribut pool ini
+    # dikunci versinya di uv.lock dan dijaga test (tests/test_tools.py).
+    transport._pool._network_backend = _PublicOnlyBackend()
+    return httpx.AsyncClient(timeout=30, transport=transport)
+
+
+# Audit 2026-09-25 (#3): credential milik APLIKASI sendiri tak boleh dikirim ke
+# host eksternal lewat header `vault:KEY` — sebelumnya KEY apa pun di environment
+# bisa di-resolve (termasuk OPENCLAWN_ENCRYPTION_KEY / OPENCLAWN_AUTH_TOKEN /
+# API key LLM), jadi satu approval (atau NOL approval di trust mode) cukup untuk
+# mengirimnya ke server penyerang. Semua `OPENCLAWN_*` ikut ditolak.
+_APP_SECRET_KEYS = frozenset({"ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "TAVILY_API_KEY"})
+
+
+def vault_key_allowed(key: str) -> bool:
+    """True bila `key` boleh di-resolve dari Vault untuk http_request."""
+    if key.startswith("OPENCLAWN_") or key in _APP_SECRET_KEYS:
+        return False
+    if CONFIG.http_vault_allowed_keys:
+        return key in CONFIG.http_vault_allowed_keys
+    return True
+
+
+def uses_vault_credential(tool_input: dict) -> bool:
+    """True bila input http_request menyuntik credential Vault ke header — dipakai
+    AgentLoop agar trust mode TIDAK bisa melewati approval untuk request ini."""
+    headers = tool_input.get("headers")
+    if not isinstance(headers, dict):
+        return False
+    return any(isinstance(v, str) and v.startswith("vault:") for v in headers.values())
+
+
 class SSRFBlockedRedirect(Exception):
     """Redirect chain mengarah ke host internal/privat — diblokir SEBELUM diikuti."""
 
@@ -86,7 +180,7 @@ async def _stream_capped(
         async with client.stream(method, current_url, **kwargs) as resp:
             if resp.is_redirect and resp.headers.get("location"):
                 next_url = str(httpx.URL(current_url).join(resp.headers["location"]))
-                blocked = _ssrf_guard(next_url)
+                blocked = await asyncio.to_thread(_ssrf_guard, next_url)
                 if blocked:
                     raise SSRFBlockedRedirect(
                         f"Redirect ke host internal/privat diblokir (SSRF guard): {blocked}"
@@ -117,11 +211,12 @@ class WebFetchTool(Tool):
         if not url.startswith(ALLOWED_SCHEMES):
             return {"error": "url harus diawali http:// atau https://"}
         # Anti-SSRF SEBELUM request keluar (§1 keamanan dulu).
-        blocked = _ssrf_guard(url)
+        # Resolusi DNS di thread — getaddrinfo sinkron memblokir event loop.
+        blocked = await asyncio.to_thread(_ssrf_guard, url)
         if blocked:
             return {"error": blocked}
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with _outbound_client() as client:
                 # Truncation seragam via tool_max_output (token-first §1.4), bukan
                 # angka hardcoded. Jaring akhir di AgentLoop tetap berlaku.
                 status, content, truncated = await _stream_capped(client, "GET", url, MAX_BODY)
@@ -164,7 +259,7 @@ class WebSearchTool(Tool):
                 )
             }
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with _outbound_client() as client:
                 resp = await client.post(
                     "https://api.tavily.com/search",
                     json={
@@ -227,7 +322,8 @@ class HttpRequestTool(Tool):
             return {"error": "headers harus berupa object key-value"}
         # Anti-SSRF: walau http_request butuh approval, internal host tetap diblokir
         # agar approval bukan satu-satunya penghalang ke service internal (§1).
-        blocked = _ssrf_guard(url)
+        # Resolusi DNS di thread — getaddrinfo sinkron memblokir event loop.
+        blocked = await asyncio.to_thread(_ssrf_guard, url)
         if blocked:
             return {"error": blocked}
 
@@ -237,14 +333,23 @@ class HttpRequestTool(Tool):
             resolved_headers = {}
             for k, v in headers.items():
                 if isinstance(v, str) and v.startswith("vault:"):
-                    resolved_headers[k] = await vault.get(v[len("vault:") :])
+                    key = v[len("vault:") :]
+                    if not vault_key_allowed(key):
+                        return {
+                            "error": (
+                                f"Kredensial vault '{key}' tidak boleh dipakai http_request "
+                                "(credential internal aplikasi atau di luar "
+                                "OPENCLAWN_HTTP_VAULT_KEYS)."
+                            )
+                        }
+                    resolved_headers[k] = await vault.get(key)
                 else:
                     resolved_headers[k] = v
         except ValueError as e:
             return {"error": f"Kredensial vault tidak ditemukan: {e}"}
 
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with _outbound_client() as client:
                 kwargs: dict = {"headers": resolved_headers}
                 if body is not None:
                     if isinstance(body, (dict, list)):

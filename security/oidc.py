@@ -51,6 +51,9 @@ class OIDCClaims:
     subject: str
     email: str | None
     name: str | None
+    # Audit 2026-09-25 (#12): allowlist email hanya bermakna bila provider
+    # menjamin email itu milik pemegang akun.
+    email_verified: bool = False
 
 
 def generate_state() -> str:
@@ -195,4 +198,33 @@ async def verify_id_token(
     subject = claims.get("sub")
     if not subject:
         raise OIDCError("ID token tak punya klaim 'sub'")
-    return OIDCClaims(subject=subject, email=claims.get("email"), name=claims.get("name"))
+    verified = claims.get("email_verified")
+    return OIDCClaims(
+        subject=subject,
+        email=claims.get("email"),
+        name=claims.get("name"),
+        # Sebagian provider mengirim string "true" alih-alih boolean JSON.
+        email_verified=verified is True or str(verified).lower() == "true",
+    )
+
+
+def is_login_allowed(
+    claims: OIDCClaims, allowed_emails: tuple, allowed_domains: tuple
+) -> tuple[bool, str]:
+    """Apakah akun OIDC ini boleh masuk ke deployment ini.
+
+    Audit 2026-09-25 (#12): SEBELUMNYA akun APA PUN yang lolos di IdP otomatis
+    jadi member (dan akun pertama jadi admin) — dengan IdP publik (Google) itu
+    berarti siapa saja di internet. Allowlist kosong → tetap izinkan semua
+    (kompatibilitas mundur; web/main.py me-log peringatan saat startup).
+    Allowlist diisi → email WAJIB terverifikasi dan cocok email/domain."""
+    if not allowed_emails and not allowed_domains:
+        return True, ""
+    email = (claims.email or "").strip().lower()
+    if not email or not claims.email_verified:
+        return False, "email tidak ada atau belum terverifikasi oleh provider"
+    if email in allowed_emails:
+        return True, ""
+    if email.rsplit("@", 1)[-1] in allowed_domains:
+        return True, ""
+    return False, "email di luar allowlist"

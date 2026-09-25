@@ -230,3 +230,53 @@ async def test_ollama_payload_uses_converted_tools(capture):
     payload = json.loads(capture["requests"][0].content)
     assert payload["tools"][0]["type"] == "function"
     assert "input_schema" not in json.dumps(payload["tools"])
+
+
+# ── AgentLoop: semua tool call dalam satu hop dieksekusi ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_executes_all_parallel_tool_calls(tmp_path):
+    from core.agent_loop import AgentConfig, AgentLoop
+    from core.llm_client import LLMChunk
+    from infra.database import DatabaseManager
+    from infra.workspace import CURRENT_WORKSPACE_ROOT
+
+    (tmp_path / "a.txt").write_text("AAA")
+    (tmp_path / "b.txt").write_text("BBB")
+    db = DatabaseManager(AppConfig(db_path=":memory:"))
+    conn = await db.conn()
+    with open("migrations/001_initial.sql") as f:
+        await conn.executescript(f.read())
+        await conn.commit()
+    token = CURRENT_WORKSPACE_ROOT.set(str(tmp_path))
+    seen: list[list] = []
+
+    async def fake_stream(provider, model, messages, tools=None, max_tokens=4096):
+        seen.append([dict(m) for m in messages])
+        if len(seen) == 1:
+            yield LLMChunk(type="text", text="Baca dua file.")
+            yield LLMChunk(
+                type="tool_call", tool_name="file_read", tool_input={"path": "a.txt"}, tool_id="t1"
+            )
+            yield LLMChunk(
+                type="tool_call", tool_name="file_read", tool_input={"path": "b.txt"}, tool_id="t2"
+            )
+        else:
+            yield LLMChunk(type="text", text="selesai")
+
+    try:
+        agent = AgentLoop(AgentConfig(role="dev", session_id="s-par"), db=db)
+        agent.llm.stream_with_fallback = fake_stream
+        _ = [ev async for ev in agent.run("baca a dan b")]
+    finally:
+        CURRENT_WORKSPACE_ROOT.reset(token)
+        await db.close()
+
+    second = seen[1]
+    assistant = [m for m in second if m.get("tool_calls")][-1]
+    assert [tc["id"] for tc in assistant["tool_calls"]] == ["t1", "t2"]
+    assert assistant["content"] == "Baca dua file."
+    tool_msgs = [m for m in second if m["role"] == "tool"]
+    assert [m["tool_call_id"] for m in tool_msgs] == ["t1", "t2"]
+    assert "AAA" in tool_msgs[0]["content"] and "BBB" in tool_msgs[1]["content"]

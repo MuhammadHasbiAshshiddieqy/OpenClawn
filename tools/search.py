@@ -4,10 +4,13 @@ Keduanya pure-Python & dibatasi ke workspace — tidak butuh shell, tidak menyen
 host, lebih mudah dipanggil model lokal ketimbang menyusun perintah `find`/`grep`.
 """
 
+import asyncio
+from pathlib import Path
+
 import regex
 
 from infra.config import CONFIG
-from infra.workspace import WorkspaceViolation, resolve_in_current_workspace
+from infra.workspace import WorkspaceViolation, is_sensitive_path, resolve_in_current_workspace
 from tools.base import Tool
 
 MAX_GLOB_RESULTS = 200
@@ -22,15 +25,34 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__", ".pytest_cache", ".
 GREP_LINE_TIMEOUT_SEC = 1.0
 
 
+def _safe_file(p: Path, root: Path) -> bool:
+    """True bila `p` file biasa yang target NYATA-nya (setelah ikuti symlink) masih
+    di dalam root dan bukan file credential/data internal.
+
+    Audit 2026-09-25 (#10): sebelumnya grep/glob membuka symlink apa adanya —
+    `notes.txt -> ~/.aws/credentials` di repo tak tepercaya terbaca lewat grep
+    (tanpa approval) padahal file_read sudah benar menolaknya. Diverifikasi via
+    reproduksi sebelum diperbaiki."""
+    try:
+        if not p.is_file():
+            return False
+        real = p.resolve()
+    except (OSError, RuntimeError):
+        return False
+    if real != root and root not in real.parents:
+        return False
+    return not is_sensitive_path(real)
+
+
 def _iter_files(root, rel_dir):
-    """Yield file di dalam root, melewati SKIP_DIRS. rel_dir membatasi subtree."""
+    """Yield file di dalam root, melewati SKIP_DIRS & file tak aman. rel_dir membatasi subtree."""
     base = root / rel_dir if rel_dir else root
     if not base.exists():
         return
     for p in base.rglob("*"):
         if any(part in SKIP_DIRS for part in p.parts):
             continue
-        if p.is_file():
+        if _safe_file(p, root):
             yield p
 
 
@@ -49,18 +71,10 @@ class GlobTool(Tool):
         except WorkspaceViolation as e:
             return {"error": str(e)}
 
-        try:
-            matches = []
-            for p in base.glob(pattern):
-                if any(part in SKIP_DIRS for part in p.parts):
-                    continue
-                if p.is_file():
-                    matches.append(str(p.relative_to(root)))
-                    if len(matches) >= MAX_GLOB_RESULTS:
-                        break
-            return {"matches": sorted(matches), "count": len(matches)}
-        except (OSError, ValueError) as e:
-            return {"error": f"Glob gagal: {e}"}
+        # Audit 2026-09-25: scan filesystem sinkron dipindah ke thread — sebelumnya
+        # glob di folder besar membekukan event loop (semua request user lain ikut
+        # macet selama scan).
+        return await asyncio.to_thread(_glob_sync, root, base, pattern)
 
     def schema(self) -> dict:
         return {
@@ -84,6 +98,70 @@ class GlobTool(Tool):
         }
 
 
+def _glob_sync(root: Path, base: Path, pattern: str) -> dict:
+    try:
+        matches = []
+        for p in base.glob(pattern):
+            if any(part in SKIP_DIRS for part in p.parts):
+                continue
+            # Pattern berisi '..' bisa menunjuk ke luar root — lewati, jangan bocorkan.
+            if not _safe_file(p, root):
+                continue
+            try:
+                rel = p.absolute().relative_to(root)
+            except ValueError:
+                continue
+            if ".." in rel.parts:
+                continue
+            matches.append(str(rel))
+            if len(matches) >= MAX_GLOB_RESULTS:
+                break
+        return {"matches": sorted(matches), "count": len(matches)}
+    except (OSError, ValueError, NotImplementedError) as e:
+        # NotImplementedError: pathlib menolak pattern absolut ("/etc/*").
+        return {"error": f"Glob gagal: {e}"}
+
+
+def _grep_sync(root: Path, sub: str, compiled) -> dict:
+    matches: list[dict] = []
+    for p in _iter_files(root, sub):
+        try:
+            with open(p, encoding="utf-8", errors="strict") as f:
+                for lineno, line in enumerate(f, 1):
+                    try:
+                        hit = compiled.search(line, timeout=GREP_LINE_TIMEOUT_SEC)
+                    except TimeoutError:
+                        # Audit produksi 2026-08-02: pattern catastrophic-
+                        # backtracking (ReDoS) terdeteksi — hentikan SELURUH
+                        # pencarian, bukan cuma lewati baris ini (pattern yang
+                        # sama akan lambat lagi di baris berikutnya, jadi
+                        # lanjut scan tetap DoS agregat walau tiap panggilan
+                        # individual dibatasi).
+                        return {
+                            "error": (
+                                "Regex terlalu lambat pada satu baris (kemungkinan "
+                                "catastrophic backtracking) — pencarian dihentikan."
+                            )
+                        }
+                    if hit:
+                        matches.append(
+                            {
+                                "file": str(p.relative_to(root)),
+                                "line": lineno,
+                                "text": line.rstrip("\n")[:300],
+                            }
+                        )
+                        if len(matches) >= MAX_GREP_MATCHES:
+                            return {
+                                "matches": matches,
+                                "count": len(matches),
+                                "truncated": True,
+                            }
+        except (UnicodeDecodeError, PermissionError, OSError):
+            continue  # lewati file binary/tak terbaca
+    return {"matches": matches, "count": len(matches), "truncated": False}
+
+
 class GrepTool(Tool):
     name = "grep"
     requires_approval = False
@@ -103,43 +181,8 @@ class GrepTool(Tool):
         except WorkspaceViolation as e:
             return {"error": str(e)}
 
-        matches: list[dict] = []
-        for p in _iter_files(root, sub):
-            try:
-                with open(p, encoding="utf-8", errors="strict") as f:
-                    for lineno, line in enumerate(f, 1):
-                        try:
-                            hit = compiled.search(line, timeout=GREP_LINE_TIMEOUT_SEC)
-                        except TimeoutError:
-                            # Audit produksi 2026-08-02: pattern catastrophic-
-                            # backtracking (ReDoS) terdeteksi — hentikan SELURUH
-                            # pencarian, bukan cuma lewati baris ini (pattern yang
-                            # sama akan lambat lagi di baris berikutnya, jadi
-                            # lanjut scan tetap DoS agregat walau tiap panggilan
-                            # individual dibatasi).
-                            return {
-                                "error": (
-                                    "Regex terlalu lambat pada satu baris (kemungkinan "
-                                    "catastrophic backtracking) — pencarian dihentikan."
-                                )
-                            }
-                        if hit:
-                            matches.append(
-                                {
-                                    "file": str(p.relative_to(root)),
-                                    "line": lineno,
-                                    "text": line.rstrip("\n")[:300],
-                                }
-                            )
-                            if len(matches) >= MAX_GREP_MATCHES:
-                                return {
-                                    "matches": matches,
-                                    "count": len(matches),
-                                    "truncated": True,
-                                }
-            except (UnicodeDecodeError, PermissionError, OSError):
-                continue  # lewati file binary/tak terbaca
-        return {"matches": matches, "count": len(matches), "truncated": False}
+        # Audit 2026-09-25: scan sinkron di thread (lihat GlobTool).
+        return await asyncio.to_thread(_grep_sync, root, sub, compiled)
 
     def schema(self) -> dict:
         return {

@@ -1155,3 +1155,128 @@ def test_member_forbidden_from_reverting_skill_merge(client_oidc):
         follow_redirects=False,
     )
     assert resp.status_code == 403
+
+
+# ── Audit 2026-09-25 (#1, kritis): folder kerja di mode multi-user ──────────
+
+
+def test_member_cannot_pick_workdir(client_oidc):
+    """SEBELUMNYA user login mana pun bisa mengisi workdir="/" lalu membaca file
+    host (mis. /proc/self/environ) lewat file_read tanpa approval."""
+    _login_via_oidc(client_oidc, "user-admin")  # user pertama = admin
+    client_oidc.cookies.clear()
+    _login_via_oidc(client_oidc, "user-member")
+    resp = client_oidc.get("/workdir/check", params={"path": "/"})
+    assert resp.json()["ok"] is False
+    # Kosong (pakai default server) tetap boleh.
+    assert client_oidc.get("/workdir/check", params={"path": ""}).json()["ok"] is True
+
+
+def test_admin_workdir_limited_to_configured_roots(tmp_path, monkeypatch):
+    allowed = tmp_path / "projects"
+    (allowed / "app").mkdir(parents=True)
+    monkeypatch.setenv("OPENCLAWN_WORKDIR_ROOTS", str(allowed))
+    with _make_client_auth(tmp_path, monkeypatch) as client:
+        _login_shared_secret(client)  # shared-secret = admin
+        ok = client.get("/workdir/check", params={"path": str(allowed / "app")}).json()
+        assert ok["ok"] is True
+        bad = client.get("/workdir/check", params={"path": "/"}).json()
+        assert bad["ok"] is False
+
+
+def test_download_ignores_saved_workdir_outside_allowlist(client_oidc, tmp_path):
+    """Baris session_workspace berisi "/" (dibuat sebelum perbaikan) tak boleh
+    menjadi root /workspace/download — sebelumnya: unduh file host mana pun."""
+    import asyncio
+
+    import web.main as web_main
+    from infra.chat_sessions import ChatSessionStore
+    from infra.users import UserStore
+    from infra.workspace import SessionWorkspaceStore
+
+    _login_via_oidc(client_oidc, "user-owner")
+
+    async def _seed():
+        owner = await UserStore(web_main.db).get_by_subject("user-owner")
+        await ChatSessionStore(web_main.db).ensure_created(
+            "s-legacy", "pm", owner_user_id=str(owner.id)
+        )
+        await SessionWorkspaceStore(web_main.db).set("s-legacy", "/")
+
+    asyncio.run(_seed())
+    resp = client_oidc.get(
+        "/workspace/download", params={"path": "/etc/hosts", "session_id": "s-legacy"}
+    )
+    assert resp.status_code == 404
+
+
+# ── Audit 2026-09-25 (#11): viewer read-only & kepemilikan session_id ───────
+
+
+def _set_access_role(subject: str, access_role: str) -> None:
+    import asyncio
+
+    import web.main as web_main
+    from infra.users import UserStore
+
+    async def _go():
+        store = UserStore(web_main.db)
+        user = await store.get_by_subject(subject)
+        await store.set_access_role(user.id, access_role)
+
+    asyncio.run(_go())
+
+
+def test_viewer_cannot_chat_or_approve(client_oidc):
+    """SEBELUMNYA role viewer tak ditegakkan di mana pun (bisa chat & approve)."""
+    _login_via_oidc(client_oidc, "user-admin")
+    client_oidc.cookies.clear()
+    _login_via_oidc(client_oidc, "user-viewer")
+    _set_access_role("user-viewer", "viewer")
+
+    assert (
+        client_oidc.post("/chat/stream", data={"message": "halo", "role": "pm"}).status_code == 403
+    )
+    assert client_oidc.post("/approve", data={"approval_id": "x"}).status_code == 403
+    assert client_oidc.post("/answer", data={"session_id": "x", "answer": "y"}).status_code == 403
+    # Membaca tetap boleh.
+    assert client_oidc.get("/chat-sessions").status_code == 200
+
+
+def test_chat_stream_rejects_other_users_session_id(client_oidc):
+    """Tahu UUID sesi user lain SEBELUMNYA cukup untuk memuat riwayatnya ke agent."""
+    import asyncio
+
+    import web.main as web_main
+    from infra.chat_sessions import ChatSessionStore
+    from infra.users import UserStore
+
+    _login_via_oidc(client_oidc, "user-admin")
+    client_oidc.cookies.clear()
+    _login_via_oidc(client_oidc, "user-alice")
+    client_oidc.cookies.clear()
+    _login_via_oidc(client_oidc, "user-mallory")
+
+    async def _seed():
+        alice = await UserStore(web_main.db).get_by_subject("user-alice")
+        await ChatSessionStore(web_main.db).ensure_created(
+            "s-alice", "pm", owner_user_id=str(alice.id)
+        )
+
+    asyncio.run(_seed())
+    resp = client_oidc.post(
+        "/chat/stream", data={"message": "ringkas chat kita", "role": "pm", "session_id": "s-alice"}
+    )
+    assert resp.status_code == 403
+
+
+# ── Audit 2026-09-25 (#12): allowlist OIDC ──────────────────────────────────
+
+
+def test_oidc_login_outside_allowlist_denied(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENCLAWN_OIDC_ALLOWED_DOMAINS", "corp.example")
+    with _make_client_oidc(tmp_path, monkeypatch) as client:
+        resp = _login_via_oidc(client, "random-internet-user")
+        assert resp.status_code == 303
+        assert "error=true" in resp.headers["location"]
+        assert client.get("/settings", follow_redirects=False).status_code in (303, 401)

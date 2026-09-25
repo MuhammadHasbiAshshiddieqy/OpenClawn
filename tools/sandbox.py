@@ -8,6 +8,7 @@ from infra.config import CONFIG
 from infra.logging import log
 from infra.sandbox_image import effective_sandbox_image
 from infra.sandbox_lifecycle import effective_persistent_container
+from infra.workspace import is_sensitive_name
 
 # Spesifikasi sandbox code_run (keamanan WAJIB):
 # - Tidak ada akses network (--network none)
@@ -38,6 +39,63 @@ PERSISTENT_CONTAINER_PREFIX = "openclawn-persist"
 PERSISTENT_TMPFS_SIZE = "64m"
 
 
+# Audit 2026-09-25 (#3): batas pemindaian workspace saat mencari file credential
+# untuk di-mask. Folder yang sama dilewati seperti tools/search.py (noise besar,
+# bukan tempat .env). Batas atas mencegah scan workspace raksasa menunda tiap
+# shell_run tanpa batas.
+_MASK_SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".tox"}
+_MASK_MAX_DIRS = 5000
+_MASK_MAX_ENTRIES = 100
+
+
+def _sensitive_masks(root: str) -> list[str]:
+    """Argumen docker yang menutupi file/folder credential di dalam workspace
+    (`/dev/null` untuk file, tmpfs kosong untuk folder) sebelum di-mount ke
+    /work. Tanpa ini `shell_run "cat .env"` (tanpa approval) membaca credential
+    walau semua tool file sudah menolaknya.
+
+    Residual risk jujur (§17): scan dibatasi `_MASK_MAX_DIRS` — workspace yang
+    sangat besar bisa menyisakan file sensitif bersarang dalam yang tak
+    ter-mask (di-log). Pertahanan utama tetap: jangan taruh credential di
+    workspace; container tetap `--network none` jadi tak bisa kirim keluar
+    sendiri."""
+    masks: list[str] = []
+    visited = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        visited += 1
+        if visited > _MASK_MAX_DIRS or len(masks) >= _MASK_MAX_ENTRIES * 2:
+            log.warning("sandbox_mask_scan_truncated", root=root, dirs=visited)
+            break
+        rel_dir = os.path.relpath(dirpath, root)
+        keep = []
+        for d in dirnames:
+            if d in _MASK_SKIP_DIRS:
+                continue
+            if is_sensitive_name(d):
+                target = "/work/" + os.path.normpath(os.path.join(rel_dir, d))
+                masks += ["--tmpfs", f"{target}:ro,size=1k"]
+                continue  # jangan turun ke dalam folder yang sudah ditutup
+            keep.append(d)
+        dirnames[:] = keep
+        for f in filenames:
+            if is_sensitive_name(f):
+                target = "/work/" + os.path.normpath(os.path.join(rel_dir, f))
+                masks += ["-v", f"/dev/null:{target}:ro"]
+    return masks
+
+
+async def _kill_quietly(proc) -> None:
+    """Matikan proses docker client yang melewati timeout — sebelumnya dibiarkan
+    hidup (dan container-nya tetap jalan) setelah wait_for menyerah."""
+    try:
+        proc.kill()
+        await proc.wait()
+    except (ProcessLookupError, AttributeError, TypeError):
+        pass
+    except Exception as exc:  # noqa: BLE001 — pembersihan tak boleh menutupi hasil timeout
+        log.warning("sandbox_kill_failed", error=str(exc))
+
+
 class SandboxUnavailable(Exception):
     """Docker tidak tersedia — sandbox tidak bisa jalan. Fail-safe, jangan jalan di host."""
 
@@ -54,12 +112,15 @@ _REQUIRED_FLAGS: tuple[tuple[str, ...], ...] = (
 
 
 class DockerSandbox:
-    def _base_docker_args(self, mount: str, tmpfs_size: str) -> list[str]:
+    def _base_docker_args(
+        self, mount: str, tmpfs_size: str, extra: list[str] | None = None
+    ) -> list[str]:
         """Bangun argv `docker run` dengan SEMUA flag keamanan wajib.
 
         Satu sumber kebenaran untuk run_python & run_shell — sehingga test bisa
         memverifikasi argv NYATA (bukan rekonstruksi manual yang bisa divergen).
-        `mount` = spec `-v src:/work:ro`; selalu read-only.
+        `mount` = spec `-v src:/work:ro`; selalu read-only. `extra` = mount
+        tambahan (mask credential, lihat `_sensitive_masks`) sebelum image.
         """
         args = [
             "docker",
@@ -83,6 +144,8 @@ class DockerSandbox:
             "--security-opt",
             "no-new-privileges",
         ]
+        if extra:
+            args += extra
         # § IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 5 (runtime
         # isolasi pluggable): HANYA diteruskan bila operator eksplisit memilih
         # runtime non-default (mis. "runsc" untuk gVisor) — default "runc" tak
@@ -125,12 +188,18 @@ class DockerSandbox:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=SANDBOX_TIMEOUT_SEC + 5
-                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(), timeout=SANDBOX_TIMEOUT_SEC + 5
+                    )
+                except asyncio.TimeoutError:
+                    await _kill_quietly(proc)
+                    raise
+                # errors="replace": output non-UTF8 (mis. sys.stdout.buffer.write(b"\xff"))
+                # sebelumnya me-raise UnicodeDecodeError di sini (audit 2026-09-25).
                 return {
-                    "stdout": stdout.decode()[:4000],
-                    "stderr": stderr.decode()[:2000],
+                    "stdout": stdout.decode(errors="replace")[:4000],
+                    "stderr": stderr.decode(errors="replace")[:2000],
                     "exit_code": proc.returncode,
                 }
             except asyncio.TimeoutError:
@@ -147,8 +216,11 @@ class DockerSandbox:
         tidak bisa keluar ke network, tidak bisa baca file di luar workspace yang dimount.
         """
         root = str(Path(workspace_root).resolve())
+        # Audit 2026-09-25 (#3): tutupi credential di workspace sebelum mount.
+        # Scan filesystem di thread agar tak memblokir event loop.
+        masks = await asyncio.to_thread(_sensitive_masks, root)
         # workspace read-only — tidak bisa dimodifikasi; flag keamanan dari satu sumber.
-        cmd = self._base_docker_args(f"{root}:/work:ro", "16m") + [
+        cmd = self._base_docker_args(f"{root}:/work:ro", "16m", masks) + [
             "timeout",
             str(SANDBOX_TIMEOUT_SEC),
             "sh",
@@ -161,9 +233,13 @@ class DockerSandbox:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=SANDBOX_TIMEOUT_SEC + 5
-            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=SANDBOX_TIMEOUT_SEC + 5
+                )
+            except asyncio.TimeoutError:
+                await _kill_quietly(proc)
+                raise
             return {
                 "stdout": stdout.decode(errors="replace")[:4000],
                 "stderr": stderr.decode(errors="replace")[:2000],
@@ -379,9 +455,13 @@ class DockerSandbox:
             run_proc = await asyncio.create_subprocess_exec(
                 *run_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await asyncio.wait_for(
-                run_proc.communicate(), timeout=SANDBOX_TIMEOUT_SEC + 5
-            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    run_proc.communicate(), timeout=SANDBOX_TIMEOUT_SEC + 5
+                )
+            except asyncio.TimeoutError:
+                await _kill_quietly(run_proc)
+                raise
             return {
                 "stdout": stdout.decode(errors="replace")[:4000],
                 "stderr": stderr.decode(errors="replace")[:2000],

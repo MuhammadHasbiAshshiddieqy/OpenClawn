@@ -38,7 +38,8 @@ async def test_post_turn_writes_l1_checkpoint(db):
 
     row = await db.fetchone("SELECT key, value FROM memory_l1 WHERE role='pm'")
     assert row is not None, "L1 checkpoint harus tertulis setelah turn"
-    assert row["key"] == "last_summary"
+    # Audit 2026-09-25 (#2): checkpoint kini per SESI, bukan satu per role.
+    assert row["key"] == "last_summary:s-mem"
     assert row["value"] == "ringkasan hasil"
 
 

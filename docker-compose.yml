@@ -14,6 +14,14 @@ services:
     environment:
       - OPENCLAWN_ROLE=pm
     restart: unless-stopped
+    # Audit 2026-09-25 — KETERBATASAN yang harus diketahui operator: image ini
+    # TIDAK berisi Docker CLI dan TIDAK me-mount /var/run/docker.sock, jadi tool
+    # sandbox (code_run, shell_run, git_*, build_sandbox_image) gagal aman
+    # ("Docker tidak tersedia") di deployment compose ini. Itu disengaja: me-mount
+    # docker.sock ke container aplikasi = memberi akses root host ke proses yang
+    # menjalankan agent. Butuh tool sandbox → jalankan OpenCLAWN langsung di host
+    # (uvicorn) dengan Docker terpasang, atau pakai runtime isolasi terpisah
+    # (docs/tools.md § sandbox).
     # §P0 production-readiness: dependency-aware startup/monitoring (bukan cuma
     # restart policy). Pakai stdlib urllib (bukan curl — python:3.12-slim tak
     # menyertakannya, hindari menambah paket demi healthcheck).

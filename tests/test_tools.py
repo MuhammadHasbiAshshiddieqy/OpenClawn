@@ -1299,3 +1299,45 @@ def test_security_soul_unchanged_read_only():
     assert "doc_write" not in allowed
     assert "pdf_write" not in allowed
     assert "file_write" not in allowed
+
+
+# ── Audit 2026-09-25: SSRF divalidasi ULANG di titik connect (anti DNS rebinding) ──
+
+
+def test_outbound_client_uses_public_only_backend(monkeypatch):
+    """Penjaga atribut privat httpx: bila upgrade httpx mengubah `_pool`, test ini
+    gagal alih-alih pinning diam-diam tak aktif."""
+    from tools.web import _PublicOnlyBackend, _outbound_client
+
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    client = _outbound_client()
+    assert isinstance(client._transport._pool._network_backend, _PublicOnlyBackend)
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_blocks_dns_rebinding_at_connect(monkeypatch):
+    """Guard awal melihat IP publik (di-bypass di sini), tapi DNS saat connect
+    menjawab 127.0.0.1 — SEBELUMNYA koneksi tetap jalan ke host internal."""
+    import asyncio
+
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    loop_cls = type(asyncio.get_running_loop())
+
+    async def fake_getaddrinfo(self, host, port, *args, **kwargs):
+        return [(2, 1, 6, "", ("127.0.0.1", port or 80))]
+
+    monkeypatch.setattr(loop_cls, "getaddrinfo", fake_getaddrinfo)
+    with patch("tools.web._ssrf_guard", return_value=None):
+        result = await WebFetchTool().execute({"url": "http://rebind.example/"}, vault=None)
+    assert "error" in result
+    assert "SSRF" in result["error"]
+
+
+def test_is_public_ip_handles_ipv4_mapped():
+    from tools.web import _is_public_ip
+
+    assert _is_public_ip("8.8.8.8") is True
+    assert _is_public_ip("::ffff:127.0.0.1") is False
+    assert _is_public_ip("169.254.169.254") is False

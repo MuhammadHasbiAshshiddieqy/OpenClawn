@@ -10,7 +10,12 @@ from infra.config import AppConfig, CONFIG
 from infra.database import DatabaseManager
 from infra.logging import log
 from infra.settings import SettingsStore
-from infra.workspace import CURRENT_WORKSPACE_ROOT, SessionWorkspaceStore
+from infra.workspace import (
+    CURRENT_WORKDIR_ROOTS,
+    CURRENT_WORKSPACE_ROOT,
+    SessionWorkspaceStore,
+    validate_workdir_candidate,
+)
 from infra.sandbox_image import CURRENT_SANDBOX_IMAGE, SessionSandboxImageStore
 from infra.sandbox_lifecycle import CURRENT_PERSISTENT_SANDBOX, SessionSandboxContainerStore
 from tools.sandbox import DockerSandbox
@@ -29,6 +34,7 @@ from memory.skill_feedback import SkillFeedback
 from memory.curator import SkillCuratorManager
 from memory.user_model import UserModel
 from tools import TOOL_REGISTRY
+from tools.web import uses_vault_credential
 from security.vault import Vault
 from security.approval import ApprovalGate
 from security.question import QuestionGate
@@ -54,6 +60,15 @@ class AgentConfig:
     # (perilaku lama, tak ada perubahan). Divalidasi ada & directory di web/main.py
     # SEBELUM sampai sini (fail-closed: path tak valid tak pernah masuk ContextVar).
     workspace_override: str | None = None
+    # Audit 2026-09-25 (#1): allowlist root folder kerja untuk turn ini. None →
+    # warisi ContextVar yang sudah aktif (subtask Task Graph) atau default config
+    # (`infra/workspace.py::default_workdir_roots`). web/main.py mengisi ini per
+    # request dari RBAC — tuple kosong = user ini tak boleh pindah folder.
+    workdir_roots: tuple[str, ...] | None = None
+    # Audit 2026-09-25 (#11): access_role user pemilik turn (admin/member/viewer)
+    # bila auth aktif; None = auth nonaktif / caller non-web. Dipakai tool yang
+    # perlu RBAC (db_query admin-only di mode multi-user).
+    access_role: str | None = None
     # Persist & muat ulang riwayat percakapan per-sesi dari DB (session_turns).
     # True (default) untuk single-agent chat: request web berikutnya (AgentLoop baru)
     # memuat kembali turn sebelumnya → agent ingat konteks (§ user report). False untuk
@@ -117,6 +132,21 @@ class Turn:
     cost_usd: float = 0.0
     latency_ms: int = 0
     fallback_used: bool = False
+    # Audit 2026-09-25 (#5): model yang BENAR-BENAR menghasilkan tiap hop (setelah
+    # fallback), bukan cuma pilihan router. Dipakai crystallizer agar evaluator
+    # dipilih terhadap generator sebenarnya.
+    models_used: list = field(default_factory=list)
+
+
+def generator_model_of(turn: "Turn") -> str:
+    """Generator yang dilaporkan ke crystallizer. Lebih dari satu model
+    berkontribusi (fallback di tengah turn) → label gabungan yang SENGAJA tak ada
+    di EVALUATOR_FOR, sehingga crystallizer menandainya unverified (draft) —
+    tak ada cara menjamin satu evaluator setara dengan SEMUA generator itu."""
+    distinct = list(dict.fromkeys(turn.models_used))
+    if len(distinct) > 1:
+        return "mixed:" + "+".join(distinct)
+    return distinct[0] if distinct else turn.model_used
 
 
 # Tool yang menulis/menimpa file di workspace — sukses dari salah satu ini memicu
@@ -136,6 +166,23 @@ _FILE_WRITE_TOOLS = frozenset(
 # membuat state WRITABLE yang bertahan lintas panggilan (bukan cuma network
 # sesaat saat build), jadi non-negotiable sama seperti dua tool di atas.
 _TRUST_MODE_EXEMPT = frozenset({"code_run", "build_sandbox_image", "sandbox_persist_enable"})
+
+# Audit 2026-09-25: referensi kuat ke task _post_turn yang sedang berjalan. Event
+# loop hanya memegang weak reference ke Task (dokumentasi asyncio.create_task) —
+# tanpa ini task post-turn (tulis memori, decay, crystallize) bisa di-GC di
+# tengah jalan setelah request web selesai.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _trust_mode_exempt(name: str, tool_input: dict) -> bool:
+    """True bila panggilan ini TAK boleh dilewati trust mode.
+
+    Selain `_TRUST_MODE_EXEMPT`, audit 2026-09-25 (#3): http_request yang
+    menyuntik credential `vault:KEY` ke header — tanpa ini trust mode membuat
+    prompt injection bisa mengirim credential ke host mana pun tanpa satu klik."""
+    if name in _TRUST_MODE_EXEMPT:
+        return True
+    return name == "http_request" and uses_vault_credential(tool_input)
 
 
 def _format_tool_params(tool_name: str, params: dict) -> str:
@@ -235,7 +282,9 @@ class AgentLoop:
         self.db = db
         self.vault = Vault()
         self.llm = LLMClient(self.vault, config)
-        self.memory = MemoryManager(agent_cfg.role, agent_cfg.session_id, db)
+        self.memory = MemoryManager(
+            agent_cfg.role, agent_cfg.session_id, db, user_id=agent_cfg.user_id
+        )
         self.decay = SkillDecayManager(agent_cfg.role, db, config)
         self.router = SmartRouter(role=agent_cfg.role)
         self.auditor = RoutingAuditor(db)
@@ -362,9 +411,27 @@ class AgentLoop:
         # lewat tool set_workdir di turn sebelumnya (§ user request "pindah
         # direktori dinamis lewat chat", persist di session_workspace — AgentLoop
         # baru tiap request, jadi harus dimuat balik dari DB); (3) default global.
+        roots_token = None
+        if self.cfg.workdir_roots is not None:
+            roots_token = CURRENT_WORKDIR_ROOTS.set(tuple(self.cfg.workdir_roots))
+
         effective_override = self.cfg.workspace_override
         if not effective_override and self.cfg.persist_history:
             effective_override = await SessionWorkspaceStore(self.db).get(self.cfg.session_id)
+        # Audit 2026-09-25 (#1): validasi ULANG terhadap allowlist turn ini — nilai
+        # tersimpan di session_workspace bisa berasal dari sebelum perbaikan (mis.
+        # "/") atau dari user dengan hak berbeda. Tak lolos → abaikan (workspace
+        # default), bukan dipakai diam-diam.
+        if effective_override:
+            validated, err = validate_workdir_candidate(effective_override)
+            if err:
+                log.warning(
+                    "workdir_override_rejected",
+                    session=self.cfg.session_id,
+                    workdir=effective_override,
+                    reason=err,
+                )
+            effective_override = validated
 
         ws_token = None
         if effective_override:
@@ -444,6 +511,8 @@ class AgentLoop:
                 CURRENT_SANDBOX_IMAGE.reset(img_token)
             if persist_token is not None:
                 CURRENT_PERSISTENT_SANDBOX.reset(persist_token)
+            if roots_token is not None:
+                CURRENT_WORKDIR_ROOTS.reset(roots_token)
 
     async def _run(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         start = time.monotonic()
@@ -472,9 +541,14 @@ class AgentLoop:
         # 1b. Compounding (I2/I3): resolusi outcome skill turn SEBELUMNYA berdasarkan
         # apakah turn ini mengoreksinya. Sukses → revive/promote; dikoreksi → reset/refine.
         # Dijalankan di awal turn (sinyal koreksi baru diketahui sekarang).
-        await self.skill_feedback.resolve_previous(
-            self.cfg.session_id, corrected, correction_trace=user_message if corrected else ""
-        )
+        # Audit 2026-09-25 (#6): pembelajaran skill bersifat opsional — gagal di
+        # sini (DB/LLM) tak boleh menggagalkan jawaban untuk user.
+        try:
+            await self.skill_feedback.resolve_previous(
+                self.cfg.session_id, corrected, correction_trace=user_message if corrected else ""
+            )
+        except Exception as e:  # noqa: BLE001 — lihat komentar di atas
+            log.warning("skill_feedback_resolve_failed", session=self.cfg.session_id, error=str(e))
 
         # 2. Load skill aktif (belum decayed) [#2]
         active_skills = await self.decay.get_active_skills(query=user_message)
@@ -628,6 +702,8 @@ class AgentLoop:
         task = asyncio.create_task(
             self._post_turn(user_message, turn, active_skills, history_snapshot)
         )
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
         task.add_done_callback(self._post_turn_done)
 
     def _post_turn_done(self, task: asyncio.Task) -> None:
@@ -668,7 +744,14 @@ class AgentLoop:
         )
 
         while hop <= self.config.max_tool_hops:
-            pending_tool = None
+            # Audit 2026-09-25: SEMUA tool call dalam satu hop dieksekusi (dulu
+            # hanya yang TERAKHIR — panggilan paralel dari Claude/Gemini dibuang
+            # diam-diam, dan Anthropic menolak giliran berikut karena tool_use
+            # tanpa pasangan tool_result).
+            pending_tools: list = []
+            hop_model = route.model
+            hop_text = ""
+            hop_usage: dict = {}
             # Status: LLM mulai memproses (mengisi gap antara request dan token pertama).
             yield AgentEvent(type="status", text="thinking")
             async for chunk in self.llm.stream_with_fallback(
@@ -676,65 +759,46 @@ class AgentLoop:
             ):
                 if chunk.type == "text":
                     turn.content += chunk.text
+                    hop_text += chunk.text
                     yield AgentEvent(type="token", text=chunk.text)
                 elif chunk.type == "thinking":
                     # Reasoning model → blok terpisah di UI. JANGAN masuk turn.content
                     # (itu jawaban final yang di-crystallize/diarsipkan, bukan nalar).
                     yield AgentEvent(type="thinking", text=chunk.text)
                 elif chunk.type == "tool_call":
-                    pending_tool = chunk
+                    pending_tools.append(chunk)
                 elif chunk.type == "usage":
-                    turn.tokens_in = chunk.usage.get("input_tokens", 0)
-                    turn.tokens_out = chunk.usage.get("output_tokens", 0)
+                    # Dalam satu hop: nilai TERAKHIR (Gemini mengirim usage kumulatif
+                    # di tiap chunk). Antar hop: DIJUMLAH (audit 2026-09-25) — tiap
+                    # hop panggilan LLM terpisah yang ditagih penuh; sebelumnya hop
+                    # terakhir menimpa hop sebelumnya, biaya turn bertool terlalu rendah.
+                    hop_usage = chunk.usage
                 elif chunk.type == "fallback" and chunk.fallback_used:
                     turn.fallback_used = True
-                    yield AgentEvent(type="status", text="fallback", detail=route.model)
+                    hop_model = chunk.fallback_model or hop_model
+                    yield AgentEvent(type="status", text="fallback", detail=hop_model)
+            turn.tokens_in += hop_usage.get("input_tokens", 0) or 0
+            turn.tokens_out += hop_usage.get("output_tokens", 0) or 0
+            turn.model_used = hop_model
+            turn.models_used.append(hop_model)
 
-            if not pending_tool:
+            if not pending_tools:
                 break  # tidak ada tool call → selesai
 
-            # Deteksi panggilan identik berturut-turut (tool + input sama persis).
-            # Gemma lokal mengabaikan pesan peringatan di context, jadi hard-break
-            # langsung tanpa memberi kesempatan model lagi.
-            call_key = (pending_tool.tool_name, repr(sorted(pending_tool.tool_input.items())))
-            if call_key == last_call:
-                repeat_count += 1
-                if repeat_count >= 2:
-                    log.warning(
-                        "tool_loop_detected",
-                        tool=pending_tool.tool_name,
-                        repeat=repeat_count + 1,
-                        session=self.cfg.session_id,
-                    )
-                    yield AgentEvent(
-                        type="status",
-                        text="loop_stopped",
-                        detail=pending_tool.tool_name,
-                    )
-                    break  # hard stop — model mengabaikan pesan peringatan
-            else:
-                repeat_count = 0
-            last_call = call_key
-
-            # Deteksi loop kedua (path sama, konten boleh beda) — hanya untuk tool
-            # penulis file, karena menulis file BERBEDA berulang (mis. banyak file
-            # dalam satu turn) adalah pola normal & tak boleh kena ini.
-            if pending_tool.tool_name in _FILE_WRITE_TOOLS:
-                write_target = (
-                    pending_tool.tool_name,
-                    str(pending_tool.tool_input.get("path", "")),
-                )
-                if write_target == last_write_target and write_target[1]:
-                    write_repeat_count += 1
-                    # Menulis path yang SAMA dua kali berturut-turut sudah cukup
-                    # mencurigakan (menulis ulang file identik bukan alur kerja normal).
-                    # Sebelumnya ≥3 — terlalu longgar, "hello world" pun ditulis 4×.
-                    if write_repeat_count >= 1:
+            executed: list[tuple] = []  # (chunk, call_id, result)
+            stop = False
+            for pending_tool in pending_tools:
+                # Deteksi panggilan identik berturut-turut (tool + input sama persis).
+                # Gemma lokal mengabaikan pesan peringatan di context, jadi hard-break
+                # langsung tanpa memberi kesempatan model lagi.
+                call_key = (pending_tool.tool_name, repr(sorted(pending_tool.tool_input.items())))
+                if call_key == last_call:
+                    repeat_count += 1
+                    if repeat_count >= 2:
                         log.warning(
-                            "tool_loop_detected_same_path",
+                            "tool_loop_detected",
                             tool=pending_tool.tool_name,
-                            path=write_target[1],
-                            repeat=write_repeat_count + 1,
+                            repeat=repeat_count + 1,
                             session=self.cfg.session_id,
                         )
                         yield AgentEvent(
@@ -742,115 +806,176 @@ class AgentLoop:
                             text="loop_stopped",
                             detail=pending_tool.tool_name,
                         )
-                        break  # hard stop — menulis path yang sama berulang kali
+                        stop = True
+                        break  # hard stop — model mengabaikan pesan peringatan
                 else:
-                    write_repeat_count = 0
-                last_write_target = write_target
+                    repeat_count = 0
+                last_call = call_key
 
-            # Policy Engine (TODO.md § Prioritas 3): dievaluasi DI SINI (bukan hanya
-            # di _execute_tool) agar status UI & keputusan trust-mode-bypass di bawah
-            # konsisten dengan apa yang benar-benar terjadi saat eksekusi — tanpa ini,
-            # tool yang defaultnya requires_approval=False (mis. shell_run) tapi
-            # dipaksa approval oleh policy akan salah tampil sebagai chip "tool" biasa.
-            tool_obj = TOOL_REGISTRY.get(pending_tool.tool_name)
-            policy_decision = self.policy_engine.evaluate(
-                pending_tool.tool_name, pending_tool.tool_input
-            )
-            policy_forces_approval = policy_decision.action == "require_approval"
-            requires_approval_effective = bool(tool_obj and tool_obj.requires_approval) or (
-                policy_forces_approval
-            )
+                # Deteksi loop kedua (path sama, konten boleh beda) — hanya untuk tool
+                # penulis file, karena menulis file BERBEDA berulang (mis. banyak file
+                # dalam satu turn) adalah pola normal & tak boleh kena ini.
+                if pending_tool.tool_name in _FILE_WRITE_TOOLS:
+                    write_target = (
+                        pending_tool.tool_name,
+                        str(pending_tool.tool_input.get("path", "")),
+                    )
+                    if write_target == last_write_target and write_target[1]:
+                        write_repeat_count += 1
+                        # Menulis path yang SAMA dua kali berturut-turut sudah cukup
+                        # mencurigakan (menulis ulang file identik bukan alur kerja normal).
+                        # Sebelumnya ≥3 — terlalu longgar, "hello world" pun ditulis 4×.
+                        if write_repeat_count >= 1:
+                            log.warning(
+                                "tool_loop_detected_same_path",
+                                tool=pending_tool.tool_name,
+                                path=write_target[1],
+                                repeat=write_repeat_count + 1,
+                                session=self.cfg.session_id,
+                            )
+                            yield AgentEvent(
+                                type="status",
+                                text="loop_stopped",
+                                detail=pending_tool.tool_name,
+                            )
+                            stop = True
+                            break  # hard stop — menulis path yang sama berulang kali
+                    else:
+                        write_repeat_count = 0
+                    last_write_target = write_target
 
-            # Trust mode (§ user request otonomi): sesi ini melewati approval manual
-            # untuk tool yang mengizinkannya — TAPI tidak untuk _TRUST_MODE_EXEMPT
-            # (code_run, CLAUDE.md §1 non-negotiable) DAN TIDAK untuk approval yang
-            # DIPAKSA Policy Engine (§ keputusan desain: policy adalah lapisan
-            # keamanan yang lebih kuat daripada preferensi otonomi sesi — kalau
-            # trust mode bisa melewatinya, policy jadi tidak berarti apa-apa saat
-            # trust mode aktif). Dihitung di sini (bukan di _execute_tool saja) agar
-            # UI menampilkan chip "tool" biasa, bukan kartu approval yang menunggu
-            # klik yang tak akan pernah terjadi.
-            bypass_approval = (
-                self.cfg.trust_mode
-                and not self.cfg.autopilot
-                and pending_tool.tool_name not in _TRUST_MODE_EXEMPT
-                and not policy_forces_approval
-            )
-
-            # ask_user menunggu input manusia → beri tahu UI agar memunculkan kotak
-            # jawaban (detail = teks pertanyaan), bukan sekadar chip "tool".
-            approval_id = None
-            if pending_tool.tool_name == "ask_user":
-                question = str(pending_tool.tool_input.get("question", "")).strip()
-                yield AgentEvent(type="status", text="question", detail=question)
-            elif requires_approval_effective and bypass_approval:
-                # Trust mode aktif: tool tetap dieksekusi (lewat auto_approve di
-                # _execute_tool), tapi UI cukup lihat chip tool biasa + tanda "trust".
-                param_preview = _format_tool_params(pending_tool.tool_name, pending_tool.tool_input)
-                yield AgentEvent(type="status", text="tool_trusted", detail=param_preview)
-            elif requires_approval_effective and not self.cfg.autopilot:
-                # Tool butuh approval manusia (statis ATAU dipaksa policy) → pre-generate
-                # ID SEBELUM memanggil _execute_tool (yang akan blocking menunggu Future)
-                # agar UI dapat ID-nya lebih dulu dan bisa memasang tombol Approve/Reject
-                # sementara request masih menunggu (dulu: UI tak tahu apa-apa sampai timeout).
-                approval_id = uuid.uuid4().hex
-                param_preview = _format_tool_params(pending_tool.tool_name, pending_tool.tool_input)
-                yield AgentEvent(
-                    type="status", text="approval", detail=param_preview, approval_id=approval_id
+                # Policy Engine (TODO.md § Prioritas 3): dievaluasi DI SINI (bukan hanya
+                # di _execute_tool) agar status UI & keputusan trust-mode-bypass di bawah
+                # konsisten dengan apa yang benar-benar terjadi saat eksekusi — tanpa ini,
+                # tool yang defaultnya requires_approval=False (mis. shell_run) tapi
+                # dipaksa approval oleh policy akan salah tampil sebagai chip "tool" biasa.
+                tool_obj = TOOL_REGISTRY.get(pending_tool.tool_name)
+                policy_decision = self.policy_engine.evaluate(
+                    pending_tool.tool_name, pending_tool.tool_input
                 )
-            else:
-                # Status: tool akan dijalankan — tampilkan nama tool + parameter utamanya
-                # agar user bisa lihat path/command apa yang sedang dijelajahi.
-                param_preview = _format_tool_params(pending_tool.tool_name, pending_tool.tool_input)
-                yield AgentEvent(type="status", text="tool", detail=param_preview)
-            result = await self._execute_tool(
-                pending_tool.tool_name,
-                pending_tool.tool_input,
-                approval_id=approval_id,
-                bypass_approval=bypass_approval,
-            )
-            turn.tool_calls.append(
-                {"name": pending_tool.tool_name, "input": pending_tool.tool_input}
-            )
-            # Tool yang menulis file & berhasil → beri UI cara mengunduhnya (§ user
-            # request: "file harusnya bisa di-download"). Hanya `ok=True` dengan
-            # `path` yang dilaporkan tool itu sendiri (bukan input mentah model —
-            # path bisa saja di-resolve/berubah oleh workspace guard).
-            if (
-                pending_tool.tool_name in _FILE_WRITE_TOOLS
-                and isinstance(result, dict)
-                and result.get("ok")
-                and result.get("path")
-            ):
-                yield AgentEvent(type="file_created", text=str(result["path"]))
+                policy_forces_approval = policy_decision.action == "require_approval"
+                requires_approval_effective = bool(tool_obj and tool_obj.requires_approval) or (
+                    policy_forces_approval
+                )
+
+                # Trust mode (§ user request otonomi): sesi ini melewati approval manual
+                # untuk tool yang mengizinkannya — TAPI tidak untuk _TRUST_MODE_EXEMPT
+                # (code_run, CLAUDE.md §1 non-negotiable) DAN TIDAK untuk approval yang
+                # DIPAKSA Policy Engine (§ keputusan desain: policy adalah lapisan
+                # keamanan yang lebih kuat daripada preferensi otonomi sesi — kalau
+                # trust mode bisa melewatinya, policy jadi tidak berarti apa-apa saat
+                # trust mode aktif). Dihitung di sini (bukan di _execute_tool saja) agar
+                # UI menampilkan chip "tool" biasa, bukan kartu approval yang menunggu
+                # klik yang tak akan pernah terjadi.
+                bypass_approval = (
+                    self.cfg.trust_mode
+                    and not self.cfg.autopilot
+                    and not _trust_mode_exempt(pending_tool.tool_name, pending_tool.tool_input)
+                    and not policy_forces_approval
+                )
+
+                # ask_user menunggu input manusia → beri tahu UI agar memunculkan kotak
+                # jawaban (detail = teks pertanyaan), bukan sekadar chip "tool".
+                approval_id = None
+                if pending_tool.tool_name == "ask_user":
+                    question = str(pending_tool.tool_input.get("question", "")).strip()
+                    yield AgentEvent(type="status", text="question", detail=question)
+                elif requires_approval_effective and bypass_approval:
+                    # Trust mode aktif: tool tetap dieksekusi (lewat auto_approve di
+                    # _execute_tool), tapi UI cukup lihat chip tool biasa + tanda "trust".
+                    param_preview = _format_tool_params(
+                        pending_tool.tool_name, pending_tool.tool_input
+                    )
+                    yield AgentEvent(type="status", text="tool_trusted", detail=param_preview)
+                elif requires_approval_effective and not self.cfg.autopilot:
+                    # Tool butuh approval manusia (statis ATAU dipaksa policy) → pre-generate
+                    # ID SEBELUM memanggil _execute_tool (yang akan blocking menunggu Future)
+                    # agar UI dapat ID-nya lebih dulu dan bisa memasang tombol Approve/Reject
+                    # sementara request masih menunggu (dulu: UI tak tahu apa-apa sampai timeout).
+                    approval_id = uuid.uuid4().hex
+                    param_preview = _format_tool_params(
+                        pending_tool.tool_name, pending_tool.tool_input
+                    )
+                    yield AgentEvent(
+                        type="status",
+                        text="approval",
+                        detail=param_preview,
+                        approval_id=approval_id,
+                    )
+                else:
+                    # Status: tool akan dijalankan — tampilkan nama tool + parameter utamanya
+                    # agar user bisa lihat path/command apa yang sedang dijelajahi.
+                    param_preview = _format_tool_params(
+                        pending_tool.tool_name, pending_tool.tool_input
+                    )
+                    yield AgentEvent(type="status", text="tool", detail=param_preview)
+                result = await self._execute_tool(
+                    pending_tool.tool_name,
+                    pending_tool.tool_input,
+                    approval_id=approval_id,
+                    bypass_approval=bypass_approval,
+                )
+                turn.tool_calls.append(
+                    {"name": pending_tool.tool_name, "input": pending_tool.tool_input}
+                )
+                # Tool yang menulis file & berhasil → beri UI cara mengunduhnya (§ user
+                # request: "file harusnya bisa di-download"). Hanya `ok=True` dengan
+                # `path` yang dilaporkan tool itu sendiri (bukan input mentah model —
+                # path bisa saja di-resolve/berubah oleh workspace guard).
+                if (
+                    pending_tool.tool_name in _FILE_WRITE_TOOLS
+                    and isinstance(result, dict)
+                    and result.get("ok")
+                    and result.get("path")
+                ):
+                    yield AgentEvent(type="file_created", text=str(result["path"]))
+                executed.append(
+                    (pending_tool, pending_tool.tool_id or f"call_{uuid.uuid4().hex[:12]}", result)
+                )
+
             # Tulis KEMBALI giliran tool ke messages: (1) assistant yang MEMANGGIL tool,
             # (2) hasil tool. Sebelumnya HANYA hasil yang di-append — model (terutama
             # Gemma/DeepSeek lokal) tak melihat rekaman bahwa IA sendiri sudah memanggil
             # tool, jadi ia memanggil ULANG tool yang sama (§ user report: "terus menerus
-            # write file"). Dengan giliran assistant+tool_call di history, model tahu
-            # aksi sudah dilakukan & hasilnya, lalu lanjut ke jawaban akhir. Format
-            # tool_calls Ollama/OpenAI-compatible; provider lain mengabaikan field asing.
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "function": {
-                                "name": pending_tool.tool_name,
-                                "arguments": pending_tool.tool_input,
+            # write file"). Format internal bergaya OpenAI/Ollama; core/llm_client.py
+            # menerjemahkannya per provider (tool_use/tool_result Anthropic,
+            # functionCall/functionResponse Gemini). `id` memasangkan hasil ke
+            # panggilannya; teks hop ini (tanpa markup tool call plain-text) ikut
+            # disimpan agar penjelasan model sebelum memanggil tool tak hilang.
+            if executed:
+                hop_content, _ = LLMClient.parse_plaintext_tool_calls(hop_text)
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": hop_content,
+                        "tool_calls": [
+                            {
+                                "id": call_id,
+                                "function": {
+                                    "name": call.tool_name,
+                                    "arguments": call.tool_input,
+                                },
+                                **(
+                                    {"thought_signature": call.tool_signature}
+                                    if call.tool_signature
+                                    else {}
+                                ),
                             }
+                            for call, call_id, _ in executed
+                        ],
+                    }
+                )
+                for call, call_id, result in executed:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "name": call.tool_name,
+                            "content": _format_tool_result(call.tool_name, result),
                         }
-                    ],
-                }
-            )
-            messages.append(
-                {
-                    "role": "tool",
-                    "name": pending_tool.tool_name,
-                    "content": _format_tool_result(pending_tool.tool_name, result),
-                }
-            )
+                    )
+            if stop:
+                break
             hop += 1
 
     async def _execute_tool(
@@ -918,6 +1043,11 @@ class AgentLoop:
         # jadi tak ikut disuntik agar tak menambah field yang tak dipakai siapa pun.
         if name == "task_graph_submit":
             input_data = {**input_data, "_user_id": self.cfg.user_id}
+        # Audit 2026-09-25 (#11): db_query butuh access_role user sesi (admin-only
+        # saat auth aktif). Disuntik sistem — model tak bisa mengarangnya karena
+        # nilai dari model ditimpa di sini.
+        if name == "db_query":
+            input_data = {**input_data, "_access_role": self.cfg.access_role}
 
         if tool.requires_approval or policy_forces_approval:
             # Autopilot (§1, §17): tidak ada manusia untuk approve → JANGAN eksekusi.
@@ -951,7 +1081,11 @@ class AgentLoop:
             # bypass_approval=True untuk tool yang di-force approval oleh policy,
             # jalur ini tetap menolak bypass — policy tak boleh bergantung SEMATA
             # pada caller menghitung dengan benar.
-            if bypass_approval and name not in _TRUST_MODE_EXEMPT and not policy_forces_approval:
+            if (
+                bypass_approval
+                and not _trust_mode_exempt(name, input_data)
+                and not policy_forces_approval
+            ):
                 approved = await self.approval.auto_approve(
                     self.cfg.session_id,
                     name,
@@ -1079,7 +1213,7 @@ class AgentLoop:
                 task=user_message,
                 solution=turn.content,
                 history=history_snapshot,
-                generator_model=turn.model_used,
+                generator_model=generator_model_of(turn),
             )
 
     async def _generate_session_title(self, user_message: str) -> None:

@@ -5,7 +5,10 @@ json_query murni stdlib.
 """
 
 import json
+import re
 
+import infra.config as _config_mod
+from memory.layers import L1_VISIBLE_SQL, checkpoint_key
 from tools.base import Tool
 
 MAX_ROWS = 100
@@ -23,6 +26,13 @@ _FORBIDDEN = (
     "pragma",
     "vacuum",
 )
+# Audit 2026-09-25 (#11): tabel identitas/credential — tak pernah boleh dibaca
+# db_query, bahkan oleh admin (mcp_servers.env terenkripsi tetap credential;
+# users berisi email/subject semua akun).
+_DENIED_TABLES = ("users", "mcp_servers")
+# Kutip/bracket identifier SQL dibuang sebelum pencocokan nama tabel agar
+# `"users"`, `[users]`, `` `users` `` tak lolos.
+_IDENT_QUOTES = re.compile(r"[\"`\[\]]")
 # Tabel yang boleh dibaca memory_search (introspeksi memori/skill, bukan kredensial).
 _MEM_TABLES = {"memory_l1", "memory_l2", "skills"}
 
@@ -40,6 +50,14 @@ class DbQueryTool(Tool):
         if not sql:
             return {"error": "sql wajib diisi"}
 
+        # Audit 2026-09-25 (#11): di mode multi-user (auth aktif) db_query membaca
+        # SELURUH DB lintas user/tenant (session_turns, approval_log, ...) dan
+        # approval-nya diputuskan oleh user yang meminta SENDIRI — bukan
+        # penghalang. Hanya admin (operator) yang boleh. `_access_role` disuntik
+        # AgentLoop dari sesi login, bukan dari argumen model.
+        if _config_mod.CONFIG.auth_active and input_data.get("_access_role") != "admin":
+            return {"error": "db_query hanya untuk admin di deployment multi-user"}
+
         lowered = sql.lower()
         # Hanya izinkan SELECT atau CTE (WITH ... SELECT). Read-only mutlak.
         if not (lowered.startswith("select") or lowered.startswith("with")):
@@ -51,6 +69,11 @@ class DbQueryTool(Tool):
             # cocokkan sebagai kata utuh agar 'created_at' tidak salah tolak.
             if f" {kw} " in f" {lowered} " or lowered.startswith(f"{kw} "):
                 return {"error": f"Operasi '{kw}' tidak diizinkan — db_query read-only"}
+
+        normalized = _IDENT_QUOTES.sub(" ", lowered)
+        for table in _DENIED_TABLES:
+            if re.search(rf"\b{table}\b", normalized):
+                return {"error": f"Tabel '{table}' tidak boleh dibaca db_query"}
 
         try:
             rows = await db.fetchall(sql)
@@ -115,6 +138,14 @@ class MemorySearchTool(Tool):
                     f"SELECT * FROM {table} WHERE {col} LIKE ? "  # noqa: S608 — table dari allowlist
                     "AND (role=? OR visibility IN ('shared','inherited')) LIMIT ?",
                     (like, role, MAX_ROWS),
+                )
+            elif table == "memory_l1":
+                # Audit 2026-09-25 (#2): checkpoint L1 kini per sesi — sesi lain
+                # (bisa milik user lain) tak boleh terbaca lewat pencarian ini.
+                rows = await db.fetchall(
+                    f"SELECT * FROM memory_l1 WHERE value LIKE ? AND role=? "
+                    f"AND {L1_VISIBLE_SQL} LIMIT ?",
+                    (like, role, checkpoint_key(input_data.get("_session_id") or ""), MAX_ROWS),
                 )
             else:
                 rows = await db.fetchall(
