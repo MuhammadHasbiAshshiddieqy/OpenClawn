@@ -18,7 +18,7 @@ approval_gate = ApprovalGate(db, CONFIG)  # singleton level app
 ### Lifespan (`lifespan`)
 
 Dipanggil oleh FastAPI saat startup dan shutdown:
-- **Startup:** setup logging, jalankan migration SQL (`migrations/001_initial.sql`), **startup health check** (§P0 production-readiness) — cek Ollama reachability + API key cloud yang terkonfigurasi, di-LOG (`startup_health`) TIDAK memblokir boot (§8: "Ollama offline ≠ agent mati"); warning terpisah bila tak ada provider LLM sama sekali terjangkau, bila TIDAK ADA mode auth aktif (`CONFIG.auth_active` False — baik shared-secret maupun OIDC, TODO.md § Prioritas 5), atau bila OIDC aktif tanpa `OPENCLAWN_AUTH_TOKEN`/`OPENCLAWN_SESSION_SECRET` eksplisit (sesi akan hilang tiap restart)
+- **Startup:** setup logging, jalankan migration SQL (`migrations/001_initial.sql`), **startup health check** (§P0 production-readiness) — cek Ollama reachability + API key cloud yang terkonfigurasi, di-LOG (`startup_health`) TIDAK memblokir boot (§8: "Ollama offline ≠ agent mati"); warning terpisah bila tak ada provider LLM sama sekali terjangkau, bila TIDAK ADA mode auth aktif (`CONFIG.auth_active` False — baik shared-secret maupun OIDC, TODO.md § Prioritas 5), atau bila OIDC aktif tanpa `OPENCLAWN_AUTH_TOKEN`/`OPENCLAWN_SESSION_SECRET` eksplisit (sesi akan hilang tiap restart), atau bila OIDC aktif tanpa allowlist email/domain (`startup_oidc_no_allowlist`, audit 2026-09-25 #12)
 - **Shutdown:** tutup koneksi DB
 
 ### Middleware (`auth_and_csrf_middleware`)
@@ -42,6 +42,17 @@ ditandatangani `CONFIG.session_secret` (BUKAN `auth_token` langsung, lihat
    request, lihat poin 1), membuat rate limit sama sekali tak efektif untuk user
    terautentikasi & `RateLimiter._hits` bocor tanpa batas. Detail lengkap:
    `docs/security.md` § `security/rate_limit.py`.
+
+### RBAC, kepemilikan & folder kerja (audit 2026-09-25)
+
+Berlaku hanya bila `CONFIG.auth_active` (auth nonaktif = single-user, perilaku lama).
+
+- **Viewer benar-benar read-only (#11).** `_require_role(request, "member")` di awal `POST /chat/stream`, `/converse/stream`, `/converse/interject`, `/converse/stop`, `/approve`, `/answer`, `/feedback/{id}`, `/blockers/resolve`, dan `DELETE /chat-sessions/{id}` — sebelumnya role `viewer` tak ditegakkan di endpoint mana pun.
+- **Kepemilikan `session_id`.** `/chat/stream` menolak (403) `session_id` milik user lain (`ChatSessionStore.get_owner` + `_can_access_owned_resource`) — sebelumnya tahu UUID sesi orang lain cukup untuk memuat riwayatnya ke context agent. `/converse/stream` menolak mengambil alih percakapan AKTIF milik user lain di `_conversation_owners`.
+- **Folder kerja (#1, kritis).** `_workdir_roots_for(request)` → allowlist root: auth nonaktif = `default_workdir_roots()`; auth aktif = `CONFIG.workdir_allowed_roots` untuk **admin** saja, tuple kosong untuk member/viewer. Dipakai `/chat/stream`, `/converse/stream` (juga diteruskan ke `AgentConfig.workdir_roots`), `GET /workdir/check`, dan `GET /workspace/download` (folder tersimpan di `session_workspace` divalidasi ulang; tak lolos → root default).
+- **`_access_role_of(request)`** → `AgentConfig.access_role` (dipakai `db_query` admin-only).
+- **OIDC allowlist (#12).** `GET /auth/callback` memanggil `security/oidc.py::is_login_allowed` setelah verifikasi token — di luar allowlist → `/login?error=true`, user tak dibuat.
+- **Redirect pasca-login.** `_safe_next(url)` dipakai `GET /login` (nilai hidden field), `POST /login`, `GET /login/oidc`, `/auth/callback`: hanya path relatif; `//…`, backslash (`/\evil.com` — dinormalisasi browser jadi `//evil.com`), dan karakter kontrol → `/`.
 
 ### Exception handlers
 

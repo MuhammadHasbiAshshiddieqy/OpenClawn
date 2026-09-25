@@ -22,18 +22,23 @@ Kata teknis yang memicu FTS5 search walaupun query pendek:
 
 ### Kelas: `MemoryManager`
 
-**`__init__(role, session_id, db)`**  
-Buat instance terikat pada satu role dan satu sesi.
+**`__init__(role, session_id, db, user_id="default")`**  
+Buat instance terikat pada satu role, satu sesi, dan satu user (`AgentConfig.user_id`; `"default"` = auth nonaktif).
+
+**Isolasi (audit 2026-09-25 #2, kritis):** sebelumnya L1 `last_summary` satu baris per ROLE dan L4 dicari lintas semua sesi role itu — jawaban terakhir user A disuntik ke prompt user B. Sekarang:
+- L1 checkpoint per sesi (key `last_summary:<session_id>`, fungsi `checkpoint_key()`); baca lewat `L1_VISIBLE_SQL` = key non-checkpoint (fakta role bersama) + checkpoint sesi ini saja. Baris `last_summary` global lama diabaikan (tak dihapus).
+- L4 difilter `l4_owner_filter(user_id)`: user login → hanya sesi yang `chat_sessions.owner_user_id`-nya dia; `"default"` → semua sesi KECUALI yang dimiliki user login.
+- L2 tetap per role (tak ada penulis di produksi saat ini).
 
 **`load_context(query, skills) → dict`** *(async)*  
 Load semua layer dan kembalikan sebagai dict:
 
 ```python
 {
-    "l1": {"last_summary": "..."},          # key-value dari memory_l1
+    "l1": {"last_summary": "..."},          # key-value memory_l1 (checkpoint sesi INI saja)
     "l2": ["fakta 1", "fakta 2", ...],      # list fakta dari memory_l2
     "l3": skills,                            # di-pass langsung (dari SkillDecayManager)
-    "l4": ["ringkasan sesi lama", ...],     # dari FTS5 memory_l4 (conditional)
+    "l4": ["ringkasan sesi lama", ...],     # FTS5 memory_l4, sesi milik user ini saja (conditional)
 }
 ```
 
@@ -46,7 +51,7 @@ Muat transkrip giliran (`user`/`assistant`) untuk **sesi ini** dari `session_tur
 Simpan satu giliran ke `session_turns` (persist multi-turn). Konten kosong dilewati. Dipanggil `AgentLoop._run()` di finalize (setelah guardrail OUTPUT → transkrip = versi teredaksi) untuk `user` lalu `assistant`. Hanya untuk single-agent (`AgentConfig.persist_history=True`); multi-agent mengelola transkrip sendiri di `turn_input`.
 
 **`update_checkpoint(summary: str) → None`** *(async)*  
-Tulis/update L1 key `"last_summary"` dengan konten terbaru (maks 500 karakter). Operasi UPSERT — tidak duplikasi. Catatan: role-scoped (bukan per-sesi) & hanya ringkasan jawaban terakhir; riwayat percakapan sebenarnya kini di `session_turns` (lihat `load_turns`).
+Tulis/update L1 key `"last_summary:<session_id>"` dengan konten terbaru (maks 500 karakter). Operasi UPSERT — tidak duplikasi. Per SESI sejak audit 2026-09-25 (sebelumnya per role → bocor antar user); `load_context` menampilkannya kembali dengan nama `last_summary`.
 
 Dipanggil tiap turn dari `agent_loop._post_turn()` jika turn punya konten.
 
@@ -68,18 +73,20 @@ Skill yang jarang dipakai memudar secara eksponensial dan akhirnya diarsipkan.
 ### Formula Decay
 
 ```
-new_score = current_score × (0.97 ^ hari_sejak_dipakai)
+new_score = current_score × (0.97 ^ hari_sejak_MAX(terakhir_dipakai, pass_sebelumnya))
 ```
+
+Kumulatif setara `0.97 ^ hari_sejak_dipakai` (spec). **Audit 2026-09-25 (#4):** sebelumnya eksponen selalu dihitung dari `last_used_at` di SETIAP pass → decay berlipat (skill 2 hari tak dipakai terarsip setelah ~20 turn, bukan ~40 hari).
 
 Skill dengan `decay_score < 0.3` → diarsipkan (`status='archived'`). Skill yang dipakai lagi → revive otomatis.
 
 ### Kelas: `SkillDecayManager`
 
 **`__init__(role, db, config, tenant_id="default")`**  
-Cache `_last_decay_ts` untuk throttle. Multi-Tenant (TODO.md § Prioritas 5, WIRED PENUH): `tenant_id` opsional, default `'default'` untuk kompatibilitas mundur — semua method di kelas ini men-scope query ke tenant ini, skill milik tenant lain tak pernah terlihat/tersentuh.
+Timestamp pass terakhir disimpan di `app_settings` key `decay_last_pass:<tenant>:<role>` (julian day) — BUKAN atribut instance: `AgentLoop` dibuat baru tiap request, sehingga throttle per-instance lama tak pernah menahan apa pun (audit 2026-09-25 #4). Multi-Tenant (TODO.md § Prioritas 5, WIRED PENUH): `tenant_id` opsional, default `'default'` untuk kompatibilitas mundur — semua method di kelas ini men-scope query ke tenant ini, skill milik tenant lain tak pernah terlihat/tersentuh.
 
 **`get_active_skills(query) → list[dict]`** *(async)*  
-Ambil skill aktif MILIK TENANT INI yang relevan dengan query (trigger_pattern match). Urutkan berdasarkan `decay_score DESC, use_count DESC`. Maks `config.max_active_skills` skill. **I2:** ditambah 1 slot percobaan untuk skill `draft` yang trigger-nya cocok (agar draft bisa membuktikan diri & naik kelas) — draft trial TIDAK menggusur active.
+Ambil skill aktif MILIK TENANT INI yang relevan dengan query — `trigger_matches(query, trigger_pattern)`: substring literal (case-insensitive, tanpa wildcard LIKE) ATAU ≥ `TRIGGER_OVERLAP` (60%) kata bermakna (≥3 huruf) trigger ada di query; trigger kosong = selalu relevan. Kandidat dinilai di Python (maks 200 per bagian, urut skor). **Audit 2026-09-25:** sebelumnya `query LIKE '%trigger%'` dengan trigger = 60 char pertama task asli — query baru harus memuat kalimat itu persis, sehingga skill praktis tak pernah terpicu ulang. Urutkan berdasarkan `decay_score DESC, use_count DESC`. Maks `config.max_active_skills` skill. **I2:** ditambah 1 slot percobaan untuk skill `draft` yang trigger-nya cocok (agar draft bisa membuktikan diri & naik kelas) — draft trial TIDAK menggusur active.
 
 **Skill Marketplace lintas-role (TODO.md § Prioritas 6):** ditambah bagian ketiga — skill milik role LAIN (dalam tenant yang sama) dengan `visibility IN ('shared','inherited')` dan `status='active'`, di-LIMIT `config.max_shared_skills` (default 3, lebih kecil dari `max_active_skills` — token-first §1.4, skill role sendiri selalu lebih relevan). Ditambahkan di BELAKANG hasil `active`+`trial`, tak menggusurnya. `visibility='private'` (default) TETAP hanya terlihat role pemiliknya — perilaku lama tak berubah untuk skill yang belum di-share sadar. Toggle private↔shared via `POST /skills/set-visibility` (`web/main.py`); `inherited` (hasil impor skill pack, `core/skill_pack.py`) tak bisa diubah lewat situ — sudah lintas-role sejak asalnya.
 
@@ -88,7 +95,7 @@ Return list dict dengan field: `id`, `skill_name`, `skill_content`, `trigger_pat
 **`mark_used(skill_id) → None`** *(async)*  
 Tandai skill sebagai baru dipakai:
 - Increment `use_count`
-- Update `last_used_at` ke sekarang
+- Update `last_used_at` ke sekarang (UTC via `datetime('now')` — sebelumnya waktu lokal, membuat eksponen decay negatif di zona UTC+)
 - Tambah `skill_revive_boost` ke `decay_score` (maks 1.0)
 - Jika status `'archived'` → kembalikan ke `'active'`
 - WHERE menyertakan `tenant_id=?` (defense-in-depth) — tenant A tak bisa me-revive skill id milik tenant B walau id tertebak
@@ -100,11 +107,11 @@ Revive beberapa skill sekaligus (skill yang dipakai satu turn). **Prasyarat I2/I
 `success=True` → +1 `draft_success_count`; bila ≥ `draft_promote_uses` → promote ke `active` (confidence dinaikkan ke ambang). `success=False` → reset counter. Hanya berefek pada skill `draft`.
 
 **`maybe_run_decay_pass() → dict`** *(async)*  
-Throttle gate: jika belum lewat `decay_interval_sec` sejak pass terakhir, return `{"skipped": True}` tanpa melakukan apa-apa. Dipanggil tiap turn tapi mayoritas adalah no-op.
+Throttle gate: jika belum lewat `decay_interval_sec` sejak pass terakhir (dibaca dari `app_settings`), return `{"skipped": True}`. Pass diklaim ATOMIK (compare-and-set pada baris `app_settings`) — dua turn bersamaan tak bisa sama-sama menjalankan pass untuk jendela yang sama. Dipanggil tiap turn tapi mayoritas adalah no-op.
 
-**`_run_decay_pass() → dict`** *(async, private)*  
+**`_run_decay_pass(since=None, now=None) → dict`** *(async, private)*  
 Jalankan decay sesungguhnya, di-scope ke `tenant_id` + `role` milik instance ini (skill tenant lain tak tersentuh):
-1. UPDATE semua skill aktif: `decay_score = decay_score * POWER(0.97, hari_sejak_dipakai)` menggunakan custom function SQLite `POWER()`
+1. UPDATE semua skill aktif: `decay_score = decay_score * POWER(0.97, now - MAX(last_used_or_created, since))` (dijepit ≥ 0) menggunakan custom function SQLite `POWER()`; `since`=None → pass pertama
 2. UPDATE skill aktif yang skor-nya < threshold → `status='archived'`
 3. **Draft cleanup:** UPDATE draft TUA (`> draft_stale_days`, default 14) & tak pernah terbukti (`draft_success_count=0`) → `status='archived'` (cegah menumpuk; ARSIP bukan hapus; `draft_stale_days=0` → nonaktif)
 

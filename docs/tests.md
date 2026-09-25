@@ -20,6 +20,67 @@ pytest tests/test_router.py -v   # satu file saja
 
 ## Daftar File Test
 
+### `tests/conftest.py`
+
+Fixture autouse `_restore_global_config` — memulihkan `infra.config.CONFIG` setelah tiap test. Test web me-`reload` modul config dengan auth aktif; modul yang membaca config saat dipanggil (`infra/workspace.py`, `tools/data.py`, audit 2026-09-25) akan terpengaruh di test berikutnya tanpa ini.
+
+---
+
+### `tests/test_credential_hardening.py`
+
+Audit 2026-09-25 (#3, #10, #11, #12) — credential tak bisa dibaca/dikirim lewat tool agent.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_is_sensitive_path` (parametrize) | `.env`/`.env.*`/`.ssh`/`.aws` sensitif; `.env.example`, `env.py` tidak |
+| `test_app_db_file_is_sensitive` | DB internal + WAL sensitif |
+| `test_resolve_in_workspace_rejects_env` | `resolve_in_workspace(".env")` → `WorkspaceViolation`; template boleh |
+| `test_file_read_env_blocked` / `test_file_write_env_blocked` | Reproduksi temuan: `.env` tak bisa dibaca/ditimpa tool file |
+| `test_grep_does_not_follow_symlink_out_of_workspace` | Reproduksi #10: symlink ke luar workspace tak dibaca grep |
+| `test_grep_skips_env` / `test_glob_hides_escaping_symlink_and_env` | File sensitif & symlink keluar disembunyikan |
+| `test_glob_parent_pattern_does_not_leak` / `test_glob_absolute_pattern_fails_gracefully` | Pattern `..`/absolut tak membocorkan & tak crash |
+| `test_run_shell_masks_env_files` | argv docker memuat mask `/dev/null` untuk `.env`/`.env.local` bersarang & tmpfs untuk `.aws`, sebelum image |
+| `test_run_python_non_utf8_output_does_not_crash` | Output non-UTF8 tak crash |
+| `test_vault_key_allowed` (parametrize) / `test_http_request_rejects_internal_vault_key` | `vault:OPENCLAWN_*`/API key LLM ditolak, Vault tak dibaca |
+| `test_trust_mode_never_bypasses_http_request_with_vault` | Trust mode tetap minta klik untuk `http_request` ber-`vault:` |
+| `test_db_query_denies_identity_tables` | `users`/`"users"`/`[mcp_servers]` ditolak |
+| `test_db_query_admin_only_when_auth_active` | Auth aktif: member ditolak, admin boleh |
+| `test_agent_loop_overrides_model_supplied_access_role` | `_access_role: admin` dari model ditimpa nilai sistem |
+| `test_oidc_allowlist_rules` | Aturan `is_login_allowed` (kosong/domain/email/unverified) |
+
+---
+
+### `tests/test_memory_isolation.py`
+
+Audit 2026-09-25 (#2, kritis) — memori tak bocor antar sesi/user.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_l1_checkpoint_not_visible_to_other_session` | Checkpoint sesi A tak terlihat sesi B |
+| `test_legacy_global_checkpoint_ignored` | Baris `last_summary` global lama tak disuntik |
+| `test_non_checkpoint_l1_keys_still_shared_per_role` | Key L1 non-checkpoint tetap per role |
+| `test_l4_archive_scoped_to_owner` | Arsip L4 user lain tak muncul |
+| `test_l4_default_user_excludes_owned_sessions` | Mode tanpa auth tak melihat sesi milik user login |
+| `test_memory_search_l1_hides_other_sessions` | `memory_search` L1 tak membocorkan checkpoint sesi lain |
+
+---
+
+### `tests/test_provider_adapters.py`
+
+Audit 2026-09-25 (#7-#9) — payload HTTP NYATA per provider via `httpx.MockTransport`.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_anthropic_messages_use_tool_blocks` / `test_anthropic_merges_consecutive_tool_results` | `tool_use`/`tool_result`, tanpa role `tool`, giliran digabung |
+| `test_claude_stream_assembles_tool_input_and_usage` | Reproduksi #7: input dari `input_json_delta` lengkap, `tool_id`, `input_tokens` dari `message_start` |
+| `test_claude_stream_error_event_raises` | Event `error` → `ProviderUnavailable` |
+| `test_non_transient_4xx_not_retried` | HTTP 400 hanya 1 request (tak di-retry) |
+| `test_gemini_contents_include_function_call_and_response` / `test_gemini_thought_signature_roundtrip` | Reproduksi #8: `functionCall`/`functionResponse`, `thoughtSignature` dikirim balik |
+| `test_ollama_tools_use_function_format` / `test_ollama_messages_tool_name` / `test_ollama_payload_uses_converted_tools` | Reproduksi #9: schema `{"type":"function",...}`, `tool_name` |
+| `test_agent_loop_executes_all_parallel_tool_calls` | Semua tool call satu hop dieksekusi, ID berpasangan, teks hop disimpan |
+
+---
+
 ### `tests/test_router.py`
 
 Test untuk `core/router.py` (Inovasi 1 — routing).
@@ -75,6 +136,9 @@ Test untuk `core/llm_client.py` — fallback chain.
 | `test_all_providers_fail_raises` | Semua provider gagal → `ProviderUnavailable` |
 | `test_no_retry_on_logic_error` | Error logika tidak di-retry |
 | `test_ollama_health_check_false_when_offline` | Health check return False jika offline |
+| `test_missing_api_key_falls_back_instead_of_crashing` | Audit 2026-09-25 #6: API key hilang → fallback, bukan crash |
+| `test_unknown_provider_raises_instead_of_silent_empty` | Provider tak dikenal → `ProviderUnavailable` |
+| `test_resolve_previous_refine_failure_does_not_crash_turn` | Refine gagal → baris pending tetap resolved |
 
 ---
 
@@ -104,6 +168,10 @@ Test untuk `memory/skill_decay.py` (Inovasi 2).
 | `test_own_role_skills_not_duplicated_via_shared_query` | Skill milik role sendiri (walau `visibility='shared'`) tak muncul dobel |
 | `test_shared_skills_capped_at_max_shared_skills` | Skill lintas-role dibatasi `CONFIG.max_shared_skills` (token-first §1.4) |
 | `test_archived_shared_skill_not_visible` | Skill `shared` tapi `status='archived'` tak muncul lintas-role |
+| `test_maybe_run_decay_throttled` | Audit 2026-09-25 #4: instance BARU tetap di-throttle (throttle di DB, bukan atribut instance) |
+| `test_decay_not_compounded_across_passes` | Reproduksi #4: 10 pass beruntun tetap ≈ 0.97² (dulu 0.54) |
+| `test_mark_used_writes_utc_timestamp` | `last_used_at` UTC (dulu waktu lokal → eksponen negatif) |
+| `test_trigger_matches_word_overlap_not_only_exact_prefix` / `test_trigger_percent_is_literal_not_wildcard` / `test_get_active_skills_matches_reworded_query` | Pencocokan trigger per-kata; `%` literal |
 | `test_shared_skill_scoped_to_tenant` | Isolasi tenant (§ Prioritas 5) tetap berlaku untuk skill shared |
 
 ---
@@ -124,6 +192,9 @@ Test untuk `core/crystallizer.py` (Inovasi 3).
 | `test_crystallization_logged_with_decision` | Percobaan tercatat di `crystallization_log` (status/confidence/model) |
 | `test_crystallization_log_records_draft` | Draft juga tercatat (yang menarik untuk ditinjau) |
 
+| `test_evaluator_fallback_forces_draft` / `test_refine_skipped_when_evaluator_falls_back` | Audit 2026-09-25 #5: evaluator jatuh ke fallback → draft / refine skipped |
+| `test_generator_model_of_mixed_turn_is_unverified` | Turn multi-model → generator tak dikenal `EVALUATOR_FOR` |
+| `test_crystallize_writes_tenant_and_refine_is_tenant_scoped` | `tenant_id` ditulis & refine di-scope tenant |
 ---
 
 ### `tests/test_contracts.py`
@@ -459,6 +530,7 @@ Test untuk `core/audit.py`.
 | `test_identity_report_groups_by_role_and_identity` | Agregasi benar per `(role, agent_identity)` |
 | `test_identity_report_config_change_shows_as_two_identities` | Simulasi nyata: role sama, config berubah → dua identitas terpisah di laporan |
 
+| `test_is_correction_precision` (parametrize) | Audit 2026-09-25: sinyal lemah hanya di awal pesan, "salah satu" bukan koreksi |
 ---
 
 ### `tests/test_agent_identity.py`
@@ -725,6 +797,9 @@ Test untuk `tools/`.
 | `test_web_fetch_rejects_non_http_scheme` | Scheme selain http/https (mis. `file://`) ditolak |
 | `test_http_request_rejects_internal_host` | `http_request` diblokir SSRF walau butuh approval |
 
+| `test_outbound_client_uses_public_only_backend` | Audit 2026-09-25: backend SSRF terpasang di transport httpx (penjaga atribut privat) |
+| `test_web_fetch_blocks_dns_rebinding_at_connect` | DNS saat connect → 127.0.0.1 ditolak walau guard awal lolos |
+| `test_is_public_ip_handles_ipv4_mapped` | `::ffff:127.0.0.1` & `169.254.169.254` bukan publik |
 ---
 
 ### `tests/test_task_graph.py`
@@ -1061,6 +1136,7 @@ Test end-to-end untuk `auth_and_csrf_middleware` di `web/main.py` (bukan unit
 | `test_logout_clears_session` / `test_logout_without_csrf_rejected` | Logout hapus cookie via form ber-CSRF; tanpa CSRF ditolak sama seperti form lain |
 | `test_rate_limit_key_stable_across_idle_cookie_refresh` | **[Audit 2026-08-27]** Kunci `RateLimiter` (`fixture client_auth_idle`) tetap `user:{id}` yang SAMA meski cookie sesi berbeda (mensimulasikan refresh idle-timeout) — sebelumnya kunci ikut berubah tiap cookie, membuat rate limit tak efektif untuk user terautentikasi |
 
+| `test_safe_next` (parametrize) | Audit 2026-09-25: `//evil`, `/\evil`, URL absolut, CR/LF → `/` |
 ---
 
 ### `tests/test_oidc.py`
@@ -1170,6 +1246,12 @@ config sistem (`/settings`, `/skills/import`, `/mcp/*`, `/router`,
 
 > **Catatan:** tabel di atas belum mencakup semua test di file ini (mis. `test_member_forbidden_from_calibration_apply/revert`, `test_member_forbidden_from_skills_set_visibility`, `test_member_forbidden_from_autopilots_*`, dan test kepemilikan chat-session/approval) — gap dokumentasi dari sesi sebelumnya, dicatat di sini agar tak disalahartikan sebagai test yang hilang, bukan cuma belum terdaftar.
 
+| `test_member_cannot_pick_workdir` | Audit 2026-09-25 #1: member → `/workdir/check?path=/` ditolak |
+| `test_admin_workdir_limited_to_configured_roots` | Admin hanya di dalam `OPENCLAWN_WORKDIR_ROOTS` |
+| `test_download_ignores_saved_workdir_outside_allowlist` | `session_workspace="/"` tak jadi root download (`/etc/hosts` → 404) |
+| `test_viewer_cannot_chat_or_approve` | #11: viewer 403 di `/chat/stream`, `/approve`, `/answer`; GET tetap boleh |
+| `test_chat_stream_rejects_other_users_session_id` | `session_id` milik user lain → 403 |
+| `test_oidc_login_outside_allowlist_denied` | #12: akun di luar `OPENCLAWN_OIDC_ALLOWED_DOMAINS` tak bisa login |
 ---
 
 ### `tests/test_prometheus_metrics.py`
@@ -1360,6 +1442,12 @@ Test pindah direktori kerja dinamis lewat chat (§ user request: "pindah direkto
 | `test_workdir_change_persists_to_next_agentloop` | AgentLoop TURN 1 panggil `set_workdir` → AgentLoop BARU turn 2 (sesi sama, tanpa form workdir) otomatis pakai folder baru — `file_read` di folder itu sukses |
 | `test_explicit_workspace_override_wins_over_saved_workdir` | Form UI diisi eksplisit di request ini → menang atas `session_workspace` tersimpan |
 
+| `test_workdir_outside_allowed_roots_rejected` | Audit 2026-09-25 #1: `/`, `/etc` ditolak; folder di dalam root diterima |
+| `test_workdir_empty_roots_disables_override` | Tuple root kosong → tak boleh pindah folder |
+| `test_workdir_credential_folder_rejected` | `.ssh` ditolak sebagai folder kerja |
+| `test_default_roots_empty_when_auth_active_without_allowlist` | Auth aktif tanpa allowlist → `()`; tanpa auth → tak mencakup `/` |
+| `test_set_workdir_to_filesystem_root_rejected` | Reproduksi: `set_workdir("/")` ditolak, DB tak berubah |
+| `test_saved_workdir_outside_roots_ignored_next_turn` | Baris `session_workspace` lama (`/`) diabaikan turn berikutnya |
 ---
 
 ### `tests/test_sandbox_image.py`

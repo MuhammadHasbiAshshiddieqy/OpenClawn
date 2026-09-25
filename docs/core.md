@@ -95,11 +95,15 @@ Konfigurasi per-sesi agent.
 | `workspace_override` | Folder kerja adaptif per-sesi; menggantikan `CONFIG.workspace_root` via ContextVar hanya selama turn. `None` = default server. Divalidasi di `web/main.py`. |
 | `persist_history` | `True` (default) → muat/simpan riwayat sesi ke `session_turns` (single-agent, agar turn berikutnya ingat konteks). `False` untuk multi-agent (strategy kelola transkrip sendiri). |
 | `trust_mode` | `True` → tool yang butuh approval (kecuali `_TRUST_MODE_EXEMPT`) TETAP DIEKSEKUSI tanpa menunggu klik manusia (§ user request otonomi). Beda dari `autopilot`: manusia sedang hadir di sesi aktif, hanya melewati klik. Default `False`. Toggle UI per-pengiriman, tak persist. |
+| `workdir_roots` | **[Audit 2026-09-25 #1]** Allowlist root folder kerja turn ini (`tuple` atau `None`). `None` → warisi ContextVar `CURRENT_WORKDIR_ROOTS` yang aktif (subtask Task Graph) atau `default_workdir_roots()`. `web/main.py` mengisinya per request dari RBAC (`_workdir_roots_for`). `workspace_override` DAN folder tersimpan di `session_workspace` divalidasi ulang terhadap ini di `run()` — tak lolos → diabaikan (log `workdir_override_rejected`). |
+| `access_role` | **[Audit 2026-09-25 #11]** `access_role` user pemilik turn (`admin`/`member`/`viewer`) bila auth aktif, `None` bila tidak. Disuntik ke `db_query` sebagai `_access_role` (menimpa nilai apa pun dari model). |
 | `task_id` / `node_id` | **[§ Task Graph]** Diisi HANYA bila `AgentLoop` ini menjalankan satu subtask DAG (`core/task_executor.py`), bukan turn chat biasa. `None` (default) = tak ada perubahan perilaku. Diteruskan ke `RoutingAuditor`/`ApprovalGate`/`ToolAudit` (kolom nullable, pola sama `agent_identity`) agar audit trail subtask query-able per graph. |
 
 ### Konstanta: `_TRUST_MODE_EXEMPT`
 
-`frozenset({"code_run", "build_sandbox_image"})` — tool yang TIDAK PERNAH bisa dilewati `AgentConfig.trust_mode`, berapa pun nilainya. Approval `code_run` adalah aturan keras CLAUDE.md §1 ("code_run → True selalu"), bukan preferensi tool yang bisa dilonggarkan fitur otonomi; `build_sandbox_image` (§ Prioritas 8.3) ditambahkan sekelas sensitivitas — `docker build`-nya sendiri membuka network sementara. Dicek di DUA tempat (defense in depth): `_run_tool_loop` (menentukan status event mana yang di-emit ke UI) dan `_execute_tool` (menentukan `auto_approve` vs `request` yang benar-benar dipanggil) — sehingga bug di satu titik tak membuka celah tool ini lolos tanpa approval.
+`frozenset({"code_run", "build_sandbox_image", "sandbox_persist_enable"})` — tool yang TIDAK PERNAH bisa dilewati `AgentConfig.trust_mode`, berapa pun nilainya. Approval `code_run` adalah aturan keras CLAUDE.md §1 ("code_run → True selalu"), bukan preferensi tool yang bisa dilonggarkan fitur otonomi; `build_sandbox_image` (§ Prioritas 8.3) ditambahkan sekelas sensitivitas — `docker build`-nya sendiri membuka network sementara. Dicek di DUA tempat (defense in depth): `_run_tool_loop` (menentukan status event mana yang di-emit ke UI) dan `_execute_tool` (menentukan `auto_approve` vs `request` yang benar-benar dipanggil) — sehingga bug di satu titik tak membuka celah tool ini lolos tanpa approval.
+
+**`_trust_mode_exempt(name, tool_input) → bool`** — dipakai di kedua titik itu (audit 2026-09-25 #3): `_TRUST_MODE_EXEMPT` **plus** `http_request` yang header-nya memakai `vault:KEY` (`tools/web.py::uses_vault_credential`) — tanpa ini trust mode membuat prompt injection bisa mengirim credential ke host mana pun tanpa satu klik.
 
 ### Dataclass: `Turn`
 
@@ -116,6 +120,11 @@ Merepresentasikan satu turn percakapan.
 | `cost_usd` | Estimasi biaya dalam USD |
 | `latency_ms` | Latensi total turn dalam milidetik |
 | `fallback_used` | Apakah fallback chain aktif |
+| `models_used` | **[Audit 2026-09-25 #5]** Model yang BENAR-BENAR menjawab tiap hop (setelah fallback). `model_used` = model hop terakhir. |
+
+**`generator_model_of(turn) → str`** — generator yang dilaporkan ke crystallizer: satu model → nama itu; >1 model (fallback di tengah turn) → `"mixed:a+b"` yang sengaja tak ada di `EVALUATOR_FOR`, sehingga hasilnya draft (unverified).
+
+**Tool loop (audit 2026-09-25):** SEMUA tool call dalam satu hop dieksekusi (dulu hanya yang terakhir). Tiap panggilan diberi ID (`tool_id` dari provider, atau `call_<hex>`); riwayat ditulis sebagai satu pesan `assistant` (teks hop + `tool_calls[{id, function, thought_signature?}]`) lalu satu pesan `tool` per hasil (`tool_call_id`, `name`, `content`) — format internal ini diterjemahkan per provider di `core/llm_client.py`. Usage token: nilai terakhir dalam satu hop (Gemini kumulatif), DIJUMLAH antar hop. `skill_feedback.resolve_previous` dibungkus try/except — kegagalannya tak menggagalkan turn. Task `_post_turn` disimpan di `_BACKGROUND_TASKS` (referensi kuat, cegah GC di tengah jalan).
 
 ### Dataclass: `AgentEvent`
 
@@ -253,6 +262,8 @@ Unit terkecil output streaming dari LLM.
 | `usage` | — | Dict `{input_tokens, output_tokens}` |
 | `fallback_used` | — | True jika fallback aktif |
 | `fallback_model` | — | Nama model fallback yang dipakai |
+| `tool_id` | — | ID tool call dari provider (Anthropic `toolu_...`); kosong → AgentLoop membuat sendiri |
+| `tool_signature` | — | Gemini `thoughtSignature` pada `functionCall`, dikirim balik di giliran berikutnya |
 
 ### Kelas: `ThinkTagSplitter`
 
@@ -277,6 +288,16 @@ default client — tiap provider punya kebutuhan timeout berbeda).
 saat shutdown. Juga dipakai untuk 2 health-check Ollama di `web/main.py`
 (startup + `/health`), bukan hanya `LLMClient` internal.
 
+### Fungsi modul: adapter format per provider (audit 2026-09-25 #7-#9)
+
+Format internal AgentLoop (bergaya OpenAI/Ollama, lihat `core/agent_loop.py` § Tool loop) diterjemahkan eksplisit per provider — sebelumnya dikirim apa adanya: Anthropic menolak role `tool` (400) sehingga tool calling Claude tak pernah jalan, Gemini membuang pesan tool (model tak pernah melihat hasil tool), Ollama menerima schema tanpa `type/function/parameters`.
+
+- **`to_anthropic_messages(messages) → list`** — `tool_calls` → blok `tool_use`; pesan `tool` → blok `tool_result` di giliran `user`; giliran ber-role sama digabung; konten kosong dibuang; `system` dilewati (dikirim terpisah).
+- **`to_gemini_contents(messages) → list`** — `tool_calls` → part `functionCall` (+ `thoughtSignature` bila ada); pesan `tool` → part `functionResponse {name, response: {content}}`; giliran ber-role sama digabung.
+- **`to_ollama_tools(tools) → list`** — `{name, description, input_schema}` → `{"type": "function", "function": {name, description, parameters}}`.
+- **`to_ollama_messages(messages) → list`** — pesan `tool` pakai `tool_name`; field asing dibuang.
+- **`_is_transient(err) → bool`** *(private)* — hanya error transport dan HTTP 408/409/425/429/5xx yang di-retry; 4xx lain (400 payload salah, 401 key salah) langsung gagal ke fallback.
+
 ### Kelas: `LLMClient`
 
 **`__init__(vault, config)`**  
@@ -285,7 +306,8 @@ Terima `Vault` untuk mengambil API key saat dibutuhkan.
 **`stream_with_fallback(provider, model, messages, tools=None, max_tokens=4096) → AsyncGenerator[LLMChunk, None]`** *(async generator)*  
 Satu-satunya method publik. Coba `(provider, model)` utama, jika gagal turun ke `config.fallback_chain`. Setiap fallback yang aktif menghasilkan `LLMChunk(type="fallback")` sebagai sinyal ke consumer (untuk audit logging).
 
-- Retry hanya untuk `httpx.HTTPError` (transient). Error logika tidak di-retry.
+- Retry hanya untuk `httpx.HTTPError` transien (`_is_transient`). Error logika tidak di-retry.
+- Provider dilewati (lanjut ke fallback berikutnya) pada `httpx.HTTPError`, `ProviderUnavailable`, atau `json.JSONDecodeError` (baris stream korup). **Audit 2026-09-25 (#6):** API key tak diset kini `ProviderUnavailable` lewat `_api_key()` — sebelumnya `ValueError` dari Vault lolos dan menjatuhkan turn tanpa mencoba fallback sama sekali. Provider tak dikenal (typo di `/router`) juga `ProviderUnavailable`, bukan jawaban kosong diam-diam.
 - Untuk Anthropic: system prompt di-wrap dengan `cache_control: ephemeral` untuk prompt caching (hemat hingga 90% biaya bagian statis).
 
 **`_health_check(provider) → bool`** *(async, private)*  
@@ -330,10 +352,10 @@ Return: `(cleaned_text, [{"name": "...", "input": {...}}, ...])` — teks bersih
 > **Reasoning/thinking:** `_ollama` melewatkan content lewat `ThinkTagSplitter` (memisahkan `<think>…</think>` → `LLMChunk(type="thinking")`) dan juga menangkap field `message.thinking` terpisah (API Ollama baru). Hanya bagian non-thinking yang masuk buffer deteksi tool call.
 
 **`_claude(model, messages, tools, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
-Streaming request ke `POST /v1/messages` Anthropic. Parse SSE response (`data:` lines). `text_delta` → `text`; `thinking_delta` (extended thinking) → `LLMChunk(type="thinking")`. API key diambil dari `Vault` tepat sebelum request — tidak pernah di-cache di memori lebih lama dari perlu.
+Streaming request ke `POST /v1/messages` Anthropic (`messages` lewat `to_anthropic_messages`). Parse SSE response (`data:` lines). `text_delta` → `text`; `thinking_delta` (extended thinking) → `LLMChunk(type="thinking")`; `input_json_delta` diakumulasi per blok dan `tool_call` baru di-yield di `content_block_stop` dengan input lengkap + `tool_id` (audit 2026-09-25 #7: dulu di-yield di `content_block_start` dengan input `{}`); `input_tokens` dari `message_start` digabung dengan `output_tokens` di `message_delta`; event `error` di tengah stream → `ProviderUnavailable`. API key diambil dari `Vault` tepat sebelum request — tidak pernah di-cache di memori lebih lama dari perlu.
 
 **`_gemini(model, messages, tools, max_tokens) → AsyncGenerator[LLMChunk, None]`** *(async generator, private)*  
-Streaming request ke Google AI Studio (`POST /v1beta/models/{model}:streamGenerateContent?alt=sse`). API key (`GOOGLE_API_KEY`) diambil dari `Vault`, dikirim via header `x-goog-api-key`. Mengonversi format internal (`system`/`assistant`) ke format Gemini (`systemInstruction` + `contents` dengan peran `user`/`model`). Bila `tools` terisi, dikonversi ke `tools: [{functionDeclarations: [...]}]` Gemini-style (schema internal Anthropic-style `input_schema` → `parameters`, konversi di sini agar `tools/*.py` tetap provider-agnostic). Parse SSE → `candidates[].content.parts[].text` dan `usageMetadata`; `parts[]` dengan `thought=true` → `LLMChunk(type="thinking")`; `parts[]` dengan `functionCall` → `LLMChunk(type="tool_call", tool_name=..., tool_input=...)` (args Gemini sudah objek native, tidak perlu di-parse JSON manual seperti plaintext tool call model lokal).
+Streaming request ke Google AI Studio (`POST /v1beta/models/{model}:streamGenerateContent?alt=sse`). API key (`GOOGLE_API_KEY`) diambil dari `Vault`, dikirim via header `x-goog-api-key`. Mengonversi format internal ke format Gemini (`systemInstruction` + `contents` via `to_gemini_contents`, termasuk `functionCall`/`functionResponse` — audit 2026-09-25 #8). Bila `tools` terisi, dikonversi ke `tools: [{functionDeclarations: [...]}]` Gemini-style (schema internal Anthropic-style `input_schema` → `parameters`, konversi di sini agar `tools/*.py` tetap provider-agnostic). Parse SSE → `candidates[].content.parts[].text` dan `usageMetadata`; `parts[]` dengan `thought=true` → `LLMChunk(type="thinking")`; `parts[]` dengan `functionCall` → `LLMChunk(type="tool_call", tool_name=..., tool_input=...)` (args Gemini sudah objek native, tidak perlu di-parse JSON manual seperti plaintext tool call model lokal).
 
 **Provider yang didukung:** `ollama`, `anthropic`, `gemini`.
 
@@ -744,7 +766,11 @@ Mencatat setiap keputusan routing dan apakah terbukti tepat.
 
 ### Konstanta: `CORRECTION_SIGNALS`
 
-Daftar kata/frasa yang menandakan user mengoreksi respons sebelumnya (sinyal feedback). Mencakup Indonesia & English (core locale-neutral §1.5).
+Daftar kata/frasa yang menandakan user mengoreksi respons sebelumnya (sinyal feedback). Mencakup Indonesia & English (core locale-neutral §1.5). Dicocokkan per-kata (batas kata), frasa "salah satu" dikecualikan.
+
+### Konstanta: `CORRECTION_SIGNALS_LEADING` / Fungsi: `is_correction(user_message) → bool`
+
+Audit 2026-09-25: sinyal LEMAH (`harusnya`, `should be`, `no,`, `no.`, `nope`) hanya dihitung bila MEMBUKA pesan — sebelumnya dicocokkan di mana saja sebagai substring, sehingga permintaan biasa ("file yang harusnya berisi...", "pilih salah satu") memicu koreksi palsu → refine/reset skill dan data kalibrasi tercemar. `check_correction` memakai `is_correction`.
 
 ### Kelas: `RoutingAuditor`
 
@@ -853,9 +879,11 @@ EVALUATOR_FOR = {
 **`should_attempt(history) → bool`**  
 Return True jika total tool call dalam history ≥ `MIN_TOOL_CALLS`.
 
+**`__init__(role, llm, db, tenant_id="default")`** — `tenant_id` (audit 2026-09-25) ditulis ke `skills` saat INSERT dan memfilter `refine_on_correction`.
+
 **`crystallize(task, solution, history, generator_model) → dict`** *(async)*  
 Proses crystallization lengkap:
-1. Pilih evaluator dari `EVALUATOR_FOR`
+1. Pilih evaluator dari `EVALUATOR_FOR`. **Audit 2026-09-25 (#5):** bila `stream_with_fallback` mengirim chunk `fallback` (evaluator yang diminta gagal, diganti model lain), hasil dianggap **unverified** → selalu `draft`, dan `evaluator` yang dicatat = model pengganti. `refine_on_correction` dengan evaluator fallback → `skipped`.
 2. Jalankan self-evaluation via LLM
 3. Tentukan status: `"active"` jika confidence ≥ 4 dan tidak ada critical gaps, `"draft"` jika tidak
 4. Simpan ke tabel `skills`

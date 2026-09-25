@@ -73,6 +73,15 @@ TOOL_REGISTRY = {
 > `infra/workspace.py::resolve_in_workspace()`. Path yang keluar (lewat `..`, path absolut,
 > atau symlink) ditolak dengan `{"error": "...di luar workspace..."}`. Set root via
 > env `OPENCLAWN_WORKSPACE` (default `.`).
+>
+> **File credential dilindungi (audit 2026-09-25 #3).** `.env`/`.env.*` (kecuali
+> `.env.example`), `.ssh`, `.aws`, `.gnupg`, `.docker`, `.kube`, `.netrc`, `.npmrc`, dst.,
+> serta DB internal (`db_path` + WAL/SHM) ditolak SEMUA tool file walau berada di dalam
+> workspace (`infra/workspace.py::is_sensitive_path`), dan di-mask di mount sandbox
+> `shell_run`/`git_*`. Sebelumnya workspace default `.` membuat `file_read(".env")` (tanpa
+> approval) + `web_fetch` (tanpa approval) cukup untuk mencuri semua API key lewat satu
+> prompt injection. **Residual risk jujur:** konten file workspace lain tetap bisa dibaca
+> lalu dikirim lewat `web_fetch` — jangan taruh rahasia di luar nama-nama di atas di workspace.
 
 ---
 
@@ -200,6 +209,8 @@ Tiga tool git **read-only** (`requires_approval = False`). Keamanan #1: dijalank
 
 Query SQL **SELECT-only** ke DB internal (memori/skill/audit). Menolak INSERT/UPDATE/DELETE/DROP/dll & multi-statement. **Butuh approval** (akses state internal).
 
+**Audit 2026-09-25 (#11):** saat auth aktif (multi-user) hanya **admin** — `_access_role` disuntik `AgentLoop` dari sesi login (nilai dari model ditimpa); sebelumnya member bisa membaca `session_turns`/`approval_log` semua user dengan approval yang ia putuskan sendiri. Tabel `users` dan `mcp_servers` SELALU ditolak (nama tabel dicocokkan setelah kutip/bracket identifier dibuang).
+
 - `requires_approval = True`
 - Input: `{"sql": "SELECT ..."}`
 - Output: `{"rows": [...], "count": N, "truncated": bool}` (maks 100 baris)
@@ -242,7 +253,7 @@ Ekstrak nilai dari JSON via dot-path (stdlib). Read-only, tanpa approval.
 
 ### `GlobTool`
 
-Cari file berdasarkan pola glob dalam workspace. Melewati `.git`, `node_modules`, `.venv`, `__pycache__`, dll.
+Cari file berdasarkan pola glob dalam workspace. Melewati `.git`, `node_modules`, `.venv`, `__pycache__`, dll. **Audit 2026-09-25 (#10):** hasil yang target nyatanya (setelah ikut symlink) di luar workspace, file sensitif, atau pattern berisi `..` disembunyikan; pattern absolut → error anggun. Scan berjalan di thread (`asyncio.to_thread`) — sebelumnya memblokir event loop untuk semua user.
 
 - `requires_approval = False`
 - Input: `{"pattern": "**/*.py", "path": "<subfolder opsional>"}`
@@ -250,7 +261,7 @@ Cari file berdasarkan pola glob dalam workspace. Melewati `.git`, `node_modules`
 
 ### `GrepTool`
 
-Cari teks/regex di dalam isi file pada workspace.
+Cari teks/regex di dalam isi file pada workspace. **Audit 2026-09-25 (#10):** tidak lagi mengikuti symlink ke luar workspace (sebelumnya `notes.txt -> ~/.aws/credentials` terbaca tanpa approval padahal `file_read` sudah menolaknya — dibuktikan dengan reproduksi) dan melewati file sensitif. Scan di thread, tak memblokir event loop.
 
 - `requires_approval = False`
 - Input: `{"pattern": "<regex>", "path": "<subfolder opsional>"}`
@@ -274,7 +285,9 @@ tetap DoS agregat walau tiap panggilan individual dibatasi. Output pada kasus in
 
 ## `tools/web.py`
 
-> **Anti-SSRF (`_ssrf_guard`, §1 keamanan dulu).** `web_fetch` & `http_request` memanggil `_ssrf_guard(url)` SEBELUM request keluar. Guard me-resolve DNS host lalu menolak bila salah satu alamat **bukan publik** (`ip.is_global == False`): loopback (`localhost`/`127.0.0.1`/`::1`), privat RFC1918 (`10.x`/`192.168.x`/`172.16.x`), dan link-local — termasuk endpoint metadata cloud `169.254.169.254`. Resolusi DNS di guard menangkap juga domain yang mengarah ke IP internal (DNS rebinding), bukan hanya literal IP. Karena `web_fetch` tidak butuh approval, guard ini adalah satu-satunya penghalang ke service internal (mis. Ollama `localhost:11434`).
+> **Anti-SSRF (`_ssrf_guard`, §1 keamanan dulu).** `web_fetch` & `http_request` memanggil `_ssrf_guard(url)` SEBELUM request keluar. Guard me-resolve DNS host lalu menolak bila salah satu alamat **bukan publik** (`ip.is_global == False`): loopback (`localhost`/`127.0.0.1`/`::1`), privat RFC1918 (`10.x`/`192.168.x`/`172.16.x`), dan link-local — termasuk endpoint metadata cloud `169.254.169.254`. Resolusi DNS di guard menangkap domain yang mengarah ke IP internal, bukan hanya literal IP; guard dijalankan di thread (`asyncio.to_thread`) agar `getaddrinfo` tak memblokir event loop.
+>
+> **Validasi ulang di titik connect (audit 2026-09-25).** Guard saja tak menutup DNS rebinding — httpx me-resolve LAGI saat connect (domain TTL 0 bisa menjawab IP publik ke guard lalu `169.254.169.254` ke koneksi). Ketiga tool web kini memakai `_outbound_client()`: transport httpx dengan `_PublicOnlyBackend` (network backend httpcore) yang me-resolve, menolak bila ADA alamat non-publik (IPv4-mapped IPv6 dinilai sebagai IPv4-nya), lalu connect ke IP yang sudah divalidasi itu — TLS tetap memakai hostname asli. Dipasang lewat atribut privat `transport._pool._network_backend` (httpx 0.28 tak punya parameter publik; versi dikunci `uv.lock`, dijaga `tests/test_tools.py::test_outbound_client_uses_public_only_backend`). Bila env `*_PROXY` diset, pinning dilewati (koneksi ke proxy) dan guard awal tetap berlaku.
 
 ### `WebFetchTool`
 
@@ -302,7 +315,7 @@ HTTP request generik (GET/POST/PUT/PATCH/DELETE) ke API eksternal. **Destruktif*
 
 - `requires_approval = True`
 - Input: `{"url": "https://...", "method": "GET", "headers": {...}, "body": ...}`
-- Kredensial: nilai header berformat `"vault:NAMA_KEY"` di-resolve dari Vault (jangan tulis API key langsung)
+- Kredensial: nilai header berformat `"vault:NAMA_KEY"` di-resolve dari Vault (jangan tulis API key langsung). **Audit 2026-09-25 (#3):** `vault_key_allowed()` SELALU menolak credential aplikasi (`OPENCLAWN_*`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `TAVILY_API_KEY`); bila `OPENCLAWN_HTTP_VAULT_KEYS` diisi, hanya nama di sana yang boleh. Request dengan `vault:` juga TAK BISA dilewati trust mode (`uses_vault_credential` → `core/agent_loop.py::_trust_mode_exempt`) — selalu menunggu klik manusia.
 - Output sukses: `{"status": N, "body": "...", "truncated": bool}`
 - Output error: `{"error": "..."}` jika URL/method tidak valid, kredensial vault hilang, atau **diblokir SSRF guard** (host internal ditolak walau sudah di-approve — approval bukan satu-satunya penghalang)
 
@@ -483,6 +496,8 @@ Delegasi seluruh eksekusi ke `DockerSandbox` — tidak ada `exec()`, `eval()`, a
 
 ### Kelas: `DockerSandbox`
 
+**Audit 2026-09-25:** `run_shell` menambahkan mask credential dari `_sensitive_masks(root)` (`-v /dev/null:/work/<file>:ro` untuk file, `--tmpfs /work/<dir>:ro,size=1k` untuk folder; scan `os.walk` di thread, dibatasi 5000 folder/100 entri — workspace raksasa bisa menyisakan file bersarang dalam yang tak ter-mask, di-log `sandbox_mask_scan_truncated`). Saat timeout `asyncio.wait_for`, proses docker client kini di-kill (`_kill_quietly`) alih-alih dibiarkan hidup. Output di-decode `errors="replace"` (sebelumnya `run_python` crash pada byte non-UTF8). `_base_docker_args(mount, tmpfs_size, extra=None)` — `extra` disisipkan SEBELUM image.
+
 **`run_python(code: str) → dict`** *(async)*  
 Jalankan kode Python dalam container Docker yang terisolasi penuh.
 
@@ -633,10 +648,12 @@ List isi direktori dalam workspace. Read-only — **tidak butuh approval**.
 
 Pindahkan folder kerja aktif untuk SISA sesi ini (§ user request: "pindah direktori secara dinamis" lewat chat — sebelumnya folder kerja HANYA bisa diubah lewat field UI sekali per-request, tak ada cara mengubahnya di tengah percakapan). **Tidak butuh approval** — efek sampingnya navigasi (ganti root yang tool lain baca/tulis), bukan modifikasi file/eksekusi kode; validasi path (`validate_workdir_candidate`) adalah pertahanannya, sama alasan `shell_run`.
 
+**Audit 2026-09-25 (#1, kritis):** tujuan WAJIB di dalam allowlist root turn ini (`effective_workdir_roots()` — lihat `docs/infra.md` § `infra/workspace.py`). Sebelumnya `set_workdir("/")` sukses tanpa approval → `file_read` bisa membaca file host mana pun (dibuktikan dengan reproduksi); di mode multi-user member/viewer tak boleh pindah folder sama sekali.
+
 - `requires_approval = False`
 - Input: `{"path": "..."}` — path direktori tujuan (absolut atau `~/...`); `_session_id` disuntik `AgentLoop._execute_tool` (model tak boleh mengarang ini)
 - Output sukses: `{"ok": True, "workdir": "/abs/path"}`
-- Output error: `{"error": "..."}` jika `path` kosong, folder tidak ada/bukan direktori, atau `_session_id` absen (dipanggil di luar konteks AgentLoop)
+- Output error: `{"error": "..."}` jika `path` kosong, folder tidak ada/bukan direktori, di luar allowlist root, folder credential, atau `_session_id` absen (dipanggil di luar konteks AgentLoop)
 
 **Efek ganda saat sukses:**
 1. `CURRENT_WORKSPACE_ROOT` (ContextVar, `infra/workspace.py`) di-set LANGSUNG — tool file/shell/git berikutnya di **turn yang sama** langsung ikut pindah, tanpa menunggu turn baru.

@@ -1775,6 +1775,106 @@ kebetulan.
 
 ---
 
+## 17. Audit menyeluruh lintas-lapisan (2026-09-25)
+
+Permintaan owner: "audit keseluruhan code, sepertinya masih banyak
+kekurangan", lalu "perbaiki semuanya, ikuti urutan rekomendasi". Beda dari
+§6-§16 (per lapisan): fokus ke **sambungan antar-modul** — celah yang tak
+terlihat bila tiap lapisan diaudit terpisah. Metodologi sama: baca kode +
+reproduksi terisolasi SEBELUM memperbaiki; skrip reproduksi yang sama
+dijalankan ulang setelah perbaikan (semuanya tertutup).
+
+### 🔴 Kritis — kebocoran data/credential
+1. **`set_workdir`/field `workdir` menerima folder APA PUN (termasuk `/`)** —
+   tool tanpa approval → `file_read` bisa membaca `/proc/self/environ` (semua
+   API key + `OPENCLAWN_ENCRYPTION_KEY`), `/workspace/download` bisa mengunduh
+   DB seluruh tenant. Direproduksi. **Diperbaiki:** allowlist root
+   (`OPENCLAWN_WORKDIR_ROOTS`; default home+workspace tanpa auth, KOSONG saat
+   auth aktif; hanya admin), divalidasi ulang di `AgentLoop.run()` dan
+   `/workspace/download` (baris lama `session_workspace` di luar allowlist
+   diabaikan). *Keputusan owner:* mengikuti rekomendasi audit.
+2. **Memori L1/L4 bocor antar user** — checkpoint `last_summary` satu baris
+   per ROLE (jawaban user A disuntik ke prompt user B tiap turn), arsip L4
+   dicari lintas semua sesi. **Diperbaiki:** L1 per sesi, L4 per pemilik
+   sesi (`chat_sessions.owner_user_id`); `memory_search` ikut difilter.
+3. **Rantai curi credential tanpa approval** — workspace default `.` berisi
+   `.env`; `file_read` + `web_fetch` keduanya tanpa approval. `http_request`
+   me-resolve `vault:<env apa pun>`, dan trust mode melewatinya.
+   **Diperbaiki:** file credential & DB internal ditolak semua tool file,
+   di-mask di mount sandbox `shell_run`/`git_*`; `vault:` menolak
+   credential aplikasi (+ allowlist opsional `OPENCLAWN_HTTP_VAULT_KEYS`);
+   trust mode tak bisa melewati `http_request` ber-`vault:`.
+   **Residual (jujur):** file workspace lain tetap bisa dibaca lalu dikirim
+   via `web_fetch` — sifat bawaan agent ber-tool + web tanpa approval.
+
+### 🟠 Tinggi — bug di inovasi inti & jalur LLM
+4. **Inovasi 2: throttle decay tak pernah bekerja + decay berlipat** —
+   `_last_decay_ts` per instance (AgentLoop baru tiap request) dan eksponen
+   `hari_sejak_dipakai` diterapkan ulang tiap pass. Direproduksi: skill 2
+   hari tak dipakai 1.0→0.54 dalam 10 turn (akan terarsip ~20 turn, bukan
+   ~40 hari). Plus `last_used_at` waktu lokal vs `julianday('now')` UTC.
+   **Diperbaiki:** throttle di `app_settings` (klaim atomik CAS), eksponen
+   inkremental sejak pass terakhir, timestamp UTC.
+5. **Inovasi 3: evaluator bisa lebih lemah dari generator** lewat fallback
+   chain (evaluator gagal → gemma4:e4b, tetap "verified"), dan
+   `generator_model` = pilihan router, bukan model yang sebenarnya menjawab.
+   **Diperbaiki:** chunk `fallback` saat evaluasi → unverified/draft (refine
+   skipped); `Turn.models_used` + `generator_model_of` (multi-model → draft).
+6. **API key hilang lolos dari fallback chain** (`ValueError` dari Vault) —
+   direproduksi; dengan `refine_on_correction=True` default, pesan koreksi
+   bisa menjatuhkan turn berulang. **Diperbaiki:** `ProviderUnavailable`,
+   `resolve_previous`/refine dibungkus fail-soft, baris pending tetap resolved.
+7. **Tool calling Claude rusak total** — input `{}` (`input_json_delta`
+   diabaikan), `input_tokens` hilang, role `tool` ditolak API (400).
+   Direproduksi. 8. **Gemini tak pernah melihat hasil tool** (pesan tool
+   dibuang; Gemini = tier default COMPLEX/CRITICAL). 9. **Schema tool Ollama
+   format Anthropic** (bukan `{"type":"function",...}`). **Diperbaiki:**
+   adapter eksplisit per provider (`to_anthropic_messages`,
+   `to_gemini_contents`, `to_ollama_*`), ID tool call, semua tool call per
+   hop dieksekusi (dulu hanya terakhir), usage dijumlah antar hop, retry
+   hanya untuk error transien, event `error` Anthropic → fallback.
+10. **`grep`/`glob` mengikuti symlink keluar workspace** — direproduksi.
+    **Diperbaiki** + scan dipindah ke thread (tak memblokir event loop).
+11. **RBAC tak ditegakkan:** `db_query` membaca seluruh DB lintas user
+    (approval diputuskan peminta sendiri); role `viewer` tak dicek di mana
+    pun. **Diperbaiki:** `db_query` admin-only saat auth aktif (+ tabel
+    `users`/`mcp_servers` selalu ditolak); endpoint mutasi butuh ≥ member.
+12. **OIDC tanpa allowlist** — akun apa pun di IdP publik jadi member (akun
+    pertama admin). **Diperbaiki:** `OPENCLAWN_OIDC_ALLOWED_EMAILS/_DOMAINS`
+    (+ `email_verified` wajib). *Default tetap permisif bila kosong*
+    (kompatibilitas mundur) dengan peringatan startup — **owner bisa
+    memutuskan menjadikannya wajib.**
+
+### 🟡 Sedang (semua diperbaiki)
+- SSRF: DNS rebinding (guard resolve ≠ resolve saat connect) → validasi IP
+  di network backend httpcore (`_PublicOnlyBackend`); `getaddrinfo` guard ke
+  thread.
+- `/chat/stream` tanpa cek pemilik `session_id`; `/converse/stream` bisa
+  mengambil alih percakapan aktif user lain → 403.
+- Sandbox: proses docker tak di-kill saat timeout; `run_python` crash pada
+  output non-UTF8.
+- Open redirect `next=/\evil.com` → `_safe_next`.
+- `Dockerfile.role` memasang extras `[dev]` → dihapus. `docker-compose.yml`:
+  tool sandbox tak tersedia (tanpa Docker CLI/socket) — **didokumentasikan,
+  sengaja tidak di-mount docker.sock** (= root host).
+
+### 🟢 Rendah (semua diperbaiki)
+- Trigger skill `LIKE '%<60 char task>%'` hampir tak pernah cocok → pencocokan
+  substring literal atau ≥60% kata.
+- Sinyal koreksi terlalu longgar (`harusnya`, `should be`, `no, `, "salah
+  satu") → sinyal lemah hanya di awal pesan, batas kata.
+- Crystallizer tanpa `tenant_id`; task `_post_turn` tanpa referensi kuat.
+- `RoleNegotiator` tak dipakai di mana pun — **sengaja dibiarkan** (bagian
+  Inovasi 4, CLAUDE.md §6 melarang memangkasnya).
+
+Diverifikasi via `uv run`: **1205 passed** (dari 1118; +87 test di 3 file baru
+`test_credential_hardening.py`, `test_memory_isolation.py`,
+`test_provider_adapters.py` + tambahan di file existing), ruff check/format
+bersih, tanpa dependency baru (httpcore sudah dependency transitif httpx).
+Plus `tests/conftest.py` baru: memulihkan `infra.config.CONFIG` antar test.
+
+---
+
 ## Sumber riset tren (dicari 2026-07-27)
 
 - [The best AI agent frameworks in 2026](https://www.langchain.com/resources/ai-agent-frameworks)

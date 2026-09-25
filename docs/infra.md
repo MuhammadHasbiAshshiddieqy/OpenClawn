@@ -26,10 +26,13 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `auth_token` | `""` (kosong) | §P0 self-host auth — password shared satu-satunya user. Kosong = mode shared-secret DIMATIKAN (default, aman localhost). Isi via `OPENCLAWN_AUTH_TOKEN` di `.env` untuk self-host di VPS publik. Lihat `security/auth.py` & README § Scope and Production Posture |
 | `oidc_issuer`, `oidc_client_id`, `oidc_client_secret` | `""` (kosong) | OAuth2/OIDC login (TODO.md § Prioritas 5) — mode auth TAMBAHAN, bukan pengganti shared-secret. Kosong (salah satu saja) = OIDC DIMATIKAN. Isi via `OPENCLAWN_OIDC_ISSUER`/`OPENCLAWN_OIDC_CLIENT_ID`/`OPENCLAWN_OIDC_CLIENT_SECRET`. Lihat `security/oidc.py` |
 | `oidc_redirect_base` | `http://localhost:8000` | Base URL publik server, dipakai membangun `redirect_uri` callback (`{ini}/auth/callback`). HARUS diisi eksplisit (`OPENCLAWN_OIDC_REDIRECT_BASE`) untuk self-host di belakang reverse proxy/domain kustom |
+| `oidc_allowed_emails`, `oidc_allowed_domains` | `()` (kosong) | Audit 2026-09-25 (#12) — allowlist login OIDC (email persis / domain email, lowercase). Diisi → email WAJIB `email_verified` & cocok salah satu; kosong keduanya → semua akun yang lolos di IdP boleh masuk (perilaku lama; startup me-log `startup_oidc_no_allowlist`). **Wajib diisi untuk IdP publik (Google).** Env `OPENCLAWN_OIDC_ALLOWED_EMAILS` / `OPENCLAWN_OIDC_ALLOWED_DOMAINS` (koma) |
 | `session_secret` | acak per-boot (`secrets.token_urlsafe(32)`) | Secret HMAC untuk menandatangani cookie sesi. `from_env()` resolve: `auth_token` (bila diisi, kompatibilitas mundur) → `OPENCLAWN_SESSION_SECRET` eksplisit → fallback acak. **Operator OIDC-only (tanpa `auth_token`) HARUS mengisi `OPENCLAWN_SESSION_SECRET`** agar sesi tak hilang tiap restart server |
 | `connector_url` | `""` (kosong) | URL dashboard [OpenConnector](https://github.com/oomol-lab/open-connector) (third-party, opsional, Apache-2.0) — dipakai untuk entry point link di sidebar Web UI (`_ui_ctx()` → `web/templates/_sidebar.html`). Kosong (default) = link TIDAK ditampilkan, integrasi tetap opt-in. Isi via `OPENCLAWN_CONNECTOR_URL` bila container `connector` dijalankan (`docker-compose.yml` § profile `connector`) — `http://localhost:3000` untuk dev, subdomain publik untuk deployment (`Caddyfile.example` § `connector.example.com`). Lihat `docs/tools.md` § Integrasi OpenConnector |
 | `auth_active` | *(property, bukan field)* | `True` bila SALAH SATU mode auth (`auth_token` ATAU OIDC) aktif — dipakai middleware, BUKAN `bool(auth_token)` lama yang tak tahu soal OIDC-only |
 | `idle_timeout_sec` | `None` (OFF) | Opt-in, TODO.md § Prioritas 1.5 — logout otomatis setelah N detik TAK aktif (beda dari `SESSION_MAX_AGE_SEC` = absolute expiry 7 hari sejak login, tetap berlaku sebagai batas atas). Isi via `OPENCLAWN_IDLE_TIMEOUT_SEC` di `.env`. Hanya berpengaruh bila auth aktif (`auth_active`). Lihat `security/auth.py` & middleware `auth_and_csrf_middleware` di `web/main.py` |
+| `workdir_allowed_roots` | `()` (kosong) | Audit 2026-09-25 (#1, kritis) — allowlist root folder kerja per-sesi (field UI `workdir` / tool `set_workdir`). Kosong → `default_workdir_roots()`: home user + `workspace_root` bila auth nonaktif; **tak ada override sama sekali** bila auth aktif. Saat auth aktif hanya **admin** yang boleh memakai allowlist ini (member/viewer: tuple kosong). Env `OPENCLAWN_WORKDIR_ROOTS` (dipisah `os.pathsep`, mis. `/srv/a:/srv/b`) |
+| `http_vault_allowed_keys` | `()` (kosong) | Audit 2026-09-25 (#3) — nama env var yang boleh dipakai sebagai `vault:KEY` di header `http_request`. Kosong → semua KECUALI credential aplikasi (`OPENCLAWN_*`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `TAVILY_API_KEY`) yang SELALU ditolak. Env `OPENCLAWN_HTTP_VAULT_KEYS` (koma) |
 | `max_context_tokens` | `28_000` | Batas token context window |
 | `max_tool_hops` | `5` | Maksimum iterasi tool loop per turn |
 | `llm_max_tokens_default` | `4096` | Cap output per hop LLM saat hop TANPA tool (`tools_schema` kosong, mis. ringkas percakapan di `_maybe_compact`) |
@@ -239,7 +242,15 @@ Batasi akses filesystem tool ke satu folder kerja (keamanan #1), plus folder ker
 
 ### Fungsi: `resolve_in_workspace(candidate, workspace_root) → Path`
 
-Resolve `candidate` dan pastikan tetap di dalam `workspace_root`. Me-raise `WorkspaceViolation` bila keluar (lewat `..`, absolute path, atau symlink).
+Resolve `candidate` dan pastikan tetap di dalam `workspace_root`. Me-raise `WorkspaceViolation` bila keluar (lewat `..`, absolute path, atau symlink) **atau** bila path sensitif (`is_sensitive_path`, audit 2026-09-25 #3) — berlaku untuk semua tool file dan `GET /workspace/download`.
+
+### Fungsi: `is_sensitive_name(name) → bool` / `is_sensitive_path(path, config=None) → bool`
+
+Audit 2026-09-25 (#3). `is_sensitive_name`: satu komponen path adalah credential yang dikenal — `.env`, `.env.*` (kecuali `.env.example`/`.sample`/`.template`), `.ssh`, `.aws`, `.gnupg`, `.docker`, `.kube`, `.netrc`, `.pgpass`, `.git-credentials`, `.npmrc`, `.pypirc`. `is_sensitive_path`: SEMUA komponen path absolut dicek, plus file data internal (`db_path` + `-wal`/`-shm`/`-journal`, `audit_anchor_path`). `config` None → `infra.config.CONFIG` dibaca saat dipanggil (bukan diikat saat import). Dipakai juga `tools/sandbox.py::_sensitive_masks` untuk menutupi file ini di mount sandbox.
+
+### Fungsi: `default_workdir_roots(config=None) → tuple[str, ...]` / `effective_workdir_roots() → tuple[str, ...]`
+
+Allowlist root folder kerja (audit 2026-09-25 #1). `default_workdir_roots`: `config.workdir_allowed_roots` bila diisi; else auth nonaktif → `(home, workspace_root)`; else auth aktif → `()`. `effective_workdir_roots`: ContextVar `CURRENT_WORKDIR_ROOTS` bila diset (AgentLoop dari `AgentConfig.workdir_roots`; diwarisi subtask Task Graph), else default.
 
 ### Fungsi: `effective_workspace_root(config_default) → str`
 
@@ -249,9 +260,9 @@ Resolve `candidate` dan pastikan tetap di dalam `workspace_root`. Me-raise `Work
 
 `resolve_in_workspace` yang root-nya ikut `effective_workspace_root` — dipakai tool file (`tools/file_ops.py` dll.) menggantikan `resolve_in_workspace(path, CONFIG.workspace_root)` langsung, agar folder kerja per-sesi otomatis terpakai tanpa mengubah signature `Tool.execute()`.
 
-### Fungsi: `validate_workdir_candidate(raw) → tuple[str | None, str | None]`
+### Fungsi: `validate_workdir_candidate(raw, allowed_roots=None) → tuple[str | None, str | None]`
 
-Validasi folder kerja pilihan user SEBELUM dipakai sebagai workspace root — fail-closed: path tak lolos TIDAK PERNAH diteruskan ke ContextVar/DB. Return `(resolved_path, None)` bila valid, `(None, error_message)` bila tidak. Sengaja permisif soal LOKASI (user boleh pilih folder mana pun di mesinnya — kebalikan `resolve_in_workspace` yang membatasi ke SATU root) — hanya mengecek path benar-benar ada & direktori. Dipakai DUA jalur: field UI (`web/main.py` § `GET /workdir/check`, `/chat/stream`) dan tool `set_workdir` (`tools/workspace_tool.py`) — satu sumber kebenaran.
+Validasi folder kerja pilihan user SEBELUM dipakai sebagai workspace root — fail-closed: path tak lolos TIDAK PERNAH diteruskan ke ContextVar/DB. Return `(resolved_path, None)` bila valid, `(None, error_message)` bila tidak. Syarat: ada & direktori, **di dalam salah satu `allowed_roots`** (None → `effective_workdir_roots()`; tuple kosong → selalu ditolak), dan bukan folder credential. **Audit 2026-09-25 (#1, kritis):** sebelumnya permisif soal lokasi (termasuk `/`) — user login mana pun bisa membaca `/proc/self/environ`/DB lewat `file_read` tanpa approval. Dipakai: field UI (`web/main.py` § `GET /workdir/check`, `/chat/stream`, `/converse/stream`, `/workspace/download`), tool `set_workdir`, dan `AgentLoop.run()` (validasi ulang folder tersimpan di `session_workspace` — baris lama di luar allowlist diabaikan).
 
 ### Kelas: `SessionWorkspaceStore`
 

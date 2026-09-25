@@ -475,9 +475,11 @@ dikonfigurasi harus verifikasi ketat, tanpa pengecualian.
 
 ### Dataclass: `OIDCClaims`
 
-`subject`, `email`, `name` — klaim ID token yang relevan setelah verifikasi berhasil.
+`subject`, `email`, `name`, `email_verified` — klaim ID token yang relevan setelah verifikasi berhasil. `email_verified` (audit 2026-09-25) menerima boolean JSON maupun string `"true"`; default `False`.
 
 ### Fungsi
+
+**`is_login_allowed(claims, allowed_emails, allowed_domains) → tuple[bool, str]`** — audit 2026-09-25 (#12). Allowlist kosong keduanya → `(True, "")` (perilaku lama; startup me-log peringatan). Diisi → email wajib ada DAN `email_verified`, lalu cocok persis dengan `allowed_emails` atau domainnya ada di `allowed_domains`. Sebelumnya akun APA PUN yang lolos di IdP otomatis jadi member (akun pertama jadi admin) — dengan IdP publik berarti siapa saja di internet. Dipanggil `GET /auth/callback` SEBELUM user di-upsert.
 
 **`generate_state() → str`** / **`generate_nonce() → str`**  
 Token acak (`secrets.token_urlsafe(32)`) untuk anti-CSRF (state) dan anti-replay (nonce).

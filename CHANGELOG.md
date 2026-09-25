@@ -7,6 +7,36 @@ pre-release (`-alpha`) menjadi rilis stabil pertama.
 
 ## [Unreleased]
 
+### Fixed — Cross-layer audit (TODO.md § 17)
+
+A whole-codebase pass focused on the seams *between* modules — issues that the earlier per-layer audits couldn't see. Every critical/high finding was reproduced in isolation before the fix, and the same reproduction scripts were re-run afterwards.
+
+**Critical — data/credential exposure**
+- **Unrestricted working directory.** `set_workdir` (no approval) and the UI `workdir` field accepted any folder, including `/`. Any logged-in user could read `/proc/self/environ` (every API key plus `OPENCLAWN_ENCRYPTION_KEY`) through `file_read`, or download the whole multi-tenant DB through `/workspace/download`. Folders now have to sit inside an allowlist: `OPENCLAWN_WORKDIR_ROOTS`, defaulting to home + workspace without auth. With auth on, only admins can switch folders, and only inside that list. Saved folders are re-validated on every turn and on every download.
+- **Memory leaking across users.** The L1 `last_summary` checkpoint was one row per *role*, so user A's last answer was injected into user B's prompt on every turn. L4 archives were searched across all sessions. L1 is now per session and L4 per session owner.
+- **Zero-approval credential exfiltration.** The default workspace `.` contains `.env`, and both `file_read` and `web_fetch` need no approval. Credential files (`.env*`, `.ssh`, `.aws`, …) and the app's DB are now refused by every file tool and masked in `shell_run`/`git_*` sandbox mounts. `http_request` rejects `vault:` refs to the app's own secrets (optional allowlist `OPENCLAWN_HTTP_VAULT_KEYS`), and trust mode can no longer skip approval for `vault:` requests.
+
+**High — core innovations & LLM path**
+- **Innovation 2 (decay) was broken.** The throttle state lived on a per-request instance, so decay ran on every turn, and each pass re-applied `0.97^days_since_used`. Reproduced: a skill unused for 2 days dropped from 1.0 to 0.54 in 10 turns. The throttle is now stored in the DB with an atomic claim, decay is incremental since the last pass, and `last_used_at` is written in UTC.
+- **Innovation 3's evaluator ≥ generator rule could be bypassed** through the fallback chain. An evaluator that falls back is now treated as unverified (the skill stays draft), and turns answered by more than one model report a mixed generator.
+- **A missing API key crashed the turn** instead of falling back. The Vault's `ValueError` is now mapped to `ProviderUnavailable`, and skill-feedback resolution is fail-soft.
+- **Claude tool calling never worked**: inputs were always `{}`, input tokens were lost, and `role: "tool"` messages came back as HTTP 400. **Gemini never saw tool results. Ollama received Anthropic-format tool schemas.** Explicit per-provider message and tool adapters were added. Tool calls now carry IDs, every tool call in a hop runs (previously only the last), token usage is summed across hops, only transient errors are retried, and Anthropic stream `error` events trigger fallback.
+- `grep`/`glob` followed symlinks out of the workspace; scans now also run off the event loop.
+- RBAC: `db_query` is admin-only in multi-user mode and never reads `users`/`mcp_servers`. The `viewer` role is now actually read-only.
+- OIDC gains an email/domain allowlist (`OPENCLAWN_OIDC_ALLOWED_EMAILS` / `_DOMAINS`, which requires `email_verified`). An empty allowlist keeps the old permissive behaviour and logs a startup warning.
+
+**Medium / low**
+- The SSRF check now also runs at connect time: a custom httpcore network backend closes the DNS-rebinding window.
+- `/chat/stream` checks who owns the `session_id`.
+- Timed-out docker processes are killed; `run_python` no longer crashes on non-UTF8 output.
+- The `/\evil.com` open redirect is closed.
+- The production image no longer installs `[dev]` extras.
+- Skill trigger matching now uses word overlap. Previously the query had to contain the first 60 characters of the original task verbatim.
+- Correction detection is less noisy.
+- The crystallizer is tenant-scoped, and a strong reference to the `_post_turn` task is kept.
+
+87 new tests (1205 passed, up from 1118), ruff clean, no new dependencies.
+
 ### Fixed — CRITICAL: path traversal via `role` → arbitrary soul.toml load (TODO.md § 16)
 
 Found while auditing the frontend (tracing where `chat.js`'s `role` form field ends up server-side). The `role` string was used completely unvalidated to build a filesystem path in four places — `core/agent_loop.py`, `core/router.py`, `core/late_execute.py`, `core/task_graph.py` all did the equivalent of `open(f"roles/{role}/soul.toml")` with no check that `role` was one of the actual configured roles.
