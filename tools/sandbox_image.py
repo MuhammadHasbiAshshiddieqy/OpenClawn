@@ -10,6 +10,8 @@ folder kerja adaptif) — model TIDAK perlu memanggil tool lain untuk
 "memilih" image.
 """
 
+import re
+
 from infra.config import CONFIG
 from infra.sandbox_image import SessionSandboxImageStore
 from infra.workspace import WorkspaceViolation, resolve_in_current_workspace
@@ -18,6 +20,29 @@ from tools.sandbox import DockerSandbox, SandboxUnavailable
 
 MAX_REQUIREMENTS_BYTES = 20_000
 MAX_REQUIREMENTS_LINES = 200
+
+# Audit 2026-09-25: allowlist bentuk baris — HANYA paket dari index by nama
+# (PEP 508 tanpa URL): nama, extras, penentu versi, environment marker. Sebelumnya
+# hanya baris berawalan "-" yang ditolak, sehingga `pkg @ https://...`,
+# `https://.../x.whl`, `git+https://...`, path lokal & `file://` tetap diinstal
+# saat build ber-network (bertentangan dengan klaim docstring di bawah).
+_REQ_NAME_SPEC = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*"  # nama
+    r"(\[[A-Za-z0-9._,\s-]+\])?"  # extras
+    r"\s*((===|==|!=|<=|>=|~=|<|>)\s*[A-Za-z0-9.*+!_-]+"
+    r"(\s*,\s*(===|==|!=|<=|>=|~=|<|>)\s*[A-Za-z0-9.*+!_-]+)*)?\s*$"
+)
+# `--hash` pin per baris adalah fitur KEAMANAN (pip --require-hashes) — diizinkan.
+_HASH_OPT = re.compile(r"\s+--hash=sha(256|384|512):[0-9a-fA-F]+")
+
+
+def _requirement_line_ok(line: str) -> bool:
+    body = line.split(" #", 1)[0].strip()
+    body = _HASH_OPT.sub("", " " + body).strip()
+    spec, _, marker = body.partition(";")
+    if "://" in marker or "@" in marker:
+        return False
+    return bool(_REQ_NAME_SPEC.match(spec.strip()))
 
 
 def _validate_requirements(content: str) -> str | None:
@@ -45,6 +70,11 @@ def _validate_requirements(content: str) -> str | None:
             continue
         if stripped.startswith("-"):
             return f"baris opsi pip ditolak (tak diizinkan): '{stripped}'"
+        if not _requirement_line_ok(stripped):
+            return (
+                f"baris ditolak: '{stripped}' — hanya paket index by nama/versi "
+                "(tanpa URL, VCS, path lokal, atau opsi pip selain --hash)"
+            )
     return None
 
 

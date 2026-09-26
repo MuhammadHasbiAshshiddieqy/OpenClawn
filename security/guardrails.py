@@ -109,14 +109,35 @@ _LEAK_PATTERNS = [
 # PII umum. Konservatif untuk hindari false-positive berlebih; redaksi, bukan blokir.
 _PII_PATTERNS: list[tuple[str, str]] = [
     ("email", r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
-    # Kartu kredit 13-16 digit (boleh berspasi/strip). Luhr tidak dicek (heuristik).
+    # Kartu kredit 13-16 digit (boleh berspasi/strip) — divalidasi Luhn di PIIRail
+    # (audit 2026-09-25: tanpa Luhn, timestamp/ID pesanan ikut diredaksi).
     ("credit_card", r"\b(?:\d[ -]*?){13,16}\b"),
-    # Kunci API umum (sk-..., ghp_..., AIza..., AKIA...).
+    # Kunci API umum. Audit 2026-09-25: pola lama `sk-[A-Za-z0-9]{20,}` berhenti di
+    # tanda hubung — kunci Anthropic (`sk-ant-api03-...`, kredensial UTAMA proyek
+    # ini) dan OpenAI `sk-proj-...` TIDAK PERNAH diredaksi. Ditambah Tavily,
+    # GitHub fine-grained, Slack.
     (
         "api_key",
-        r"\b(?:sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_\-]{20,}|AKIA[A-Z0-9]{16})\b",
+        r"\b(?:sk-[A-Za-z0-9_\-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
+        r"|AIza[A-Za-z0-9_\-]{20,}|AKIA[A-Z0-9]{16}|tvly-[A-Za-z0-9_\-]{16,}"
+        r"|xox[abprs]-[A-Za-z0-9\-]{10,})",
     ),
 ]
+
+
+def _luhn_ok(candidate: str) -> bool:
+    """Checksum Luhn — nomor kartu sungguhan lolos, deret digit acak umumnya tidak."""
+    digits = [int(c) for c in candidate if c.isdigit()]
+    if not 13 <= len(digits) <= 19:
+        return False
+    total = 0
+    for i, d in enumerate(reversed(digits)):
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
 
 
 class PromptLeakRail(Rail):
@@ -149,7 +170,12 @@ class PIIRail(Rail):
         findings: list[str] = []
         redacted = text
         for label, pat in _PII_PATTERNS:
-            new = re.sub(pat, self.MASK, redacted)
+            if label == "credit_card":
+                new = re.sub(
+                    pat, lambda m: self.MASK if _luhn_ok(m.group(0)) else m.group(0), redacted
+                )
+            else:
+                new = re.sub(pat, self.MASK, redacted)
             if new != redacted:
                 findings.append(label)
                 redacted = new

@@ -16,6 +16,10 @@ from collections import defaultdict
 # turn cepat berturut-turut), ketat untuk mencegah spam/DoS otomatis.
 DEFAULT_MAX_REQUESTS = 20
 DEFAULT_WINDOW_SEC = 60
+# Audit 2026-09-25: key yang jendelanya sudah kosong SEBELUMNYA tak pernah
+# dibuang — satu entri permanen per IP/klien yang pernah datang. Sapu bila
+# jumlah key melewati ambang ini.
+_SWEEP_ABOVE_KEYS = 64
 
 
 class RateLimiter:
@@ -36,6 +40,8 @@ class RateLimiter:
         """
         now = time.monotonic()
         cutoff = now - self.window_sec
+        if len(self._hits) > _SWEEP_ABOVE_KEYS:
+            self._sweep(cutoff)
         hits = self._hits[key]
         # Buang hit lama di luar window (housekeeping ringan, O(n) per key kecil).
         while hits and hits[0] < cutoff:
@@ -44,6 +50,11 @@ class RateLimiter:
             return False
         hits.append(now)
         return True
+
+    def _sweep(self, cutoff: float) -> None:
+        """Buang key yang semua hit-nya sudah di luar window."""
+        for k in [k for k, v in self._hits.items() if not v or v[-1] < cutoff]:
+            del self._hits[k]
 
     def remaining(self, key: str) -> int:
         """Sisa kuota di window saat ini — untuk header X-RateLimit-Remaining.

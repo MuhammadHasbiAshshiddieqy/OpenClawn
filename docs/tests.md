@@ -82,6 +82,18 @@ Audit 2026-09-25 (#7-#9) — payload HTTP NYATA per provider via `httpx.MockTran
 
 ---
 
+### `tests/test_guardrails.py`
+
+Test `security/guardrails.py` (rail input/output) + `core/guardrails_config.py`. Baris di bawah adalah tambahan audit 2026-09-25; test lama file ini mencakup blokir injection, blokir kebocoran system prompt, redaksi PII dasar, dan toggle rail.
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_pii_rail_redacts_modern_api_keys` (parametrize) | `sk-ant-…`, `sk-proj-…`, `tvly-`, `github_pat_` diredaksi (dulu kunci Anthropic lolos) |
+| `test_credit_card_requires_luhn` | Deret digit non-Luhn tak diredaksi, kartu valid diredaksi |
+| `test_mentioning_system_prompt_is_not_injection` | Menyebut "system prompt" bukan injeksi; pola serangan tetap diblokir |
+
+---
+
 ### `tests/test_router.py`
 
 Test untuk `core/router.py` (Inovasi 1 — routing).
@@ -735,6 +747,8 @@ Test untuk `security/` — Shield, Vault, ApprovalGate (HITL).
 | `test_auto_approve_stores_task_id_and_node_id` | `task_id`/`node_id` opsional tersimpan lewat `auto_approve()` |
 | `test_request_stores_task_id_and_node_id` | `task_id`/`node_id` opsional tersimpan lewat `request()` |
 
+| `test_idle_refresh_does_not_extend_absolute_expiry` | Audit 2026-09-25: refresh idle timeout tak memperpanjang batas 7 hari (dulu valid >30 hari) |
+| `test_legacy_three_part_token_still_valid` / `test_tampered_issued_at_rejected` | Kompatibilitas token lama; `iat` tak bisa dipalsukan |
 ---
 
 ### `tests/test_tools.py`
@@ -1142,6 +1156,11 @@ Test end-to-end untuk `auth_and_csrf_middleware` di `web/main.py` (bukan unit
 | `test_rate_limit_key_stable_across_idle_cookie_refresh` | **[Audit 2026-08-27]** Kunci `RateLimiter` (`fixture client_auth_idle`) tetap `user:{id}` yang SAMA meski cookie sesi berbeda (mensimulasikan refresh idle-timeout) — sebelumnya kunci ikut berubah tiap cookie, membuat rate limit tak efektif untuk user terautentikasi |
 
 | `test_safe_next` (parametrize) | Audit 2026-09-25: `//evil`, `/\evil`, URL absolut, CR/LF → `/` |
+| `test_rate_limit_not_bypassed_by_forged_session_cookie` / `test_rate_limiter_drops_idle_keys` | Audit 2026-09-25: kunci rate limit = IP saat auth OFF; key idle disapu |
+| `test_cross_site_post_blocked_without_auth` | Reproduksi (kritis): POST lintas-situs ke `/mcp/add` tanpa auth → 403, server tak dimuat |
+| `test_unsafe_methods_reject_foreign_origin` (parametrize) | `Sec-Fetch-Site` cross/same-site, `Origin` asing/`null` → 403 |
+| `test_same_origin_post_still_allowed` | POST same-origin tetap lolos gerbang |
+| `test_dns_rebinding_host_rejected_without_auth` | Host asing ditolak saat auth OFF; localhost lolos |
 ---
 
 ### `tests/test_oidc.py`
@@ -1487,6 +1506,8 @@ Sandbox proyek besar/kompleks (§ Prioritas 8.3 — keputusan owner: opsi (a), i
 | `test_no_sandbox_image_leaves_contextvar_unset` | Sesi yang tak pernah `build_sandbox_image` → ContextVar tetap `None` sepanjang turn |
 | `test_build_sandbox_image_registered_and_requires_approval` | Terdaftar di `TOOL_REGISTRY`, `requires_approval=True`, ada di `_TRUST_MODE_EXEMPT` |
 
+| `test_requirements_rejects_non_index_sources` (parametrize) | Audit 2026-09-25: URL/VCS/path/`file://`/opsi per-baris ditolak |
+| `test_requirements_allows_plain_index_packages` / `test_requirements_allows_hash_pinned_lines` | Paket index biasa, marker, extras, `--hash` tetap diterima |
 ---
 
 ### `tests/test_sandbox_lifecycle.py`

@@ -1908,6 +1908,35 @@ Diperiksa, bersih: `EventBus` percakapan multi-agent dibuat per orkestrator
 
 1213 passed (+8), ruff bersih.
 
+### Putaran 3 — `security/` + sisa tools (2026-09-26)
+
+- 🔴 **CSRF lintas-situs → RCE saat auth nonaktif (default).** Auth OFF =
+  CSRF OFF; POST lintas-situs ke `localhost:8000/mcp/add` mendaftarkan server
+  MCP stdio (`sh -c ...`) dan langsung menjalankannya di host — direproduksi.
+  Juga `/chat/stream` + `trust_mode=true`, `/settings`, `/skills/import`.
+  **Diperbaiki:** gerbang origin (`Sec-Fetch-Site`/`Origin` vs `Host`) untuk
+  semua method pengubah state, SELALU aktif; plus allowlist Host saat auth
+  nonaktif (anti DNS rebinding, `OPENCLAWN_ALLOWED_HOSTS`). *Perubahan
+  perilaku:* tanpa auth, akses via IP LAN/domain lain kini 403 kecuali host
+  didaftarkan — disengaja (lebih baik aktifkan auth).
+- 🟠 **Batas absolut sesi 7 hari tak berlaku saat idle timeout aktif** —
+  refresh cookie me-reset satu-satunya timestamp; direproduksi valid >30
+  hari. Token kini membawa `iat` (waktu login) terpisah dari `ts`.
+- 🟠 **Kunci API Anthropic tak pernah diredaksi PII rail** (regex berhenti di
+  tanda hubung `sk-ant-`); ditambah `sk-proj-`, `tvly-`, `github_pat_`,
+  Slack. Kartu kredit kini wajib Luhn (dulu timestamp/ID ikut diredaksi).
+- 🟡 **Input rail memblokir pesan apa pun yang menyebut "system prompt"**
+  (pola Shield terlalu lebar) → pola serangan spesifik.
+- 🟡 **Rate limit bisa di-bypass saat auth OFF** dengan cookie sesi acak
+  (kunci = cookie mentah) → kunci = IP; key idle disapu (dulu bocor memori).
+- 🟡 **`build_sandbox_image` menerima URL/VCS/path langsung** di
+  requirements (docstring mengklaim dicegah) → allowlist PEP 508 by-nama.
+
+Diperiksa, bersih: `ApprovalGate` request/resolve/listing (konsisten dengan
+gerbang kepemilikan web), `QuestionGate`.
+
+1240 passed (+27), ruff bersih.
+
 ---
 
 ## Sumber riset tren (dicari 2026-07-27)

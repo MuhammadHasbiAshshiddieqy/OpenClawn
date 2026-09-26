@@ -187,6 +187,12 @@ class AppConfig:
     # aplikasi sendiri (`OPENCLAWN_*`, API key LLM/Tavily — lihat tools/web.py).
     # Env: `OPENCLAWN_HTTP_VAULT_KEYS` (dipisah koma).
     http_vault_allowed_keys: tuple = ()
+    # Audit 2026-09-25 (kritis): Host header tambahan yang diterima SAAT AUTH
+    # NONAKTIF (selain localhost/127.0.0.1/::1). Tanpa auth, server hanya aman
+    # diakses dari mesin itu sendiri — domain penyerang yang di-resolve ke
+    # 127.0.0.1 (DNS rebinding) dianggap same-origin oleh browser dan bisa
+    # mengendalikan agent. Env: `OPENCLAWN_ALLOWED_HOSTS` (koma, tanpa port).
+    allowed_hosts: tuple = ()
     # Batas hasil tool agar tidak membanjiri context (token-first §1.4).
     tool_max_output: int = 10_000
     # Timeout keras per eksekusi tool (§1.3 kegagalan anggun): tool yang menggantung
@@ -302,6 +308,11 @@ class AppConfig:
                 p.strip()
                 for p in os.environ.get("OPENCLAWN_WORKDIR_ROOTS", "").split(os.pathsep)
                 if p.strip()
+            ),
+            allowed_hosts=tuple(
+                h.strip().lower()
+                for h in os.environ.get("OPENCLAWN_ALLOWED_HOSTS", "").split(",")
+                if h.strip()
             ),
             http_vault_allowed_keys=tuple(
                 k.strip()

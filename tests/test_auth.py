@@ -56,15 +56,15 @@ def test_malformed_token_wrong_part_count_rejected():
 def test_tampered_timestamp_rejected():
     """Ubah timestamp tanpa mengubah signature → signature tak lagi cocok."""
     token = create_session_token("secret123")
-    ts, uid, sig = token.split(".")
-    tampered = f"{int(ts) + 1000}.{uid}.{sig}"
+    ts, uid, iat, sig = token.split(".")
+    tampered = f"{int(ts) + 1000}.{uid}.{iat}.{sig}"
     assert verify_session_token(tampered, "secret123") == (False, None)
 
 
 def test_tampered_signature_rejected():
     token = create_session_token("secret123")
-    ts, uid, sig = token.split(".")
-    tampered = f"{ts}.{uid}.{'0' * len(sig)}"
+    ts, uid, iat, sig = token.split(".")
+    tampered = f"{ts}.{uid}.{iat}.{'0' * len(sig)}"
     assert verify_session_token(tampered, "secret123") == (False, None)
 
 
@@ -72,8 +72,8 @@ def test_tampered_user_id_rejected():
     """Ubah user_id tanpa mengubah signature → signature tak lagi cocok
     (mencegah privilege escalation dengan menukar user_id di cookie)."""
     token = create_session_token("secret123", user_id=1)
-    ts, _, sig = token.split(".")
-    tampered = f"{ts}.999.{sig}"
+    ts, _, iat, sig = token.split(".")
+    tampered = f"{ts}.999.{iat}.{sig}"
     assert verify_session_token(tampered, "secret123") == (False, None)
 
 

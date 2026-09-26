@@ -427,3 +427,84 @@ def test_safe_next(target, expected):
     import web.main as web_main
 
     assert web_main._safe_next(target) == expected
+
+
+def test_rate_limit_not_bypassed_by_forged_session_cookie(client_no_auth):
+    """Audit 2026-09-25: saat auth nonaktif, kunci rate limit SEBELUMNYA diambil
+    dari cookie sesi MENTAH (tak diverifikasi) — cookie acak per request = kuota
+    baru tiap kali, batas biaya LLM hilang."""
+    import web.main as web_main
+
+    for _ in range(web_main._rate_limiter.max_requests):
+        web_main._rate_limiter.allow("testclient")
+    client_no_auth.cookies.set("openclawn_session", "forged-random-value")
+    resp = client_no_auth.post(
+        "/chat/stream", data={"message": "hi", "role": "pm", "session_id": "s1"}
+    )
+    assert resp.status_code == 429
+
+
+def test_rate_limiter_drops_idle_keys():
+    from security.rate_limit import RateLimiter
+
+    rl = RateLimiter(max_requests=1, window_sec=0)
+    for i in range(500):
+        rl.allow(f"k{i}")
+    assert len(rl._hits) <= 70  # dulu 500: satu entri permanen per key
+
+
+# ── Audit 2026-09-25 (kritis): CSRF lintas-situs & DNS rebinding saat auth OFF ──
+
+
+def test_cross_site_post_blocked_without_auth(client_no_auth):
+    """SEBELUMNYA: auth nonaktif = CSRF nonaktif — situs mana pun yang dibuka
+    developer bisa POST /mcp/add (server MCP stdio = perintah arbitrer di host)."""
+    from unittest.mock import patch
+
+    with patch("core.mcp_registry.MCPRegistry.load_all", return_value={}) as load_all:
+        resp = client_no_auth.post(
+            "/mcp/add",
+            data={"name": "pwn", "transport": "stdio", "command": "sh -c id"},
+            headers={"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 403
+    assert not load_all.called
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Sec-Fetch-Site": "cross-site"},
+        {"Sec-Fetch-Site": "same-site"},
+        {"Origin": "https://evil.example"},
+        {"Origin": "null"},
+    ],
+)
+def test_unsafe_methods_reject_foreign_origin(client_no_auth, headers):
+    resp = client_no_auth.post(
+        "/chat/stream", data={"message": "hi", "role": "pm", "trust_mode": "true"}, headers=headers
+    )
+    assert resp.status_code == 403
+
+
+def test_same_origin_post_still_allowed(client_no_auth):
+    resp = client_no_auth.post(
+        "/workdir/check",  # GET-only endpoint → 405, bukan 403: lolos gerbang origin
+        headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"},
+    )
+    assert resp.status_code != 403
+    resp = client_no_auth.post(
+        "/converse/stop",
+        data={"session_id": "none"},
+        headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"},
+    )
+    assert resp.status_code != 403
+
+
+def test_dns_rebinding_host_rejected_without_auth(client_no_auth):
+    """Domain penyerang yang di-resolve ke 127.0.0.1 = same-origin di mata
+    browser; Host header-nya tetap domain penyerang → ditolak saat auth OFF."""
+    resp = client_no_auth.get("/", headers={"Host": "attacker.example"})
+    assert resp.status_code == 403
+    assert client_no_auth.get("/health", headers={"Host": "localhost:8000"}).status_code == 200

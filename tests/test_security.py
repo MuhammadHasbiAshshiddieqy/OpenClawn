@@ -453,3 +453,54 @@ async def test_request_stores_task_id_and_node_id(db, fast_config):
     row = await db.fetchone("SELECT task_id, node_id FROM approval_log WHERE approval_id='a_tg2'")
     assert row["task_id"] == "task-3"
     assert row["node_id"] == "node-c"
+
+
+# ── Audit 2026-09-25: batas absolut sesi tak boleh diperpanjang refresh idle ──
+
+
+def test_idle_refresh_does_not_extend_absolute_expiry():
+    """SEBELUMNYA refresh cookie (idle timeout) me-reset satu-satunya timestamp
+    token — sesi aktif (atau cookie curian) valid selamanya."""
+    from unittest.mock import patch
+
+    from security.auth import (
+        SESSION_MAX_AGE_SEC,
+        create_session_token,
+        token_issued_at,
+        verify_session_token,
+    )
+
+    t0 = 1_000_000_000
+    with patch("security.auth.time.time", return_value=t0):
+        tok = create_session_token("s", user_id=1)
+    expired_on = None
+    for day in range(1, 31):
+        with patch("security.auth.time.time", return_value=t0 + day * 86400):
+            ok, uid = verify_session_token(tok, "s", max_age_sec=2 * 86400)
+            if not ok:
+                expired_on = day
+                break
+            assert uid == 1
+            tok = create_session_token("s", user_id=1, issued_at=token_issued_at(tok))
+    assert expired_on is not None and expired_on * 86400 > SESSION_MAX_AGE_SEC - 86400
+    assert expired_on <= 8
+
+
+def test_legacy_three_part_token_still_valid():
+    import hashlib
+    import hmac as _hmac
+    import time as _time
+
+    from security.auth import verify_session_token
+
+    payload = f"{int(_time.time())}.5"
+    sig = _hmac.new(b"s", payload.encode(), hashlib.sha256).hexdigest()
+    assert verify_session_token(f"{payload}.{sig}", "s") == (True, 5)
+
+
+def test_tampered_issued_at_rejected():
+    from security.auth import create_session_token, verify_session_token
+
+    ts, uid, iat, sig = create_session_token("s", user_id=1).split(".")
+    forged = f"{ts}.{uid}.{int(iat) + 999999}.{sig}"
+    assert verify_session_token(forged, "s") == (False, None)

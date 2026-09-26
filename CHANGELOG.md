@@ -48,6 +48,16 @@ A whole-codebase pass focused on the seams *between* modules — issues that the
 
 8 more tests (1213 passed).
 
+**Third pass (`security/` + remaining tools)**
+- **Critical:** with auth disabled (the default), CSRF protection was off too. Any website a developer visited could POST cross-site to `localhost:8000/mcp/add`, registering and immediately starting an MCP stdio server that runs an arbitrary host command (reproduced). The same held for `/chat/stream` with `trust_mode=true`. State-changing requests are now rejected when they are cross-origin (`Sec-Fetch-Site` / `Origin` vs `Host`), whether or not auth is on. With auth off, the `Host` header must also be local or listed in `OPENCLAWN_ALLOWED_HOSTS`, which blocks DNS rebinding.
+- With idle timeout enabled, the 7-day absolute session limit never applied: every refresh reset the token's only timestamp, and a token was reproduced as still valid after 30 days. Tokens now carry the original login time (`iat`).
+- The PII rail never redacted Anthropic keys (`sk-ant-…`). It now also catches `sk-proj-`, `tvly-`, `github_pat_` and Slack tokens, and credit-card redaction requires a Luhn check.
+- Merely mentioning "system prompt" no longer trips the injection rail.
+- With auth off, the rate limit could be bypassed with a random session cookie. Idle limiter keys are now swept.
+- `build_sandbox_image` accepted URL/VCS/local-path requirements. Lines must now be plain index requirements (PEP 508 by name, `--hash` allowed).
+
+27 more tests (1240 passed).
+
 ### Fixed — CRITICAL: path traversal via `role` → arbitrary soul.toml load (TODO.md § 16)
 
 Found while auditing the frontend (tracing where `chat.js`'s `role` form field ends up server-side). The `role` string was used completely unvalidated to build a filesystem path in four places — `core/agent_loop.py`, `core/router.py`, `core/late_execute.py`, `core/task_graph.py` all did the equivalent of `open(f"roles/{role}/soul.toml")` with no check that `role` was one of the actual configured roles.

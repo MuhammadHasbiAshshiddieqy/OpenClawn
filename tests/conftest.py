@@ -1,8 +1,16 @@
 """Fixture bersama seluruh suite."""
 
-import pytest
+import os
 
-import infra.config as config_mod
+# TestClient FastAPI mengirim `Host: testserver`. Saat auth nonaktif, middleware
+# hanya menerima localhost + OPENCLAWN_ALLOWED_HOSTS (audit 2026-09-25, anti DNS
+# rebinding) — diset SEBELUM infra.config diimpor agar CONFIG (dan setiap reload
+# di test web) ikut membacanya.
+os.environ.setdefault("OPENCLAWN_ALLOWED_HOSTS", "testserver")
+
+import pytest  # noqa: E402
+
+import infra.config as config_mod  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

@@ -479,6 +479,13 @@ network error, signature tak valid, `iss`/`aud`/`exp`/`nonce` tak cocok) →
 `auth_token` kosong yang sengaja fail-open (desain opt-in lama). OIDC yang SUDAH
 dikonfigurasi harus verifikasi ketat, tanpa pengecualian.
 
+### Catatan audit 2026-09-25 (putaran 3)
+
+- **`security/auth.py`:** token kini `{ts}.{uid}.{iat}.{sig}` — `ts` = aktivitas terakhir (di-refresh idle timeout), `iat` = waktu login asli yang dipertahankan saat refresh (`create_session_token(..., issued_at=token_issued_at(old))`). `verify_session_token` menegakkan batas absolut `SESSION_MAX_AGE_SEC` dari `iat`. Sebelumnya refresh me-reset satu-satunya timestamp → sesi aktif/cookie curian tak pernah kedaluwarsa (direproduksi: masih valid setelah 30 hari). Format lama 3-bagian tetap diterima (`iat = ts`).
+- **`security/guardrails.py`:** regex `api_key` kini menangkap `sk-ant-…`/`sk-proj-…` (dulu berhenti di tanda hubung — kunci Anthropic tak pernah diredaksi), `tvly-`, `github_pat_`, `xox?-`; redaksi kartu kredit mewajibkan checksum Luhn (`_luhn_ok`).
+- **`security/shield.py`:** pola bare `"system prompt"` diganti pola serangan (`ignore/bypass… system prompt`, `reveal/print… your system prompt`) — sebelumnya pesan apa pun yang MENYEBUT frasa itu diblokir input rail.
+- **`security/rate_limit.py`:** key yang jendelanya kosong disapu saat jumlah key > 64 (`_sweep`) — sebelumnya satu entri permanen per IP/klien.
+
 ### Dataclass: `OIDCClaims`
 
 `subject`, `email`, `name`, `email_verified` — klaim ID token yang relevan setelah verifikasi berhasil. `email_verified` (audit 2026-09-25) menerima boolean JSON maupun string `"true"`; default `False`.

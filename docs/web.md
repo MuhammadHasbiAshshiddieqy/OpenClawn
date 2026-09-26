@@ -43,6 +43,13 @@ ditandatangani `CONFIG.session_secret` (BUKAN `auth_token` langsung, lihat
    terautentikasi & `RateLimiter._hits` bocor tanpa batas. Detail lengkap:
    `docs/security.md` § `security/rate_limit.py`.
 
+### Gerbang origin & host — SELALU aktif (audit 2026-09-25, kritis)
+
+Dijalankan di awal `auth_and_csrf_middleware`, **termasuk saat auth nonaktif** (sebelumnya auth OFF = CSRF OFF: situs mana pun yang dibuka developer bisa POST lintas-situs ke `localhost:8000/mcp/add` — server MCP stdio = perintah arbitrer di host, langsung dijalankan — atau `/chat/stream` dengan `trust_mode=true`; direproduksi):
+- **Host (hanya saat auth nonaktif):** `_request_host()` harus `localhost`/`127.0.0.1`/`::1` atau ada di `CONFIG.allowed_hosts` → selain itu 403 `host_not_allowed` (anti DNS rebinding).
+- **Origin (semua method selain GET/HEAD/OPTIONS):** `_is_cross_origin()` — `Sec-Fetch-Site` `cross-site`/`same-site`, `Origin: null`, atau `Origin` yang netloc-nya ≠ `Host` → 403 `cross_origin_blocked`. Klien non-browser tanpa kedua header tetap lolos (bukan vektor CSRF). Reverse proxy HARUS mempertahankan header `Host` (default Caddy).
+- **Rate limit:** tanpa user terverifikasi, kunci = IP klien (sebelumnya nilai cookie sesi mentah → cookie acak per request = kuota baru).
+
 ### RBAC, kepemilikan & folder kerja (audit 2026-09-25)
 
 Berlaku hanya bila `CONFIG.auth_active` (auth nonaktif = single-user, perilaku lama).

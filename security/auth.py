@@ -57,8 +57,17 @@ def _sign(payload: str, secret: str) -> str:
     return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
 
-def create_session_token(secret: str, user_id: int | None = None) -> str:
-    """Buat token sesi baru: `{timestamp}.{user_id}.{hmac_hex}`.
+def create_session_token(
+    secret: str, user_id: int | None = None, issued_at: int | None = None
+) -> str:
+    """Buat token sesi: `{ts}.{user_id}.{iat}.{hmac_hex}`.
+
+    `ts` = waktu aktivitas terakhir (di-refresh middleware bila idle timeout
+    aktif); `iat` = waktu LOGIN asli, tak pernah berubah saat refresh.
+    Audit 2026-09-25: sebelumnya token hanya punya `ts` — refresh idle timeout
+    me-reset-nya, sehingga batas absolut `SESSION_MAX_AGE_SEC` (7 hari) tak
+    pernah tercapai selama sesi (atau cookie curian) terus dipakai.
+    `issued_at` None → sekarang (login baru).
 
     `user_id` (TODO.md § Prioritas 5, RBAC): id baris `infra.users.User` pemilik
     sesi — dibutuhkan middleware untuk memuat `request.state.user` tiap request
@@ -66,10 +75,36 @@ def create_session_token(secret: str, user_id: int | None = None) -> str:
     mundur untuk pemanggil yang belum diupdate) → disimpan sebagai string kosong,
     `verify_session_token` mengembalikan `user_id=None` untuk token semacam ini.
     """
-    ts = str(int(time.time()))
+    now = int(time.time())
+    ts = str(now)
+    iat = str(issued_at if issued_at is not None else now)
     uid = str(user_id) if user_id is not None else ""
-    payload = f"{ts}.{uid}"
+    payload = f"{ts}.{uid}.{iat}"
     return f"{payload}.{_sign(payload, secret)}"
+
+
+def _parse(token: str | None) -> tuple[str, str, str, str] | None:
+    """(ts, uid, iat, sig) — menerima format lama `{ts}.{uid}.{sig}` (iat=ts)."""
+    if not token:
+        return None
+    parts = token.split(".")
+    if len(parts) == 3:
+        ts_str, uid_str, sig = parts
+        return ts_str, uid_str, "", sig
+    if len(parts) == 4:
+        return parts[0], parts[1], parts[2], parts[3]
+    return None
+
+
+def token_issued_at(token: str | None) -> int | None:
+    """Waktu login asli (`iat`) dari token yang SUDAH diverifikasi — dipakai
+    middleware agar refresh idle timeout tak memperpanjang batas absolut."""
+    parsed = _parse(token)
+    if parsed is None:
+        return None
+    ts_str, _, iat_str, _ = parsed
+    raw = iat_str or ts_str
+    return int(raw) if raw.isdigit() else None
 
 
 def verify_session_token(
@@ -84,16 +119,22 @@ def verify_session_token(
     payload yang SUDAH diverifikasi signature-nya — aman dipercaya begitu
     `valid=True` (bukan diambil dari cookie terpisah yang bisa dipalsukan lepas).
     """
-    if not token or token.count(".") != 2:
+    parsed = _parse(token)
+    if parsed is None:
         return False, None
-    ts_str, uid_str, sig = token.split(".")
-    if not ts_str.isdigit():
+    ts_str, uid_str, iat_str, sig = parsed
+    if not ts_str.isdigit() or (iat_str and not iat_str.isdigit()):
         return False, None
-    payload = f"{ts_str}.{uid_str}"
+    payload = f"{ts_str}.{uid_str}.{iat_str}" if iat_str else f"{ts_str}.{uid_str}"
     if not hmac.compare_digest(sig, _sign(payload, secret)):
         return False, None
-    age = time.time() - int(ts_str)
+    now = time.time()
+    age = now - int(ts_str)
     if not (0 <= age <= max_age_sec):
+        return False, None
+    # Batas ABSOLUT sejak login — independen dari refresh idle timeout.
+    login_age = now - int(iat_str or ts_str)
+    if not (0 <= login_age <= SESSION_MAX_AGE_SEC):
         return False, None
     user_id = int(uid_str) if uid_str.isdigit() else None
     return True, user_id

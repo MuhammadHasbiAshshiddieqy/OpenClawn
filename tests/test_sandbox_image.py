@@ -392,3 +392,40 @@ def test_build_sandbox_image_registered_and_requires_approval():
     assert "build_sandbox_image" in TOOL_REGISTRY
     assert TOOL_REGISTRY["build_sandbox_image"].requires_approval is True
     assert "build_sandbox_image" in _TRUST_MODE_EXEMPT
+
+
+# ── Audit 2026-09-25: URL/VCS/path langsung ditolak ─────────────────────────
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "evilpkg @ https://attacker.example/evilpkg-1.0.tar.gz",
+        "https://attacker.example/x-1.0-py3-none-any.whl",
+        "git+https://github.com/attacker/repo.git",
+        "requests==2.0 --config-settings=x=y",
+        "./local_pkg",
+        "/abs/path/pkg",
+        "file:///tmp/pkg",
+    ],
+)
+def test_requirements_rejects_non_index_sources(line):
+    """SEBELUMNYA hanya baris berawalan '-' yang ditolak — sumber URL/VCS/lokal
+    (yang docstring klaim dicegah) tetap diinstal saat build ber-network."""
+    from tools.sandbox_image import _validate_requirements
+
+    assert _validate_requirements(f"numpy==1.26.0\n{line}\n") is not None
+
+
+def test_requirements_allows_plain_index_packages():
+    from tools.sandbox_image import _validate_requirements
+
+    content = "numpy==1.26.0\npandas>=2.0; python_version >= '3.10'\nrequests[socks]~=2.31\n"
+    assert _validate_requirements(content) is None
+
+
+def test_requirements_allows_hash_pinned_lines():
+    from tools.sandbox_image import _validate_requirements
+
+    line = "numpy==1.26.0 --hash=sha256:" + "a" * 64
+    assert _validate_requirements(line + "\n") is None

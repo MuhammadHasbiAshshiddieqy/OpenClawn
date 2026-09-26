@@ -5,7 +5,11 @@ DANGER_PATTERNS = [
     # Prompt-injection klasik.
     r"ignore (previous|all) instructions",
     r"abaikan (instruksi|perintah) (sebelumnya|di atas)",
-    r"system prompt",
+    # Audit 2026-09-25: SEBELUMNYA bare r"system prompt" — setiap pesan yang
+    # sekadar MENYEBUT frasa itu ("cara menulis system prompt yang baik?")
+    # diblokir total, padahal ini framework agent AI. Kini hanya pola serangan.
+    r"(ignore|bypass|override|forget) (the |your |all )?(system prompt|system instructions)",
+    r"(show|reveal|print|repeat|output|leak) (me )?(your|the) system prompt",
     r"reveal your (instructions|prompt)",
     # Eksfiltrasi instruksi (variasi yang sering muncul di payload injection).
     r"print your (system )?(instructions|prompt|rules)",

@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import AsyncGenerator, AsyncIterator
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.responses import (
@@ -65,6 +65,7 @@ from security.auth import (
     SESSION_MAX_AGE_SEC,
     create_session_token,
     generate_csrf_token,
+    token_issued_at,
     is_public_path,
     verify_login_token,
     verify_session_token,
@@ -329,6 +330,40 @@ app.mount("/static", StaticFiles(directory="web/static"), name="static")
 templates = Jinja2Templates(directory="web/templates")
 
 
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _request_host(request: Request) -> str:
+    """Hostname dari header Host (tanpa port; IPv6 tanpa bracket), lowercase."""
+    raw = (request.headers.get("host") or "").strip().lower()
+    if raw.startswith("["):
+        return raw[1 : raw.find("]")] if "]" in raw else raw
+    return raw.split(":", 1)[0]
+
+
+def _allowed_hosts() -> frozenset[str]:
+    return _LOCAL_HOSTS | frozenset(CONFIG.allowed_hosts)
+
+
+def _is_cross_origin(request: Request) -> bool:
+    """True bila request pengubah state datang dari origin lain.
+
+    `Sec-Fetch-Site` (dikirim semua browser modern, tak bisa dipalsukan oleh
+    halaman web) lebih dulu; fallback `Origin` vs `Host`. Klien non-browser
+    (curl, test) yang tak mengirim keduanya tetap lolos — mereka bukan vektor
+    CSRF (tak membawa cookie korban secara otomatis)."""
+    site = request.headers.get("sec-fetch-site")
+    if site in ("cross-site", "same-site"):
+        return True
+    origin = request.headers.get("origin")
+    if origin is None:
+        return False
+    if origin == "null":
+        return True
+    return urlparse(origin).netloc.lower() != (request.headers.get("host") or "").lower()
+
+
 @app.middleware("http")
 async def auth_and_csrf_middleware(request: Request, call_next):
     """Self-host auth + CSRF + rate limit (§P0 production-readiness).
@@ -355,6 +390,17 @@ async def auth_and_csrf_middleware(request: Request, call_next):
     refresh_session_cookie = False
     session_user_id: int | None = None
     request.state.user = None
+
+    # Audit 2026-09-25 (kritis): dua gerbang ini SELALU aktif, termasuk saat auth
+    # nonaktif. Sebelumnya auth OFF = CSRF OFF — situs web mana pun yang dibuka
+    # developer bisa POST lintas-situs ke http://localhost:8000/mcp/add (server
+    # MCP stdio = perintah arbitrer di host, langsung dijalankan) atau
+    # /chat/stream dengan trust_mode=true. Direproduksi sebelum diperbaiki.
+    if not CONFIG.auth_active and _request_host(request) not in _allowed_hosts():
+        return JSONResponse({"ok": False, "error": "host_not_allowed"}, status_code=403)
+    if request.method not in _SAFE_METHODS and _is_cross_origin(request):
+        log.warning("cross_origin_request_blocked", path=path)
+        return JSONResponse({"ok": False, "error": "cross_origin_blocked"}, status_code=403)
 
     if CONFIG.auth_active and not is_public_path(path):
         effective_max_age = (
@@ -421,9 +467,10 @@ async def auth_and_csrf_middleware(request: Request, call_next):
         if session_user_id is not None:
             key = f"user:{session_user_id}"
         else:
-            key = request.cookies.get(
-                SESSION_COOKIE, request.client.host if request.client else "unknown"
-            )
+            # Audit 2026-09-25: tanpa user terverifikasi, kunci = IP klien. SEBELUMNYA
+            # nilai cookie sesi MENTAH (tak diverifikasi saat auth nonaktif) — cookie
+            # acak per request memberi kuota baru tiap kali, batas biaya LLM hilang.
+            key = request.client.host if request.client else "unknown"
         if not _rate_limiter.allow(key):
             return JSONResponse(
                 {"ok": False, "error": "rate_limited"},
@@ -436,7 +483,13 @@ async def auth_and_csrf_middleware(request: Request, call_next):
     if refresh_session_cookie:
         response.set_cookie(
             SESSION_COOKIE,
-            create_session_token(CONFIG.session_secret, user_id=session_user_id),
+            create_session_token(
+                CONFIG.session_secret,
+                user_id=session_user_id,
+                # Audit 2026-09-25: pertahankan waktu login asli — refresh idle
+                # timeout tak boleh memperpanjang batas absolut 7 hari.
+                issued_at=token_issued_at(request.cookies.get(SESSION_COOKIE)),
+            ),
             max_age=SESSION_MAX_AGE_SEC,
             httponly=True,
             samesite="lax",
