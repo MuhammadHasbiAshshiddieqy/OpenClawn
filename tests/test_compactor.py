@@ -224,3 +224,11 @@ def test_dynamic_context_separated_from_stable_soul():
     assert stable == "SOUL" and "last_summary" in dynamic
     # Tanpa memori, tak ada penanda (system = soul apa adanya).
     assert DYNAMIC_CONTEXT_MARKER not in c.build("SOUL", {}, [], "hi")[0]["content"]
+
+
+def test_imported_skill_marked_as_reference_not_instruction():
+    """Skill impor pihak ketiga (visibility='inherited') ditandai di prompt."""
+    s = _skill("impor")
+    s["visibility"] = "inherited"
+    system = ContextCompactor(28_000).build("SOUL", {"l3": [s]}, [], "hi")[0]["content"]
+    assert "pihak ketiga" in system

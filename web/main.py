@@ -986,6 +986,7 @@ async def chat_stream(request: Request):
                             "text": event.text,
                             "detail": event.detail,
                             "approval_id": event.approval_id,
+                            "preview": event.preview,
                         }
                     )
                     yield f"event: status\ndata: {payload}\n\n"
@@ -1417,6 +1418,7 @@ async def converse_stream(request: Request):
                             "text": ev.text,
                             "detail": ev.detail,
                             "approval_id": ev.approval_id,
+                            "preview": ev.preview,
                         }
                     )
                     yield f"event: status\ndata: {payload}\n\n"

@@ -126,6 +126,8 @@ Merepresentasikan satu turn percakapan.
 
 **Approval berbasis taint (keputusan 2026-09-26, "lethal trifecta").** Setelah turn ini menjalankan tool pembaca data privat (`_PRIVATE_DATA_TOOLS`: `file_read`, `read_many`, `grep`, `pdf_read`, `db_query`, `memory_search`, `shell_run`, `git_*`, plus semua `mcp__*`) dengan sukses, `self._private_data_read = True` dan tool kanal-keluar (`_EXFIL_TOOLS` = `web_fetch`) butuh approval (`_taint_requires_approval`) — URL bisa membawa data di query/path/subdomain. Riset web murni tanpa membaca data lokal tetap tanpa klik. Trust mode boleh melewatinya (tercatat `auto:trust_mode`); autopilot → proposal. Di-reset tiap awal turn. **Residual:** turn berikutnya bisa mengandung isi file lewat riwayat jawaban assistant — taint tak menjalar lintas turn.
 
+**Pratinjau approval (audit 2026-09-26).** `approval_preview(tool_input)` → JSON input tool UTUH (field internal `_*` dibuang, dibatasi `APPROVAL_PREVIEW_MAX_CHARS`=4000 dengan penanda potong), dikirim di `AgentEvent.preview` / `ConversationEvent.preview` → SSE `status.preview` → kartu approval `chat.js`. Sebelumnya kartu hanya memuat `_format_tool_params` (57 char TERAKHIR satu parameter, atau sekadar nama tool untuk `http_request`/`db_query`/`apply_patch`/MCP) — manusia meng-approve tanpa melihat awal kode/URL/SQL.
+
 **Tool loop (audit 2026-09-25):** SEMUA tool call dalam satu hop dieksekusi (dulu hanya yang terakhir). Tiap panggilan diberi ID (`tool_id` dari provider, atau `call_<hex>`); riwayat ditulis sebagai satu pesan `assistant` (teks hop + `tool_calls[{id, function, thought_signature?}]`) lalu satu pesan `tool` per hasil (`tool_call_id`, `name`, `content`) — format internal ini diterjemahkan per provider di `core/llm_client.py`. Usage token: nilai terakhir dalam satu hop (Gemini kumulatif), DIJUMLAH antar hop. `skill_feedback.resolve_previous` dibungkus try/except — kegagalannya tak menggagalkan turn. Task `_post_turn` disimpan di `_BACKGROUND_TASKS` (referensi kuat, cegah GC di tengah jalan).
 
 ### Dataclass: `AgentEvent`
@@ -899,6 +901,7 @@ Return True jika total tool call dalam history ≥ `MIN_TOOL_CALLS`.
 **`__init__(role, llm, db, tenant_id="default")`** — `tenant_id` (audit 2026-09-25) ditulis ke `skills` saat INSERT dan memfilter `refine_on_correction`.
 
 **`crystallize(task, solution, history, generator_model) → dict`** *(async)*  
+**Memory poisoning (audit 2026-09-26):** konten skill dipindai `security/skill_scanner.scan_skill` sebelum disimpan — temuan berisiko tinggi (mis. direktif `web_fetch https://…`, `vault:KEY`) memaksa status `draft` walau evaluator memberi confidence tinggi. `refine_on_correction` dan merge curator memakai pemindaian yang sama sebelum menimpa skill aktif. Alasan: sejak putaran 4 isi skill disuntik ke prompt setiap turn.
 Proses crystallization lengkap:
 1. Pilih evaluator dari `EVALUATOR_FOR`. **Audit 2026-09-25 (#5):** bila `stream_with_fallback` mengirim chunk `fallback` (evaluator yang diminta gagal, diganti model lain), hasil dianggap **unverified** → selalu `draft`, dan `evaluator` yang dicatat = model pengganti. `refine_on_correction` dengan evaluator fallback → `skipped`.
 2. Jalankan self-evaluation via LLM

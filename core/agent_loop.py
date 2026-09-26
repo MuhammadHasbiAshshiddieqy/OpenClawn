@@ -120,6 +120,9 @@ class AgentEvent:
     detail: str = ""
     usage: dict | None = None
     approval_id: str | None = None
+    # Audit 2026-09-26: input tool UTUH (dibatasi) untuk kartu approval — `detail`
+    # hanya chip ringkas. Lihat approval_preview().
+    preview: str = ""
 
 
 @dataclass
@@ -233,6 +236,28 @@ def _format_tool_params(tool_name: str, params: dict) -> str:
             val = "…" + val[-57:]
         return f"{tool_name}({val})"
     return tool_name
+
+
+# Audit 2026-09-26: batas pratinjau input tool di kartu approval. Cukup untuk
+# membaca kode/URL/SQL/patch yang realistis; di atas itu ditandai eksplisit.
+APPROVAL_PREVIEW_MAX_CHARS = 4000
+
+
+def approval_preview(tool_input: dict) -> str:
+    """Input tool lengkap (JSON rapi) untuk ditampilkan ke manusia yang MEMUTUSKAN
+    approval. Field internal berawalan `_` (disuntik AgentLoop) dibuang.
+
+    Audit 2026-09-26: kartu approval SEBELUMNYA hanya berisi `_format_tool_params`
+    — 57 char TERAKHIR satu parameter (code_run: awal kode tak terlihat, payload
+    bisa ditaruh di sana) atau sekadar nama tool (http_request/db_query/apply_patch/
+    MCP: URL, header vault:, SQL, isi patch tak terlihat sama sekali). Approval
+    yang diberikan tanpa melihat isinya bukan kontrol HITL (CLAUDE.md §1)."""
+    visible = {k: v for k, v in (tool_input or {}).items() if not str(k).startswith("_")}
+    text = json.dumps(visible, ensure_ascii=False, indent=2, default=str)
+    if len(text) > APPROVAL_PREVIEW_MAX_CHARS:
+        extra = len(text) - APPROVAL_PREVIEW_MAX_CHARS
+        text = text[:APPROVAL_PREVIEW_MAX_CHARS] + f"\n…[dipotong, {extra} char lagi]"
+    return text
 
 
 def _format_tool_result(tool_name: str, result: dict) -> str:
@@ -937,6 +962,7 @@ class AgentLoop:
                         text="approval",
                         detail=param_preview,
                         approval_id=approval_id,
+                        preview=approval_preview(pending_tool.tool_input),
                     )
                 else:
                     # Status: tool akan dijalankan — tampilkan nama tool + parameter utamanya

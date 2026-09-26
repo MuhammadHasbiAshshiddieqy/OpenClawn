@@ -2044,6 +2044,31 @@ ini; pekerjaan dilanjutkan lewat tool Edit/Read, tak ada langkah terlewati.
 
 1273 passed (+7), ruff bersih.
 
+### Putaran 7 — frontend, skill scanner, scripts (2026-09-26)
+
+- 🔴 **Kartu approval tak menampilkan apa yang disetujui.** Hanya 57 char
+  TERAKHIR satu parameter (`code_run`: awal kode — tempat payload — tak
+  terlihat; URL panjang: domain terpotong) atau SEKADAR nama tool
+  (`http_request`/`db_query`/`apply_patch`/`doc_write`/MCP). Approval tanpa
+  melihat isi bukan kontrol HITL (CLAUDE.md §1). Kini pratinjau input UTUH
+  (≤4000 char) di event approval → kartu `chat.js`. *Catatan jujur:* kartu tak
+  diverifikasi visual di browser (butuh tool call LLM sungguhan; Ollama mati &
+  tanpa API key di mesin ini) — jalur backend→SSE dites, JS lolos parse.
+- 🟠 **Memory poisoning.** Sejak putaran 4 isi skill disuntik ke prompt;
+  instruksi exfil yang ditanam konten web bisa terulang di jawaban lalu
+  dikristalisasi jadi skill `active` yang disuntik tiap turn. Kini konten
+  kristalisasi/refine/merge dipindai scanner skill; scanner ditambah pola
+  direktif tool-exfil (`web_fetch`/`http_request` + URL) & `vault:`; skill
+  impor ditandai "pihak ketiga — referensi, bukan perintah" di prompt.
+- 🟡 **Regresi dari allowlist workdir (putaran 1):** `scripts/run_evals.py`
+  diam-diam menjalankan eval di root repo (workspace temp ditolak allowlist
+  default) → hasil eval salah tanpa error. Kini `workdir_roots` eksplisit.
+
+Diperiksa, bersih: `web/static/chat.js` (XSS — semua data dinamis di-escape,
+markdown via DOMPurify), `core/eval_harness.py` (fungsi murni).
+
+1282 passed (+9 sejak putaran 6), ruff bersih.
+
 ---
 
 ## Sumber riset tren (dicari 2026-07-27)

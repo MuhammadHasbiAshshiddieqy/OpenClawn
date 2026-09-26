@@ -93,6 +93,16 @@ A whole-codebase pass focused on the seams *between* modules — issues that the
 
 7 more tests (1273 passed).
 
+**Seventh pass (frontend, skill scanner, scripts)**
+- **Approval cards didn't show what was being approved.**
+  - For `code_run` the card showed only the *last* 57 characters of one parameter, so the start of the code, where a payload would go, was hidden.
+  - For `http_request`, `db_query`, `apply_patch` and MCP tools it showed just the tool name.
+  - Approval events now carry the full tool input (up to 4000 characters), and the card renders it.
+- **Memory poisoning.** Skill content is injected into prompts, so injected exfiltration instructions could be crystallized into an active skill. Crystallized, refined and merged skill content is now scanned. The scanner catches tool-exfiltration directives (`web_fetch`/`http_request` plus a URL) and `vault:` references. Imported skills are labelled in the prompt as third-party reference material, not instructions.
+- `scripts/run_evals.py` had silently run evals in the repo root: its temp workspace was rejected by the new workdir allowlist. It now passes `workdir_roots` explicitly.
+
+9 more tests (1282 passed).
+
 ### Fixed — CRITICAL: path traversal via `role` → arbitrary soul.toml load (TODO.md § 16)
 
 Found while auditing the frontend (tracing where `chat.js`'s `role` form field ends up server-side). The `role` string was used completely unvalidated to build a filesystem path in four places — `core/agent_loop.py`, `core/router.py`, `core/late_execute.py`, `core/task_graph.py` all did the equivalent of `open(f"roles/{role}/soul.toml")` with no check that `role` was one of the actual configured roles.

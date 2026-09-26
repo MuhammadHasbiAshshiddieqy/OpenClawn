@@ -44,6 +44,7 @@ class ConversationEvent:
     turn_index: int = 0
     usage: dict | None = None
     approval_id: str | None = None
+    preview: str = ""  # audit 2026-09-26: input tool utuh untuk kartu approval
 
 
 @dataclass
@@ -397,6 +398,7 @@ class ConversationOrchestrator:
                         detail=ev.detail,
                         turn_index=_ti,
                         approval_id=ev.approval_id,
+                        preview=getattr(ev, "preview", ""),
                     )
                 collected, stopped_mid = await run_task
             finally:

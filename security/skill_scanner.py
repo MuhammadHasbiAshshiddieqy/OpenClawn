@@ -72,6 +72,11 @@ _PATTERNS: list[tuple[str, str, int]] = [
     ("pipe_to_eval", r"\beval\s*\(\s*(input|request|urlopen|recv)", _SEV_CRITICAL),
     ("base64_blob", r"[A-Za-z0-9+/]{120,}={0,2}", _SEV_LOW),
     ("metadata_endpoint", r"169\.254\.169\.254|metadata\.google\.internal", _SEV_HIGH),
+    # Audit 2026-09-26: isi skill kini DISUNTIK ke prompt (core/compactor.py), jadi
+    # ancaman utama skill impor bukan cuma kode — tapi INSTRUKSI yang menyuruh agent
+    # memakai tool-nya sendiri untuk mengirim data keluar / memakai credential.
+    ("agent_tool_exfil", r"\b(web_fetch|http_request)\b[^\n]{0,120}https?://", _SEV_CRITICAL),
+    ("vault_reference", r"\bvault:[A-Za-z_][A-Za-z0-9_]*", _SEV_CRITICAL),
 ]
 _COMPILED = [(label, re.compile(pat, re.IGNORECASE), sev) for label, pat, sev in _PATTERNS]
 

@@ -52,6 +52,7 @@ Audit 2026-09-25 (#3, #10, #11, #12) — credential tak bisa dibaca/dikirim lewa
 | `test_web_fetch_without_private_read_stays_frictionless` | Riset web murni tetap tanpa klik |
 | `test_trust_mode_may_skip_tainted_web_fetch` | Trust mode boleh melewati (auto_approve) |
 | `test_run_python_script_readable_by_nobody` | Skrip/dir sandbox terbaca `nobody` (dulu 0700 → gagal di Linux); pakai `sandbox_tmp_dir` |
+| `test_approval_event_carries_full_input_preview` / `test_approval_preview_is_bounded` | Audit 2026-09-26: kartu approval memuat input utuh (awal kode terlihat), dibatasi, tanpa field internal |
 ---
 
 ### `tests/test_memory_isolation.py`
@@ -229,6 +230,7 @@ Test untuk `core/crystallizer.py` (Inovasi 3).
 | `test_evaluator_fallback_forces_draft` / `test_refine_skipped_when_evaluator_falls_back` | Audit 2026-09-25 #5: evaluator jatuh ke fallback → draft / refine skipped |
 | `test_generator_model_of_mixed_turn_is_unverified` | Turn multi-model → generator tak dikenal `EVALUATOR_FOR` |
 | `test_crystallize_writes_tenant_and_refine_is_tenant_scoped` | `tenant_id` ditulis & refine di-scope tenant |
+| `test_poisoned_solution_never_becomes_active_skill` / `test_refine_with_poisoned_content_skipped` | Audit 2026-09-26 (memory poisoning): konten berdirektif exfil tak pernah jadi skill aktif / tak menimpa skill |
 ---
 
 ### `tests/test_contracts.py`
@@ -401,6 +403,7 @@ Test untuk `security/skill_scanner.py` (lapis scanner impor, terinspirasi skills
 | `test_import_flagged_skill_imported_with_label` | Risiko sedang → impor + tercatat di `flagged` |
 | `test_import_url_rejects_high_risk` | Impor URL juga lewat scanner (defense-in-depth) |
 
+| `test_tool_exfil_directive_rejected` / `test_vault_reference_rejected` / `test_ordinary_skill_mentioning_web_fetch_stays_clean` | Audit 2026-09-26: direktif tool-exfil & `vault:` ditolak; penyebutan wajar tetap bersih |
 ---
 
 ### `tests/test_compaction.py`
@@ -612,6 +615,7 @@ Test untuk `core/eval_harness.py` — eval harness (§ Prioritas 8.2). SEMUA mur
 | `test_load_eval_cases_rejects_non_list_yaml` | YAML bukan list (mis. dict) → `ValueError` |
 | `test_supported_expect_keys_matches_what_evaluate_rubric_actually_checks` | Cegah drift `SUPPORTED_EXPECT_KEYS` vs kunci yang benar-benar dicek |
 
+| `test_run_evals_uses_temp_workspace` | Audit 2026-09-26: regresi allowlist — runner eval benar memakai workspace temporer |
 ---
 
 ### `tests/test_cost_pricing.py`
@@ -975,6 +979,7 @@ Test untuk `core/compactor.py`.
 | `test_active_skill_content_is_injected_not_just_name` | Audit 2026-09-26: isi skill (Steps/Outcome) masuk prompt, noise audit tidak |
 | `test_draft_skill_marked_unverified` | Skill draft ditandai belum terverifikasi |
 | `test_dynamic_context_separated_from_stable_soul` | Penanda memisahkan soul dari konteks dinamis |
+| `test_imported_skill_marked_as_reference_not_instruction` | Skill impor ditandai "pihak ketiga" di prompt |
 ---
 
 ### `tests/test_web.py`

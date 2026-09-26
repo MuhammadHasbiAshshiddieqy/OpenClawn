@@ -395,7 +395,7 @@ function handleStatus(s, beforeEl) {
     } else if (s.text === 'approval') {
         // Tool butuh persetujuan manusia SEDANG menunggu (§ chat approval UI —
         // dulu: tak ada tombol, semua tool butuh-approval selalu timeout).
-        appendApprovalCard(s.detail, s.approval_id, beforeEl);
+        appendApprovalCard(s.detail, s.approval_id, beforeEl, s.preview);
         showStatus(statusLabel(s.text, s.detail));
     } else {
         const kind = s.text === 'fallback' ? 'fallback'
@@ -767,7 +767,12 @@ function appendToolCard(name, input, status, beforeEl) {
 // timeout setelah approval_timeout_sec karena user tak py cara approve. Tombol
 // di sini kirim POST /approve; begitu di-resolve, stream yang sedang menunggu
 // otomatis lanjut (Future di backend ter-resolve).
-function appendApprovalCard(detail, approvalId, beforeEl) {
+// Audit 2026-09-26: `preview` = input tool UTUH (JSON, dibatasi backend 4000
+// char) — ditampilkan menggantikan chip ringkas. Sebelumnya kartu hanya memuat
+// 57 char TERAKHIR satu parameter (code_run: awal kode tak terlihat) atau
+// sekadar nama tool (http_request/db_query/apply_patch/MCP) — approval tanpa
+// melihat isinya bukan kontrol HITL. Tetap di-escape (teks, bukan HTML).
+function appendApprovalCard(detail, approvalId, beforeEl, preview) {
     const card = document.createElement('div');
     card.className = 'tool-card approval-pending';
     card.dataset.approvalId = approvalId;
@@ -784,7 +789,9 @@ function appendApprovalCard(detail, approvalId, beforeEl) {
         '<span class="tc-name">' + escapeHtml(toolName) + '</span>' +
         '<span class="tc-approval">' + T.statusApproval + '</span>' +
         '</div>' +
-        (param ? '<div class="tc-body approval-param">' + escapeHtml(param) + '</div>' : '') +
+        (preview
+            ? '<pre class="tc-body approval-preview">' + escapeHtml(preview) + '</pre>'
+            : (param ? '<div class="tc-body approval-param">' + escapeHtml(param) + '</div>' : '')) +
         '<div class="tc-approval-actions">' +
         '<button type="button" class="btn-approve" data-decision="approve">' + T.approve + '</button>' +
         '<button type="button" class="btn-reject" data-decision="reject">' + T.reject + '</button>' +

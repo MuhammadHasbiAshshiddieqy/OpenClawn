@@ -189,10 +189,21 @@ class SkillCuratorManager:
         """Winner = skill dengan decay_score tertinggi (lebih relevan); loser yang lain."""
         return (a, b) if (a["decay_score"] or 0) >= (b["decay_score"] or 0) else (b, a)
 
+    @staticmethod
+    def _merged_content_safe(name: str, content: str) -> bool:
+        """Audit 2026-09-26 (memory poisoning): konten gabungan sintesis LLM dipindai
+        scanner skill impor sebelum menggantikan skill aktif (isinya masuk prompt)."""
+        from security.skill_scanner import scan_skill
+
+        return not scan_skill(name, content).blocked
+
     async def _merge(self, a: dict, b: dict, similarity: float, judge: dict) -> None:
         """Terapkan merge langsung (curation_auto=True): winner menyerap, loser 'merged'."""
         winner, loser = self._pick_winner(a, b)
         merged_content = judge.get("merged_content") or winner["skill_content"]
+        if not self._merged_content_safe(winner["skill_name"], merged_content):
+            log.warning("curation_merge_poisoning_suspected", winner=winner["id"])
+            return
         await self._apply_merge(a, b, winner, loser, merged_content, similarity, judge)
 
     async def _propose(self, a: dict, b: dict, similarity: float, judge: dict) -> None:

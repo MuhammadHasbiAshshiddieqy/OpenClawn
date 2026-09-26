@@ -72,7 +72,7 @@ class SkillDecayManager:
         relevan). `private` (default) TETAP hanya terlihat role pemiliknya,
         perilaku lama tak berubah untuk skill yang belum di-share sadar.
         """
-        cols = "id, skill_name, skill_content, trigger_pattern, decay_score, status"
+        cols = "id, skill_name, skill_content, trigger_pattern, decay_score, status, visibility"
         active_rows = await self.db.fetchall(
             f"""SELECT {cols} FROM skills
                WHERE tenant_id=? AND role=? AND status='active'

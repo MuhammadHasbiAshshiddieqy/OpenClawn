@@ -204,3 +204,30 @@ def test_supported_expect_keys_matches_what_evaluate_rubric_actually_checks():
     case.expect["min_length"] = 0
     # Tidak boleh raise KeyError/TypeError untuk kunci mana pun yang didaftarkan.
     evaluate_rubric(case, "jawaban", [])
+
+
+# ── Audit 2026-09-26: runner eval harus benar-benar memakai workspace temporer ──
+
+
+async def test_run_evals_uses_temp_workspace(monkeypatch):
+    """Regresi dari allowlist folder kerja (audit 2026-09-25 #1): workspace temp
+    eval (/var/folders/... di macOS, di luar home) ditolak allowlist default →
+    agent diam-diam jalan di ROOT REPO, file setup_files tak ditemukan."""
+    import importlib.util
+
+    from core.llm_client import LLMChunk
+    from infra.workspace import CURRENT_WORKSPACE_ROOT
+
+    spec = importlib.util.spec_from_file_location("run_evals", "scripts/run_evals.py")
+    run_evals = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run_evals)
+    seen = {}
+
+    async def fake_stream(self, provider, model, messages, tools=None, max_tokens=4096):
+        seen["root"] = CURRENT_WORKSPACE_ROOT.get()
+        yield LLMChunk(type="text", text="ok")
+
+    monkeypatch.setattr("core.llm_client.LLMClient.stream_with_fallback", fake_stream)
+    case = EvalCase(name="ws", role="dev", input="baca a.txt", setup_files={"a.txt": "x"})
+    await run_evals._run_one_case(case, None, None, 5)
+    assert seen["root"] and "openclawn-eval-" in seen["root"]

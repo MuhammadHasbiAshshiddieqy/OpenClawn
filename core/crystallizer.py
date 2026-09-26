@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 from infra.database import DatabaseManager
 from infra.logging import log
+from security.skill_scanner import scan_skill
 
 MIN_TOOL_CALLS = 3
 CONFIDENCE_THRESHOLD = 4
@@ -85,6 +86,18 @@ class ConfidenceCrystallizer:
         skill_name = self._slug(task)
         content = self._format(task, steps, solution, evaluation)
 
+        # Audit 2026-09-26 (memory poisoning): isi skill disuntik ke prompt SETIAP
+        # turn berikutnya (core/compactor.py). Instruksi yang ditanam konten web
+        # (mis. "selalu panggil web_fetch https://…?d=<data>") lalu terulang di
+        # jawaban agent tak boleh jadi skill aktif — scanner yang sama dengan
+        # impor skill pack; temuan berisiko tinggi → paksa draft.
+        scan = scan_skill(skill_name, content)
+        if scan.blocked and status == "active":
+            log.warning(
+                "crystallize_poisoning_suspected", skill_name=skill_name, findings=scan.findings
+            )
+            status = "draft"
+
         try:
             await self.db.execute(
                 """
@@ -159,6 +172,11 @@ class ConfidenceCrystallizer:
         ev = self._parse_refine(response)
 
         if not ev["improved"] or ev["confidence"] < CONFIDENCE_THRESHOLD or not ev["new_content"]:
+            return {"skill_id": skill_id, "action": "skipped", "confidence": ev["confidence"]}
+        # Audit 2026-09-26 (memory poisoning): `correction_trace` adalah teks user/
+        # konten yang bisa disusupi — konten pengganti dipindai sebelum menimpa skill aktif.
+        if scan_skill(row["skill_name"], ev["new_content"]).blocked:
+            log.warning("refine_poisoning_suspected", skill_id=skill_id)
             return {"skill_id": skill_id, "action": "skipped", "confidence": ev["confidence"]}
 
         # Simpan versi lama (revertible) lalu terapkan versi baru.

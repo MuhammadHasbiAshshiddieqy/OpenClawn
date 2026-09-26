@@ -76,6 +76,11 @@ async def _run_one_case(case: EvalCase, provider: str | None, model: str | None,
                 role=case.role,
                 session_id=f"eval-{case.name}",
                 workspace_override=workspace,
+                # Audit 2026-09-26: skrip tepercaya memilih folder sendiri — tanpa
+                # allowlist eksplisit, workspace temp (di luar home, mis. /var/folders
+                # di macOS) ditolak allowlist default dan agent diam-diam jalan di
+                # root repo (regresi dari allowlist folder kerja 2026-09-25 #1).
+                workdir_roots=(workspace,),
                 autopilot=True,
             ),
             db=db,

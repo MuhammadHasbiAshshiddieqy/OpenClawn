@@ -567,6 +567,11 @@
     max-height: 100px; color: var(--text);
     border-bottom: 1px solid var(--border);
 }
+/* Audit 2026-09-26: input tool utuh — cukup tinggi untuk dibaca sebelum setuju. */
+.tool-card .tc-body.approval-preview {
+    max-height: 320px; margin: 0; color: var(--text);
+    border-bottom: 1px solid var(--border);
+}
 .status-tag.approval { background: rgba(240,196,90,.18); color: #f0c45a; border-color: rgba(240,196,90,.35); }
 .tc-approval-actions {
     display: flex; gap: 8px; padding: 10px 12px;
