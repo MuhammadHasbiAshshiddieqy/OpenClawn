@@ -6,6 +6,7 @@ Shared-secret login SELALU bootstrap admin (satu-satunya user shared-secret).
 OIDC: user pertama per tenant → admin; berikutnya → member (default).
 """
 
+import os
 import time
 import warnings
 from unittest.mock import MagicMock, patch
@@ -59,7 +60,7 @@ def _make_client_auth(tmp_path, monkeypatch, auth_token: str = "test-secret-toke
     return TestClient(web_main.app)
 
 
-def _make_client_oidc(tmp_path, monkeypatch):
+def _make_client_oidc(tmp_path, monkeypatch, allowlist: bool = True):
     db_file = tmp_path / "test.db"
     monkeypatch.setenv("OPENCLAWN_DB", str(db_file))
     monkeypatch.setenv("OPENCLAWN_WORKSPACE", str(tmp_path))
@@ -69,6 +70,12 @@ def _make_client_oidc(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENCLAWN_OIDC_CLIENT_SECRET", "test-client-secret")
     monkeypatch.setenv("OPENCLAWN_OIDC_REDIRECT_BASE", "https://myapp.example.com")
     monkeypatch.setenv("OPENCLAWN_SESSION_SECRET", "test-session-secret")
+    # Keputusan 2026-09-26: tanpa allowlist, pendaftaran OIDC baru ditutup. Test
+    # multi-user memakai allowlist domain (email token test: <sub>@example.com).
+    if allowlist and not os.environ.get("OPENCLAWN_OIDC_ALLOWED_DOMAINS"):
+        monkeypatch.setenv("OPENCLAWN_OIDC_ALLOWED_DOMAINS", "example.com")
+    elif not allowlist:
+        monkeypatch.delenv("OPENCLAWN_OIDC_ALLOWED_DOMAINS", raising=False)
 
     import importlib
 
@@ -120,6 +127,7 @@ def _make_id_token(subject: str, nonce: str) -> str:
         "aud": CLIENT_ID,
         "sub": subject,
         "email": f"{subject}@example.com",
+        "email_verified": True,
         "name": subject,
         "exp": int(time.time()) + 3600,
         "nonce": nonce,
@@ -1280,3 +1288,40 @@ def test_oidc_login_outside_allowlist_denied(tmp_path, monkeypatch):
         assert resp.status_code == 303
         assert "error=true" in resp.headers["location"]
         assert client.get("/settings", follow_redirects=False).status_code in (303, 401)
+
+
+# ── Keputusan 2026-09-26: OIDC tanpa allowlist = pendaftaran baru ditutup ────
+
+
+@pytest.fixture
+def client_oidc_no_allowlist(tmp_path, monkeypatch):
+    with _make_client_oidc(tmp_path, monkeypatch, allowlist=False) as c:
+        yield c
+
+
+def test_oidc_without_allowlist_closes_new_signups(client_oidc_no_allowlist):
+    client_oidc = client_oidc_no_allowlist
+    """Akun pertama tetap bootstrap admin; akun BARU berikutnya ditolak bila tak
+    ada allowlist (dulu: akun apa pun di IdP publik otomatis jadi member)."""
+    first = _login_via_oidc(client_oidc, "user-first")
+    assert "error" not in first.headers["location"]
+    client_oidc.cookies.clear()
+    stranger = _login_via_oidc(client_oidc, "random-internet-user")
+    assert "error=true" in stranger.headers["location"]
+
+
+def test_oidc_existing_user_can_still_login_without_allowlist(client_oidc_no_allowlist):
+    client_oidc = client_oidc_no_allowlist
+    _login_via_oidc(client_oidc, "user-first")
+    client_oidc.cookies.clear()
+    again = _login_via_oidc(client_oidc, "user-first")
+    assert "error" not in again.headers["location"]
+
+
+def test_oidc_open_signup_opt_in_restores_old_behaviour(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENCLAWN_OIDC_OPEN_SIGNUP", "true")
+    with _make_client_oidc(tmp_path, monkeypatch, allowlist=False) as client:
+        _login_via_oidc(client, "user-first")
+        client.cookies.clear()
+        other = _login_via_oidc(client, "someone-else")
+        assert "error" not in other.headers["location"]

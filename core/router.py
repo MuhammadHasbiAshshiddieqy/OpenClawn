@@ -1,3 +1,4 @@
+import re
 import tomllib
 from dataclasses import dataclass
 from enum import Enum
@@ -82,6 +83,17 @@ class SmartRouter:
         self.local_scripts: set[str] = {s.lower() for s in config.routing_local_scripts}
 
     @staticmethod
+    def _kw_hit(keywords, text: str) -> bool:
+        """True bila salah satu keyword muncul di AWAL sebuah kata di `text`.
+
+        Audit 2026-09-26: sebelumnya substring murni — `plan` cocok di
+        "explanation", `model` di "remodel" — menaikkan skor (dan biaya model)
+        tanpa alasan, sekaligus mencemari data kalibrasi Inovasi 1. Awal kata
+        tetap menangkap bentuk turunan ("planning", "debugging", "analisisnya")."""
+        low = text.lower()
+        return any(re.search(r"(?<!\w)" + re.escape(k.lower()), low) for k in keywords)
+
+    @staticmethod
     def _merge_kw(defaults: tuple, routing_cfg: dict, soul_key: str) -> list[str]:
         """Gabung keyword default (config) + ekstra locale dari soul, lowercase, dedup."""
         extra = routing_cfg.get(soul_key, []) or []
@@ -103,7 +115,7 @@ class SmartRouter:
 
     def decide(self, messages: list, query: str) -> RouteDecision:
         dims = self._dimensions(messages, query)
-        soul_hit = any(k.lower() in query.lower() for k in self.soul_upgrade_kw)
+        soul_hit = self._kw_hit(self.soul_upgrade_kw, query)
         dims["soul_upgrade_hit"] = int(soul_hit)
 
         score = self._score(dims)
@@ -150,11 +162,11 @@ class SmartRouter:
         q = query.lower()
         return {
             "query_tokens": int(len(query.split()) * 1.3),
-            "has_tech_kw": int(any(k in q for k in self.tech_kw)),
-            "needs_multistep": int(any(k in q for k in self.multi_kw)),
+            "has_tech_kw": int(self._kw_hit(self.tech_kw, q)),
+            "needs_multistep": int(self._kw_hit(self.multi_kw, q)),
             "history_len": len(messages),
             "role": self.role,
-            "has_urgency": int(any(k in q for k in self.urgency_kw)),
+            "has_urgency": int(self._kw_hit(self.urgency_kw, q)),
             "needs_stream": 1,
             "is_continuation": int(len(messages) > 2),
             # Sinyal struktural BAHASA-AGNOSTIK: "tulis fungsi" dalam bahasa apa pun

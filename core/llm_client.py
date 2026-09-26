@@ -6,6 +6,7 @@ from typing import AsyncGenerator
 
 import httpx
 
+from core.compactor import DYNAMIC_CONTEXT_MARKER
 from infra.config import AppConfig
 from infra.logging import log
 
@@ -192,6 +193,18 @@ class ThinkTagSplitter:
 # eksplisit per provider — satu tempat, bisa dites tanpa jaringan.
 
 
+def split_system(system: str) -> tuple[str, str]:
+    """(bagian stabil, konteks dinamis) — lihat core/compactor.py::DYNAMIC_CONTEXT_MARKER."""
+    stable, _, dynamic = system.partition(DYNAMIC_CONTEXT_MARKER)
+    return stable, dynamic
+
+
+def _plain_system(system: str) -> str:
+    """System prompt tanpa penanda internal, untuk provider tanpa cache per-blok."""
+    stable, dynamic = split_system(system)
+    return f"{stable}\n\n{dynamic}" if dynamic else stable
+
+
 def _as_blocks(content) -> list:
     if isinstance(content, list):
         return list(content)
@@ -241,6 +254,10 @@ def to_anthropic_messages(messages: list) -> list:
             out[-1]["content"] = _as_blocks(out[-1]["content"]) + _as_blocks(entry["content"])
         else:
             out.append(entry)
+    # Audit 2026-09-26: truncation/compaction bisa menyisakan giliran assistant di
+    # depan — Messages API mensyaratkan giliran pertama "user" (400 bila tidak).
+    if out and out[0]["role"] == "assistant":
+        out.insert(0, {"role": "user", "content": "[earlier conversation]"})
     return out
 
 
@@ -328,6 +345,8 @@ def to_ollama_messages(messages: list) -> list:
             out.append(
                 {"role": "tool", "content": m.get("content") or "", "tool_name": m.get("name", "")}
             )
+        elif role == "system":
+            out.append({"role": "system", "content": _plain_system(m.get("content") or "")})
         else:
             out.append({"role": role, "content": m.get("content") or ""})
     return out
@@ -657,9 +676,15 @@ class LLMClient:
         }
         system = next((m["content"] for m in messages if m["role"] == "system"), "")
 
-        # Prompt caching: system prompt stabil → cache_control ephemeral
-        # Hemat hingga 90% biaya untuk bagian yang berulang (audit gap)
-        system_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        # Prompt caching: HANYA bagian stabil (soul) yang diberi cache_control —
+        # audit 2026-09-26: sebelumnya memori dinamis ikut di blok yang sama, jadi
+        # cache berubah tiap turn dan tak pernah kena.
+        stable, dynamic = split_system(system)
+        system_blocks: list[dict] = [
+            {"type": "text", "text": stable, "cache_control": {"type": "ephemeral"}}
+        ]
+        if dynamic:
+            system_blocks.append({"type": "text", "text": dynamic})
 
         payload: dict = {
             "model": model,
@@ -777,7 +802,7 @@ class LLMClient:
             "generationConfig": {"maxOutputTokens": max_tokens},
         }
         if system:
-            payload["systemInstruction"] = {"parts": [{"text": system}]}
+            payload["systemInstruction"] = {"parts": [{"text": _plain_system(system)}]}
         if tools:
             payload["tools"] = [
                 {

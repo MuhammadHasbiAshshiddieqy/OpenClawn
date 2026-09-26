@@ -1,0 +1,79 @@
+# Keputusan 2026-09-26 — sandbox eksekusi kode (code_run, shell_run, git_*,
+# build_sandbox_image) di deployment compose, via sidecar Docker-in-Docker.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build
+#
+# Kenapa DinD, bukan me-mount /var/run/docker.sock:
+#   docker.sock = akses root penuh ke daemon HOST — agent yang disusupi prompt
+#   injection bisa menjalankan container privileged di host. DinD memberi daemon
+#   TERPISAH: container sandbox (tetap --network none, --read-only, nobody,
+#   no-new-privileges) berjalan di dalam daemon sidecar, bukan di daemon host.
+#
+# Residual risk (jujur, CLAUDE.md §17): service `dind` WAJIB `privileged: true`.
+# Kaburnya sebuah container sandbox dari daemon DinD berarti kontrol atas
+# container dind yang privileged — lebih terisolasi dari docker.sock, tapi BUKAN
+# setara VM. Untuk isolasi lebih kuat: gVisor (OPENCLAWN_SANDBOX_RUNTIME=runsc,
+# harus terpasang di daemon) atau jalankan OpenCLAWN di VM terpisah.
+#
+# Workspace agent & direktori temp sandbox ada di volume `sandbox-share` yang
+# di-mount di PATH SAMA pada app dan dind — daemon me-resolve bind mount
+# (`-v <path>:/work:ro`) di filesystem-nya sendiri, bukan milik app.
+
+services:
+  openclawn:
+    environment:
+      - DOCKER_HOST=tcp://dind:2376
+      - DOCKER_TLS_VERIFY=1
+      - DOCKER_CERT_PATH=/certs/client
+      - OPENCLAWN_WORKSPACE=/sandbox/workspace
+      - OPENCLAWN_SANDBOX_TMPDIR=/sandbox/tmp
+    volumes:
+      - sandbox-share:/sandbox
+      - dind-certs:/certs:ro
+    depends_on:
+      dind:
+        condition: service_healthy
+      sandbox-image:
+        condition: service_completed_successfully
+
+  dind:
+    image: docker:27-dind
+    # Sertifikat TLS server yang dibuat dind memuat $(hostname) sebagai SAN —
+    # tanpa ini klien `tcp://dind:2376` gagal verifikasi (ditemukan saat uji
+    # end-to-end 2026-09-26: "certificate is valid for docker, <id>, localhost").
+    hostname: dind
+    privileged: true
+    environment:
+      - DOCKER_TLS_CERTDIR=/certs
+    volumes:
+      - dind-certs:/certs
+      - dind-data:/var/lib/docker
+      - sandbox-share:/sandbox
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+
+  # Bangun image sandbox dasar di DALAM daemon DinD (sekali; cache di dind-data).
+  sandbox-image:
+    image: docker:27-cli
+    environment:
+      - DOCKER_HOST=tcp://dind:2376
+      - DOCKER_TLS_VERIFY=1
+      - DOCKER_CERT_PATH=/certs/client
+    volumes:
+      - dind-certs:/certs:ro
+      - ./Dockerfile.sandbox:/build/Dockerfile.sandbox:ro
+    working_dir: /build
+    command: ["docker", "build", "-t", "openclawn-sandbox:latest", "-f", "Dockerfile.sandbox", "."]
+    depends_on:
+      dind:
+        condition: service_healthy
+
+volumes:
+  sandbox-share:
+  dind-certs:
+  dind-data:

@@ -280,3 +280,43 @@ async def test_agent_loop_executes_all_parallel_tool_calls(tmp_path):
     tool_msgs = [m for m in second if m["role"] == "tool"]
     assert [m["tool_call_id"] for m in tool_msgs] == ["t1", "t2"]
     assert "AAA" in tool_msgs[0]["content"] and "BBB" in tool_msgs[1]["content"]
+
+
+# ── Audit 2026-09-26: prompt caching hanya untuk bagian stabil ──────────────
+
+
+@pytest.mark.asyncio
+async def test_claude_caches_only_stable_system_part(capture):
+    """SEBELUMNYA memori dinamis (berubah tiap turn) ikut di blok ber-cache_control
+    → cache tak pernah kena."""
+    from core.compactor import DYNAMIC_CONTEXT_MARKER
+
+    capture["responses"].append(_sse([{"type": "message_delta", "usage": {"output_tokens": 1}}]))
+    msgs = [
+        {"role": "system", "content": "SOUL" + DYNAMIC_CONTEXT_MARKER + "## State\n- x"},
+        {"role": "user", "content": "hi"},
+    ]
+    _ = [c async for c in _client()._claude("claude-sonnet-4-6", msgs, None, 10)]
+    system = json.loads(capture["requests"][0].content)["system"]
+    assert system[0] == {"type": "text", "text": "SOUL", "cache_control": {"type": "ephemeral"}}
+    assert "cache_control" not in system[1] and "## State" in system[1]["text"]
+
+
+def test_marker_stripped_for_other_providers():
+    from core.compactor import DYNAMIC_CONTEXT_MARKER
+
+    msgs = [{"role": "system", "content": "SOUL" + DYNAMIC_CONTEXT_MARKER + "MEM"}]
+    assert DYNAMIC_CONTEXT_MARKER not in to_ollama_messages(msgs)[0]["content"]
+
+
+def test_anthropic_history_never_starts_with_assistant():
+    """Truncation/compaction bisa menyisakan giliran assistant di awal — API
+    Anthropic menolak (400)."""
+    msgs = to_anthropic_messages(
+        [
+            {"role": "system", "content": "s"},
+            {"role": "assistant", "content": "a"},
+            {"role": "user", "content": "u"},
+        ]
+    )
+    assert msgs[0]["role"] == "user"

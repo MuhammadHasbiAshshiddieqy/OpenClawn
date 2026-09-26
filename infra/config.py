@@ -45,6 +45,11 @@ class AppConfig:
     # Env: OPENCLAWN_OIDC_ALLOWED_EMAILS / OPENCLAWN_OIDC_ALLOWED_DOMAINS (koma).
     oidc_allowed_emails: tuple = ()
     oidc_allowed_domains: tuple = ()
+    # Keputusan 2026-09-26 (secure-by-default, non-breaking): tanpa allowlist,
+    # pendaftaran akun OIDC BARU ditutup — user yang sudah ada tetap bisa login
+    # dan user pertama tetap bootstrap admin. `True` = perilaku lama (akun APA
+    # PUN yang lolos di IdP jadi member). Env: OPENCLAWN_OIDC_OPEN_SIGNUP=true.
+    oidc_open_signup: bool = False
     # Secret HMAC untuk menandatangani cookie sesi (`create_session_token`/
     # `verify_session_token`, security/auth.py). SEBELUM OIDC ada, `auth_token`
     # dipakai langsung sebagai secret (aman karena hanya SATU deployment shared-
@@ -212,6 +217,12 @@ class AppConfig:
     # `docker build` (`build_project_image`) — beda skop, isolasi build-time
     # sudah punya alasan lain (network sengaja terbuka SAAT build saja).
     sandbox_runtime: str = "runc"
+    # Keputusan 2026-09-26 (sandbox di docker-compose via Docker-in-Docker):
+    # direktori tempat run_python menaruh skrip sementara. Bila daemon Docker
+    # BUKAN di host yang sama (DinD sidecar), path ini harus volume bersama yang
+    # di-mount di path SAMA pada app & daemon. None → temp default OS.
+    # Env: OPENCLAWN_SANDBOX_TMPDIR.
+    sandbox_tmp_dir: str | None = None
     # § IMPROVEMENT-Sandbox-Isolation-Parallelization.md Fase 3 (sandbox
     # lifecycle) — owner disetujui EKSPLISIT via AskUserQuestion setelah
     # trade-off keamanan dijelaskan (lihat `infra/sandbox_lifecycle.py`).
@@ -320,6 +331,7 @@ class AppConfig:
                 if k.strip()
             ),
             sandbox_runtime=os.environ.get("OPENCLAWN_SANDBOX_RUNTIME", "runc"),
+            sandbox_tmp_dir=os.environ.get("OPENCLAWN_SANDBOX_TMPDIR") or None,
             auth_token=auth_token,
             oidc_issuer=os.environ.get("OPENCLAWN_OIDC_ISSUER", ""),
             oidc_client_id=os.environ.get("OPENCLAWN_OIDC_CLIENT_ID", ""),
@@ -334,6 +346,8 @@ class AppConfig:
                 for d in os.environ.get("OPENCLAWN_OIDC_ALLOWED_DOMAINS", "").split(",")
                 if d.strip()
             ),
+            oidc_open_signup=os.environ.get("OPENCLAWN_OIDC_OPEN_SIGNUP", "").strip().lower()
+            in ("1", "true", "yes"),
             oidc_redirect_base=os.environ.get(
                 "OPENCLAWN_OIDC_REDIRECT_BASE", "http://localhost:8000"
             ),

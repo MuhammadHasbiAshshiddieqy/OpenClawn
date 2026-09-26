@@ -48,6 +48,10 @@ Audit 2026-09-25 (#3, #10, #11, #12) — credential tak bisa dibaca/dikirim lewa
 | `test_agent_loop_overrides_model_supplied_access_role` | `_access_role: admin` dari model ditimpa nilai sistem |
 | `test_oidc_allowlist_rules` | Aturan `is_login_allowed` (kosong/domain/email/unverified) |
 
+| `test_web_fetch_after_private_read_requires_approval` | Keputusan 2026-09-26: web_fetch setelah membaca data privat → approval |
+| `test_web_fetch_without_private_read_stays_frictionless` | Riset web murni tetap tanpa klik |
+| `test_trust_mode_may_skip_tainted_web_fetch` | Trust mode boleh melewati (auto_approve) |
+| `test_run_python_script_readable_by_nobody` | Skrip/dir sandbox terbaca `nobody` (dulu 0700 → gagal di Linux); pakai `sandbox_tmp_dir` |
 ---
 
 ### `tests/test_memory_isolation.py`
@@ -80,6 +84,9 @@ Audit 2026-09-25 (#7-#9) — payload HTTP NYATA per provider via `httpx.MockTran
 | `test_ollama_tools_use_function_format` / `test_ollama_messages_tool_name` / `test_ollama_payload_uses_converted_tools` | Reproduksi #9: schema `{"type":"function",...}`, `tool_name` |
 | `test_agent_loop_executes_all_parallel_tool_calls` | Semua tool call satu hop dieksekusi, ID berpasangan, teks hop disimpan |
 
+| `test_claude_caches_only_stable_system_part` | Audit 2026-09-26: `cache_control` hanya di blok soul |
+| `test_marker_stripped_for_other_providers` | Penanda tak bocor ke Ollama/Gemini |
+| `test_anthropic_history_never_starts_with_assistant` | Giliran pertama selalu `user` |
 ---
 
 ### `tests/test_guardrails.py`
@@ -119,6 +126,7 @@ Test untuk `core/router.py` (Inovasi 1 — routing).
 | `test_pm_prd_request_routes_to_cloud_not_local_reasoning_model` | Regresi bug "No answer": PRD/dokumen di soul PM asli menembus `COMPLEX` (cloud), bukan berhenti di tier lokal reasoning-heavy |
 | `test_pm_unrelated_query_still_stays_local` | Fix PRD tidak menaikkan biaya untuk query PM lain (tetap di Ollama) |
 
+| `test_keyword_inside_word_does_not_bump_complexity` | Audit 2026-09-26: keyword di awal kata ("explanation" ≠ `plan`) |
 ---
 
 ### `tests/test_router_config.py`
@@ -944,6 +952,9 @@ Test untuk `core/compactor.py`.
 | `test_estimate_context_tokens_empty_and_missing_content` | Pesan kosong/tanpa content → 0, tak crash |
 | `test_estimate_context_tokens_matches_build_output` | Estimasi konsisten dengan hasil `build()` |
 
+| `test_active_skill_content_is_injected_not_just_name` | Audit 2026-09-26: isi skill (Steps/Outcome) masuk prompt, noise audit tidak |
+| `test_draft_skill_marked_unverified` | Skill draft ditandai belum terverifikasi |
+| `test_dynamic_context_separated_from_stable_soul` | Penanda memisahkan soul dari konteks dinamis |
 ---
 
 ### `tests/test_web.py`
@@ -1276,6 +1287,7 @@ config sistem (`/settings`, `/skills/import`, `/mcp/*`, `/router`,
 | `test_viewer_cannot_chat_or_approve` | #11: viewer 403 di `/chat/stream`, `/approve`, `/answer`; GET tetap boleh |
 | `test_chat_stream_rejects_other_users_session_id` | `session_id` milik user lain → 403 |
 | `test_oidc_login_outside_allowlist_denied` | #12: akun di luar `OPENCLAWN_OIDC_ALLOWED_DOMAINS` tak bisa login |
+| `test_oidc_without_allowlist_closes_new_signups` / `test_oidc_existing_user_can_still_login_without_allowlist` / `test_oidc_open_signup_opt_in_restores_old_behaviour` | Keputusan 2026-09-26: tanpa allowlist pendaftaran baru ditutup, user lama tetap masuk, opt-in open signup |
 ---
 
 ### `tests/test_prometheus_metrics.py`

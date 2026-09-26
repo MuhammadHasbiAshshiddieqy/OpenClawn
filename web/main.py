@@ -288,9 +288,14 @@ async def lifespan(app: FastAPI):
     if _oidc_configured() and not (CONFIG.oidc_allowed_emails or CONFIG.oidc_allowed_domains):
         log.warning(
             "startup_oidc_no_allowlist",
-            hint="OIDC aktif tanpa OPENCLAWN_OIDC_ALLOWED_EMAILS/_DOMAINS — akun "
-            "APA PUN yang lolos di provider bisa login (user pertama jadi admin). "
-            "Wajib diisi bila provider publik (mis. Google).",
+            hint="OIDC aktif tanpa OPENCLAWN_OIDC_ALLOWED_EMAILS/_DOMAINS — "
+            + (
+                "OPENCLAWN_OIDC_OPEN_SIGNUP aktif: akun APA PUN yang lolos di provider "
+                "bisa mendaftar."
+                if CONFIG.oidc_open_signup
+                else "pendaftaran akun baru DITUTUP (hanya user lama + bootstrap admin). "
+                "Isi allowlist untuk menambah user."
+            ),
         )
     if not CONFIG.auth_active:
         log.warning(
@@ -801,6 +806,17 @@ async def oidc_callback(request: Request, code: str = "", state: str = ""):
     if not allowed:
         log.warning("oidc_login_denied", subject=claims.subject, email=claims.email, reason=why)
         return RedirectResponse(url="/login?error=true", status_code=303)
+    # Keputusan 2026-09-26: tanpa allowlist (dan tanpa opt-in open signup), akun
+    # BARU hanya boleh bila belum ada user sama sekali (bootstrap admin). User
+    # lama tetap bisa masuk — upgrade tak mengunci deployment yang sudah jalan.
+    if (
+        not (CONFIG.oidc_allowed_emails or CONFIG.oidc_allowed_domains)
+        and not CONFIG.oidc_open_signup
+    ):
+        store = UserStore(db)
+        if await store.get_by_subject(claims.subject) is None and await store.list_users():
+            log.warning("oidc_signup_closed", subject=claims.subject, email=claims.email)
+            return RedirectResponse(url="/login?error=true", status_code=303)
 
     log.info("oidc_login_ok", subject=claims.subject, email=claims.email)
     # RBAC (TODO.md § Prioritas 5): upsert user berdasarkan klaim 'sub' provider —

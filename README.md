@@ -694,7 +694,15 @@ If you expose it on a public IP, enable the built-in hardening first:
    Never bind uvicorn directly to a public IP without TLS; credentials and chat content
    would travel in plaintext.
 3. **CSRF is enforced automatically** once `OPENCLAWN_AUTH_TOKEN` is set — every POST form
-   carries a signed token validated server-side.
+   carries a signed token validated server-side. Independently of auth, cross-origin
+   state-changing requests are always rejected, and without auth the server only accepts
+   `localhost` Host headers (add others via `OPENCLAWN_ALLOWED_HOSTS`) — this blocks
+   drive-by websites and DNS rebinding from driving a local instance.
+   **OIDC:** set `OPENCLAWN_OIDC_ALLOWED_DOMAINS`/`_EMAILS`; without an allowlist, new
+   sign-ups are closed (existing users and the bootstrap admin can still log in).
+   **Code execution in Docker Compose:** `docker compose -f docker-compose.yml -f
+   docker-compose.sandbox.yml up -d --build` adds an isolated Docker-in-Docker sidecar
+   (never the host's `docker.sock`) so `code_run`/`shell_run` work inside the deployment.
 4. **Rate limiting is on automatically** for `/chat/stream` and `/converse/stream` (in-memory
    sliding window, no Redis needed — single-process is enough for one user).
 5. **`/health`** now also reports Ollama reachability, which cloud API keys are configured,

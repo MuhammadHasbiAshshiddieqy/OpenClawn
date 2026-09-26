@@ -1,8 +1,20 @@
+# Keputusan 2026-09-26: Docker CLI (+ plugin buildx) disalin dari image resmi —
+# TANPA daemon. Dipakai hanya bila deployment menyertakan sidecar Docker-in-Docker
+# (docker-compose.sandbox.yml); tanpa itu tool sandbox tetap gagal aman
+# ("Docker tidak tersedia"), tak pernah jatuh ke eksekusi di host.
+FROM docker:27-cli AS dockercli
+
 FROM python:3.12-slim
+
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=dockercli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 
 WORKDIR /app
 
 COPY pyproject.toml .
+# Build tahan jaringan lambat/flaky (timeout baca PyPI terlihat saat verifikasi
+# end-to-end 2026-09-26) — default pip 15s/5 retry terlalu ketat.
+ENV PIP_DEFAULT_TIMEOUT=120 PIP_RETRIES=10
 # Audit 2026-09-25: tanpa extras [dev] — pytest/ruff tak dibutuhkan saat runtime
 # dan hanya memperbesar permukaan serangan image produksi.
 RUN pip install --no-cache-dir -e .

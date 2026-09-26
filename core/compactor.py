@@ -8,6 +8,38 @@ Summarizer = Callable[[str], Awaitable[str]]
 # Penanda turn ringkasan di history agar tak diringkas dua kali & dikenali UI/log.
 COMPACTION_MARKER = "[compacted]"
 
+# Audit 2026-09-26: batas antara bagian STABIL system prompt (soul.toml — sama tiap
+# turn, layak di-cache) dan konteks DINAMIS (memori/skill — berubah tiap turn).
+# Sebelumnya keduanya satu blok ber-cache_control, jadi prompt caching Anthropic
+# tak pernah kena. core/llm_client.py memecah di penanda ini untuk Anthropic dan
+# membuangnya untuk provider lain. Satu pesan system tetap (router menghitung
+# len(messages) sebagai dimensi routing).
+DYNAMIC_CONTEXT_MARKER = "\n\n[[dynamic-context]]\n"
+
+# Audit 2026-09-26: isi skill yang disuntik (sebelumnya HANYA nama skill — model
+# tak pernah melihat langkah hasil kristalisasi). Token-first (§1.4): isi penuh
+# hanya untuk beberapa skill teratas, dipotong per skill; sisanya nama saja.
+MAX_SKILLS_WITH_CONTENT = 3
+MAX_SKILL_CHARS = 700
+MAX_SKILLS_LISTED = 5
+# Bagian skill_content yang relevan untuk MENGERJAKAN tugas; "Self-evaluation" &
+# "Metadata" adalah jejak audit crystallizer, bukan instruksi.
+_SKILL_SECTIONS_KEPT = ("## Trigger", "## Steps", "## Outcome")
+
+
+def _skill_body(content: str) -> str:
+    """Ambil bagian Trigger/Steps/Outcome dari skill_content (format crystallizer);
+    konten format lain (skill impor) dipakai apa adanya. Dipotong MAX_SKILL_CHARS."""
+    if "## " not in content:
+        return content.strip()[:MAX_SKILL_CHARS]
+    kept: list[str] = []
+    for block in content.split("\n## ")[1:]:
+        header = "## " + block.split("\n", 1)[0].strip()
+        if header in _SKILL_SECTIONS_KEPT:
+            kept.append("## " + block.strip())
+    body = "\n".join(kept) if kept else content.strip()
+    return body[:MAX_SKILL_CHARS]
+
 
 def _estimate_tokens(text: str) -> int:
     """Heuristik: ~4 karakter per token. Cukup akurat untuk gating, tanpa dependency tiktoken."""
@@ -111,7 +143,7 @@ class ContextCompactor:
         return sum(_estimate_tokens(m.get("content", "")) for m in messages)
 
     def _build_system(self, soul: str, memory: dict) -> str:
-        parts = [soul]
+        parts: list[str] = []
 
         # I5: profil user naratif (blok stabil → cocok prompt-caching). Hanya bila ada.
         if memory.get("user_model"):
@@ -126,11 +158,19 @@ class ContextCompactor:
             parts.append(f"\n## Facts\n{facts}")
 
         if memory.get("l3"):
-            skills = "\n".join(f"- {s['skill_name']}" for s in memory["l3"][:5])
-            parts.append(f"\n## Active Skills\n{skills}")
+            lines: list[str] = []
+            for i, s in enumerate(memory["l3"][:MAX_SKILLS_LISTED]):
+                tag = " (draft — belum terverifikasi)" if s.get("status") == "draft" else ""
+                if i < MAX_SKILLS_WITH_CONTENT and s.get("skill_content"):
+                    lines.append(f"### {s['skill_name']}{tag}\n{_skill_body(s['skill_content'])}")
+                else:
+                    lines.append(f"- {s['skill_name']}{tag}")
+            parts.append("\n## Active Skills\n" + "\n".join(lines))
 
         if memory.get("l4"):
             archives = "\n".join(f"- {s}" for s in memory["l4"][:3])
             parts.append(f"\n## Past Sessions\n{archives}")
 
-        return "\n".join(parts)
+        if not parts:
+            return soul
+        return soul + DYNAMIC_CONTEXT_MARKER + "\n".join(parts).lstrip("\n")

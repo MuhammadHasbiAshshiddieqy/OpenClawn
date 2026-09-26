@@ -58,6 +58,21 @@ A whole-codebase pass focused on the seams *between* modules — issues that the
 
 27 more tests (1240 passed).
 
+**Fourth pass: owner-delegated decisions ("best fit for the market")**
+- **OIDC:** without an allowlist, *new* sign-ups are closed. Existing users and the bootstrap admin can still log in, so upgrades don't lock anyone out. `OPENCLAWN_OIDC_OPEN_SIGNUP=true` restores the old behaviour.
+- **Code execution in Docker Compose** via an isolated Docker-in-Docker sidecar (`docker-compose.sandbox.yml`), never the host's `docker.sock`. Verified end-to-end: `run_python`/`run_shell` work, `.env` is masked, networking is blocked, and `/work` is read-only.
+- **`web_fetch`** needs approval once the turn has read private data (workspace files, DB, memory, MCP). Pure web research stays click-free, and trust mode may skip the approval.
+- Fixed:
+  - `code_run` failed on every call on Linux hosts, because the script directory was 0700 while the container runs as `nobody`.
+  - Crystallized skills were injected as names only; their steps are now included.
+  - Claude prompt caching never hit, because dynamic memory sat inside the cached block.
+  - Anthropic histories could start with an assistant turn.
+  - Router keywords matched mid-word.
+  - DB backups were world-readable.
+  - Found by the end-to-end run: the DinD TLS SAN didn't cover the service name, and pip timed out during image builds.
+
+15 more tests (1255 passed).
+
 ### Fixed — CRITICAL: path traversal via `role` → arbitrary soul.toml load (TODO.md § 16)
 
 Found while auditing the frontend (tracing where `chat.js`'s `role` form field ends up server-side). The `role` string was used completely unvalidated to build a filesystem path in four places — `core/agent_loop.py`, `core/router.py`, `core/late_execute.py`, `core/task_graph.py` all did the equivalent of `open(f"roles/{role}/soul.toml")` with no check that `role` was one of the actual configured roles.

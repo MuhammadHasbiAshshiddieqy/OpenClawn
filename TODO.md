@@ -1937,6 +1937,63 @@ gerbang kepemilikan web), `QuestionGate`.
 
 1240 passed (+27), ruff bersih.
 
+### Putaran 4 — keputusan owner-delegated + sisa modul (2026-09-26)
+
+Owner: "lanjutkan dan berikan keputusan terbaik yang sesuai kebutuhan pasar".
+Acuan: OpenCLAWN diposisikan self-host/enterprise yang menjual governance →
+**secure-by-default tanpa mengunci deployment yang sudah jalan**, dan fitur
+inti agent (riset web, eksekusi kode) tetap mulus.
+
+**Keputusan (sebelumnya menunggu owner, lihat putaran 1):**
+1. **OIDC tanpa allowlist → pendaftaran akun BARU ditutup** (user lama tetap
+   masuk, user pertama tetap bootstrap admin). Opt-in perilaku lama:
+   `OPENCLAWN_OIDC_OPEN_SIGNUP=true`. Alasan: pasar enterprise mengharapkan
+   secure-by-default; "wajibkan allowlist" mentah akan mengunci user lama saat
+   upgrade.
+2. **Sandbox di docker-compose via sidecar Docker-in-Docker** (override
+   `docker-compose.sandbox.yml`), BUKAN mount `docker.sock` (= root host).
+   Eksekusi kode adalah fitur yang diharapkan pasar dari agent framework;
+   DinD adalah pola standar industri (CI). Residual risk (privileged dind)
+   didokumentasikan jujur + saran gVisor/VM.
+3. **`web_fetch` approval berbasis taint** — riset web murni tetap tanpa
+   klik (inti UX), tapi setelah turn membaca data privat (file workspace, DB,
+   memori, MCP), `web_fetch` butuh approval. Memutus satu kaki "lethal
+   trifecta" dengan friksi minimal; trust mode boleh melewati.
+
+**Temuan & perbaikan tambahan:**
+- 🟠 **`code_run` gagal di SETIAP panggilan pada host Linux** — skrip di
+  `TemporaryDirectory` 0700 tak terbaca user `nobody` di container. Tak
+  terlihat di macOS (Docker Desktop melonggarkan izin). Dibuktikan dengan
+  simulasi Linux; kini dir 0755/skrip 0644 + `OPENCLAWN_SANDBOX_TMPDIR`.
+- 🟠 **Skill tak pernah benar-benar disuntik** — prompt hanya memuat NAMA
+  skill, bukan langkahnya; Inovasi 2/3 nyaris tanpa efek. Kini isi
+  Trigger/Steps/Outcome (3 teratas, dibatasi token).
+- 🟠 **Prompt caching Claude tak pernah kena** — memori dinamis ikut blok
+  ber-`cache_control`. Kini soul (stabil) dan konteks dinamis dipisah.
+- 🟡 Riwayat Anthropic bisa diawali giliran assistant (400) → placeholder.
+- 🟡 Keyword router substring (`plan` di "explanation") → awal kata.
+- 🟡 File backup DB mengikuti umask (0644) → 0600.
+- Perbaikan build: `PIP_DEFAULT_TIMEOUT`/`PIP_RETRIES` (timeout PyPI saat
+  verifikasi end-to-end).
+
+Diperiksa, bersih: `core/autopilot.py`, `core/calibration.py`
+(opt-in, throttle DB, langkah ±1), `infra/backup.py` (selain izin file).
+
+**Verifikasi end-to-end sungguhan (bukan cuma unit test)** stack
+`docker-compose.yml` + `docker-compose.sandbox.yml` di Docker 29 lokal:
+app healthy; dari dalam container app sebagai `appuser` — `run_python`
+(Python 3.12 + pandas) sukses, `run_shell` membaca workspace, `.env` di-mask
+(0 byte), network terblokir, `/work` read-only, user `nobody`; PID 1 memakai
+`DOCKER_HOST=tcp://dind:2376` + sertifikat salinan entrypoint. Uji ini
+menemukan 2 bug yang langsung diperbaiki: SAN sertifikat TLS dind tak memuat
+nama service (`hostname: dind`), dan timeout PyPI saat build. Catatan jujur:
+image sandbox di dalam DinD dimuat dari host (`docker save | docker load`)
+karena jaringan sangat lambat (~23 kB/s) — langkah `sandbox-image` sendiri
+terbukti terhubung ke dind via TLS dan mulai build, tapi tak ditunggu selesai.
+Stack, volume, dan image uji dibongkar setelahnya.
+
+1255 passed (+15), ruff bersih.
+
 ---
 
 ## Sumber riset tren (dicari 2026-07-27)

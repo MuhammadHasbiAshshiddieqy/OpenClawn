@@ -492,6 +492,8 @@ dikonfigurasi harus verifikasi ketat, tanpa pengecualian.
 
 ### Fungsi
 
+**Pendaftaran OIDC (keputusan 2026-09-26):** bila allowlist kosong dan `OPENCLAWN_OIDC_OPEN_SIGNUP` tidak diset, `GET /auth/callback` hanya mengizinkan subject yang SUDAH ada di `users`, atau user pertama (bootstrap admin) — akun baru lain ditolak (`oidc_signup_closed`). Alasan: pasar self-host/enterprise mengharapkan secure-by-default, tapi upgrade tak boleh mengunci user yang sudah ada.
+
 **`is_login_allowed(claims, allowed_emails, allowed_domains) → tuple[bool, str]`** — audit 2026-09-25 (#12). Allowlist kosong keduanya → `(True, "")` (perilaku lama; startup me-log peringatan). Diisi → email wajib ada DAN `email_verified`, lalu cocok persis dengan `allowed_emails` atau domainnya ada di `allowed_domains`. Sebelumnya akun APA PUN yang lolos di IdP otomatis jadi member (akun pertama jadi admin) — dengan IdP publik berarti siapa saja di internet. Dipanggil `GET /auth/callback` SEBELUM user di-upsert.
 
 **`generate_state() → str`** / **`generate_nonce() → str`**  

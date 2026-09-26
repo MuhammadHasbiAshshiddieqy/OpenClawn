@@ -182,3 +182,45 @@ def test_estimate_context_tokens_matches_build_output():
     est = c.estimate_context_tokens(messages)
     assert est > 0
     assert est <= 10_000
+
+
+# ── Audit 2026-09-26: skill disuntik dengan ISI; bagian stabil terpisah untuk cache ──
+
+
+def _skill(name: str, status: str = "active") -> dict:
+    return {
+        "skill_name": name,
+        "status": status,
+        "skill_content": (
+            f"# Skill: {name}\n\n## Trigger\nbuat laporan csv\n\n## Steps\n"
+            '- file_read: {"path": "data.csv"}\n- doc_write: {...}\n\n## Outcome\n'
+            "Laporan tersimpan di out.xlsx\n\n## Self-evaluation\n- Confidence: 5/5\n\n"
+            "## Metadata\n- Role: pm\n"
+        ),
+    }
+
+
+def test_active_skill_content_is_injected_not_just_name():
+    """SEBELUMNYA hanya nama skill yang masuk prompt — model tak pernah melihat
+    langkah hasil kristalisasi (Inovasi 2/3 nyaris tanpa efek)."""
+    c = ContextCompactor(28_000)
+    system = c.build("SOUL", {"l3": [_skill("lap-csv")]}, [], "hi")[0]["content"]
+    assert "file_read" in system and "out.xlsx" in system
+    assert "Confidence" not in system and "Metadata" not in system  # bukan noise
+
+
+def test_draft_skill_marked_unverified():
+    c = ContextCompactor(28_000)
+    system = c.build("SOUL", {"l3": [_skill("coba", "draft")]}, [], "hi")[0]["content"]
+    assert "draft" in system.lower()
+
+
+def test_dynamic_context_separated_from_stable_soul():
+    from core.compactor import DYNAMIC_CONTEXT_MARKER
+
+    c = ContextCompactor(28_000)
+    system = c.build("SOUL", {"l1": {"last_summary": "x"}}, [], "hi")[0]["content"]
+    stable, _, dynamic = system.partition(DYNAMIC_CONTEXT_MARKER)
+    assert stable == "SOUL" and "last_summary" in dynamic
+    # Tanpa memori, tak ada penanda (system = soul apa adanya).
+    assert DYNAMIC_CONTEXT_MARKER not in c.build("SOUL", {}, [], "hi")[0]["content"]

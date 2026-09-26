@@ -124,6 +124,8 @@ Merepresentasikan satu turn percakapan.
 
 **`generator_model_of(turn) → str`** — generator yang dilaporkan ke crystallizer: satu model → nama itu; >1 model (fallback di tengah turn) → `"mixed:a+b"` yang sengaja tak ada di `EVALUATOR_FOR`, sehingga hasilnya draft (unverified).
 
+**Approval berbasis taint (keputusan 2026-09-26, "lethal trifecta").** Setelah turn ini menjalankan tool pembaca data privat (`_PRIVATE_DATA_TOOLS`: `file_read`, `read_many`, `grep`, `pdf_read`, `db_query`, `memory_search`, `shell_run`, `git_*`, plus semua `mcp__*`) dengan sukses, `self._private_data_read = True` dan tool kanal-keluar (`_EXFIL_TOOLS` = `web_fetch`) butuh approval (`_taint_requires_approval`) — URL bisa membawa data di query/path/subdomain. Riset web murni tanpa membaca data lokal tetap tanpa klik. Trust mode boleh melewatinya (tercatat `auto:trust_mode`); autopilot → proposal. Di-reset tiap awal turn. **Residual:** turn berikutnya bisa mengandung isi file lewat riwayat jawaban assistant — taint tak menjalar lintas turn.
+
 **Tool loop (audit 2026-09-25):** SEMUA tool call dalam satu hop dieksekusi (dulu hanya yang terakhir). Tiap panggilan diberi ID (`tool_id` dari provider, atau `call_<hex>`); riwayat ditulis sebagai satu pesan `assistant` (teks hop + `tool_calls[{id, function, thought_signature?}]`) lalu satu pesan `tool` per hasil (`tool_call_id`, `name`, `content`) — format internal ini diterjemahkan per provider di `core/llm_client.py`. Usage token: nilai terakhir dalam satu hop (Gemini kumulatif), DIJUMLAH antar hop. `skill_feedback.resolve_previous` dibungkus try/except — kegagalannya tak menggagalkan turn. Task `_post_turn` disimpan di `_BACKGROUND_TASKS` (referensi kuat, cegah GC di tengah jalan).
 
 ### Dataclass: `AgentEvent`
@@ -292,7 +294,7 @@ saat shutdown. Juga dipakai untuk 2 health-check Ollama di `web/main.py`
 
 Format internal AgentLoop (bergaya OpenAI/Ollama, lihat `core/agent_loop.py` § Tool loop) diterjemahkan eksplisit per provider — sebelumnya dikirim apa adanya: Anthropic menolak role `tool` (400) sehingga tool calling Claude tak pernah jalan, Gemini membuang pesan tool (model tak pernah melihat hasil tool), Ollama menerima schema tanpa `type/function/parameters`.
 
-- **`to_anthropic_messages(messages) → list`** — `tool_calls` → blok `tool_use`; pesan `tool` → blok `tool_result` di giliran `user`; giliran ber-role sama digabung; konten kosong dibuang; `system` dilewati (dikirim terpisah).
+- **`to_anthropic_messages(messages) → list`** — `tool_calls` → blok `tool_use`; pesan `tool` → blok `tool_result` di giliran `user`; giliran ber-role sama digabung; konten kosong dibuang; `system` dilewati (dikirim terpisah); giliran pertama `assistant` (sisa truncation/compaction) didahului placeholder `user` (audit 2026-09-26 — API menolak dengan 400).
 - **`to_gemini_contents(messages) → list`** — `tool_calls` → part `functionCall` (+ `thoughtSignature` bila ada); pesan `tool` → part `functionResponse {name, response: {content}}`; giliran ber-role sama digabung.
 - **`to_ollama_tools(tools) → list`** — `{name, description, input_schema}` → `{"type": "function", "function": {name, description, parameters}}`.
 - **`to_ollama_messages(messages) → list`** — pesan `tool` pakai `tool_name`; field asing dibuang.
@@ -388,6 +390,8 @@ Keputusan routing yang dikembalikan `SmartRouter.decide()`.
 | `soul_upgrade_hit` | True jika soul upgrade_keyword cocok |
 
 ### Kelas: `SmartRouter`
+
+**Pencocokan keyword (audit 2026-09-26):** `_kw_hit(keywords, text)` mencocokkan keyword di AWAL kata (`(?<!\w)kw`), dipakai untuk tech/multistep/urgency/soul `upgrade_keywords`. Sebelumnya substring murni — `plan` cocok di "explanation", `model` di "remodel" — menaikkan skor & biaya model tanpa alasan dan mencemari data kalibrasi Inovasi 1. Bentuk turunan ("planning", "debugging") tetap cocok.
 
 **`__init__(role, soul_path=None, threshold_offset=0, config=CONFIG)`**  
 Baca `soul.toml` sekali dan ekstrak `prefer_local` serta `upgrade_keywords`. `threshold_offset` = offset kalibrasi global (loop tertutup #1): negatif → router naik tier lebih cepat, positif → bertahan tier murah lebih lama, `0` → perilaku asli. `AgentLoop` menyetel `router.threshold_offset = await CalibrationStore.get_offset()` sebelum tiap `decide()`.
@@ -948,7 +952,8 @@ Estimasi token total context window (prompt-side) dengan heuristik yang sama den
 Gabungkan soul prompt dengan memory yang relevan:
 - `## State` dari L1 (max 20 item)
 - `## Facts` dari L2 (max 10 fakta, urut importance)
-- `## Active Skills` dari L3 (max 5 skill)
+- `## Active Skills` dari L3 (max 5 skill). **Audit 2026-09-26:** sebelumnya HANYA nama skill — model tak pernah melihat langkah hasil kristalisasi. Kini 3 skill teratas disuntik dengan isi bagian `## Trigger`/`## Steps`/`## Outcome` (`_skill_body`, dipotong 700 char; `Self-evaluation`/`Metadata` dibuang), sisanya nama saja; skill `draft` diberi tanda "belum terverifikasi".
+- **Penanda `DYNAMIC_CONTEXT_MARKER`** memisahkan soul (stabil) dari seluruh konteks dinamis di atas. `core/llm_client.py::split_system` memberi `cache_control` HANYA ke bagian soul untuk Anthropic (sebelumnya memori yang berubah tiap turn ikut di blok ber-cache → prompt caching tak pernah kena); provider lain menerima teks utuh tanpa penanda (`_plain_system`). Tetap satu pesan system — router memakai `len(messages)` sebagai dimensi.
 - `## Past Sessions` dari L4 (max 3 arsip)
 
 ---

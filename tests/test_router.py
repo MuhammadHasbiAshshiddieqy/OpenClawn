@@ -296,3 +296,14 @@ def test_pm_unrelated_query_still_stays_local():
     route = router.decide(messages=[], query="halo, apa kabar?")
     assert route.soul_upgrade_hit is False
     assert route.provider == "ollama"
+
+
+# ── Audit 2026-09-26: keyword dicocokkan di awal kata, bukan substring ───────
+
+
+def test_keyword_inside_word_does_not_bump_complexity():
+    """SEBELUMNYA `plan` cocok di 'explanation' → +2 (multistep) → model lebih mahal."""
+    r = SmartRouter(role="pm")
+    assert r._dimensions([], "short explanation please")["needs_multistep"] == 0
+    assert r._dimensions([], "make a planning doc")["needs_multistep"] == 1
+    assert r._dimensions([], "debugging this")["has_tech_kw"] == 1

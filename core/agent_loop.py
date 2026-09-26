@@ -167,6 +167,35 @@ _FILE_WRITE_TOOLS = frozenset(
 # sesaat saat build), jadi non-negotiable sama seperti dua tool di atas.
 _TRUST_MODE_EXEMPT = frozenset({"code_run", "build_sandbox_image", "sandbox_persist_enable"})
 
+# Keputusan 2026-09-26 ("lethal trifecta": data privat + konten tak tepercaya +
+# kanal keluar). Tool yang MEMBACA data privat (workspace, DB internal, memori,
+# layanan pihak ketiga via MCP) menandai turn ini "tercemar"; setelah itu tool
+# yang bisa MENGIRIM data keluar tanpa approval (web_fetch — URL bisa memuat data
+# di query/path/subdomain) wajib approval. Riset web murni (tanpa membaca data
+# lokal) tetap tanpa klik — inti UX agent riset. Trust mode BOLEH melewatinya
+# (pilihan sadar otonomi, tetap tercatat auto:trust_mode); credential sudah
+# dilindungi terpisah (infra/workspace.py::is_sensitive_path, tools/web.py).
+_PRIVATE_DATA_TOOLS = frozenset(
+    {
+        "file_read",
+        "read_many",
+        "grep",
+        "pdf_read",
+        "db_query",
+        "memory_search",
+        "shell_run",
+        "git_diff",
+        "git_log",
+        "git_status",
+    }
+)
+_EXFIL_TOOLS = frozenset({"web_fetch"})
+
+
+def _reads_private_data(name: str) -> bool:
+    return name in _PRIVATE_DATA_TOOLS or name.startswith("mcp__")
+
+
 # Audit 2026-09-25: referensi kuat ke task _post_turn yang sedang berjalan. Event
 # loop hanya memegang weak reference ke Task (dokumentasi asyncio.create_task) —
 # tanpa ini task post-turn (tulis memori, decay, crystallize) bisa di-GC di
@@ -319,6 +348,9 @@ class AgentLoop:
         # (persist_history) — lihat _post_turn untuk generate judul.
         self.chat_sessions = ChatSessionStore(db)
         self.history: list[Turn] = []
+        # Keputusan 2026-09-26: True setelah turn ini menjalankan tool pembaca
+        # data privat (lihat _PRIVATE_DATA_TOOLS). Di-reset tiap awal turn.
+        self._private_data_read = False
 
         # nit #2: cache soul.toml sekali, jangan baca tiap turn
         self._soul = self._load_soul_once()
@@ -516,6 +548,7 @@ class AgentLoop:
 
     async def _run(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         start = time.monotonic()
+        self._private_data_read = False
 
         # 0. Guardrails — INPUT rails (ala NeMo). Lapisan kosmetik, BUKAN pertahanan
         # utama (container isolation tetap utama, §17). Engine dibangun per-turn dari
@@ -854,8 +887,10 @@ class AgentLoop:
                     pending_tool.tool_name, pending_tool.tool_input
                 )
                 policy_forces_approval = policy_decision.action == "require_approval"
-                requires_approval_effective = bool(tool_obj and tool_obj.requires_approval) or (
-                    policy_forces_approval
+                requires_approval_effective = (
+                    bool(tool_obj and tool_obj.requires_approval)
+                    or policy_forces_approval
+                    or self._taint_requires_approval(pending_tool.tool_name)
                 )
 
                 # Trust mode (§ user request otonomi): sesi ini melewati approval manual
@@ -1049,7 +1084,7 @@ class AgentLoop:
         if name == "db_query":
             input_data = {**input_data, "_access_role": self.cfg.access_role}
 
-        if tool.requires_approval or policy_forces_approval:
+        if tool.requires_approval or policy_forces_approval or self._taint_requires_approval(name):
             # Autopilot (§1, §17): tidak ada manusia untuk approve → JANGAN eksekusi.
             # Antri sebagai proposal pending agar user meninjau nanti. Tanpa ini,
             # ApprovalGate.request() akan menggantung sampai timeout lalu DENY —
@@ -1123,6 +1158,8 @@ class AgentLoop:
                 timeout=timeout,
             )
             result = self._truncate_tool_output(result)
+            if _reads_private_data(name) and not (isinstance(result, dict) and result.get("error")):
+                self._private_data_read = True
         except asyncio.TimeoutError:
             outcome = "timeout"
             log.warning("tool_timeout", tool=name, session=self.cfg.session_id)
@@ -1144,6 +1181,11 @@ class AgentLoop:
                 node_id=self.cfg.node_id,
             )
         return result
+
+    def _taint_requires_approval(self, name: str) -> bool:
+        """True bila tool kanal-keluar dipanggil SETELAH turn ini membaca data
+        privat (keputusan 2026-09-26, lihat _PRIVATE_DATA_TOOLS)."""
+        return name in _EXFIL_TOOLS and self._private_data_read
 
     def _truncate_tool_output(self, result: dict) -> dict:
         """Potong field teks panjang ke tool_max_output (token-first §1.4) secara seragam.

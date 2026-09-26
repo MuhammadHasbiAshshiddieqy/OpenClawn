@@ -32,6 +32,11 @@ def backup_database(source_path: str, backup_dir: str) -> Path:
     ts = datetime.now(UTC).strftime(BACKUP_TIMESTAMP_FMT)
     dest = dest_dir / f"openclawn_{ts}.db"
 
+    # Audit 2026-09-26: backup berisi SELURUH DB (chat semua user, audit trail) —
+    # buat file 0600 SEBELUM diisi (bukan chmod sesudahnya, yang menyisakan jeda
+    # world-readable di umask default 022).
+    dest.touch(mode=0o600, exist_ok=True)
+    dest.chmod(0o600)  # file lama (backup di detik yang sama) ikut diperketat
     src_conn = sqlite3.connect(str(src))
     dest_conn = sqlite3.connect(str(dest))
     try:

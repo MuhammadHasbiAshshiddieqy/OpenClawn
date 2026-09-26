@@ -118,3 +118,16 @@ def test_prune_old_backups_noop_when_under_limit(tmp_path):
 
     assert removed == []
     assert len(list_backups(str(backup_dir))) == 1
+
+
+def test_backup_file_not_world_readable(tmp_path):
+    """Audit 2026-09-26: backup = seluruh DB; sebelumnya mengikuti umask (0644)."""
+    import sqlite3
+    import stat
+
+    from infra.backup import backup_database
+
+    src = tmp_path / "src.db"
+    sqlite3.connect(str(src)).close()
+    dest = backup_database(str(src), str(tmp_path / "bk"))
+    assert stat.S_IMODE(dest.stat().st_mode) & 0o077 == 0

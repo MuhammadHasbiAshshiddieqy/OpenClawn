@@ -293,7 +293,7 @@ tetap DoS agregat walau tiap panggilan individual dibatasi. Output pada kasus in
 
 ### `WebFetchTool`
 
-Fetch konten dari URL publik via HTTP GET.
+Fetch konten dari URL publik via HTTP GET. **Keputusan 2026-09-26:** `requires_approval=False` tetap, tapi `AgentLoop` mewajibkan approval bila turn itu sudah membaca data privat (lihat `docs/core.md` § Approval berbasis taint).
 
 - `requires_approval = False`
 - Input: `{"url": "..."}` — scheme wajib `http://`/`https://`
@@ -499,6 +499,10 @@ Delegasi seluruh eksekusi ke `DockerSandbox` — tidak ada `exec()`, `eval()`, a
 ### Kelas: `DockerSandbox`
 
 **Audit 2026-09-25:** `run_shell` menambahkan mask credential dari `_sensitive_masks(root)` (`-v /dev/null:/work/<file>:ro` untuk file, `--tmpfs /work/<dir>:ro,size=1k` untuk folder; scan `os.walk` di thread, dibatasi 5000 folder/100 entri — workspace raksasa bisa menyisakan file bersarang dalam yang tak ter-mask, di-log `sandbox_mask_scan_truncated`). Saat timeout `asyncio.wait_for`, proses docker client kini di-kill (`_kill_quietly`) alih-alih dibiarkan hidup. Output di-decode `errors="replace"` (sebelumnya `run_python` crash pada byte non-UTF8). `_base_docker_args(mount, tmpfs_size, extra=None)` — `extra` disisipkan SEBELUM image.
+
+**Keputusan/audit 2026-09-26:** `run_python` menaruh skrip di `CONFIG.sandbox_tmp_dir` (volume bersama saat DinD) dan membuat direktori 0755 + skrip 0644 — sebelumnya `TemporaryDirectory` 0700 sehingga container (`nobody`) gagal membaca `/work/script.py` di host Linux (setiap `code_run` gagal; tak terlihat di macOS karena Docker Desktop melonggarkan izin — dibuktikan dengan simulasi Linux).
+
+**Deployment compose dengan sandbox:** `docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build` — sidecar `docker:27-dind` (privileged, daemon TERPISAH dari host; BUKAN mount `docker.sock` yang = root host), service one-shot `sandbox-image` membangun `openclawn-sandbox:latest` di dalam DinD, app memakai `DOCKER_HOST=tcp://dind:2376` + TLS, workspace `/sandbox/workspace` & temp `/sandbox/tmp` di volume bersama (path sama di kedua sisi). `Dockerfile.role` menyalin Docker CLI + buildx dari `docker:27-cli` (tanpa daemon). Residual risk: kabur dari container sandbox = kontrol atas container dind privileged — lebih terisolasi dari `docker.sock`, bukan setara VM (pertimbangkan gVisor/VM terpisah).
 
 **`run_python(code: str) → dict`** *(async)*  
 Jalankan kode Python dalam container Docker yang terisolasi penuh.

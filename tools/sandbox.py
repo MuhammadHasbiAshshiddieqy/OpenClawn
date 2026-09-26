@@ -170,10 +170,16 @@ class DockerSandbox:
         if container_id is not None:
             return await self.exec_persistent(container_id, code)
 
-        with tempfile.TemporaryDirectory() as workdir:
+        with tempfile.TemporaryDirectory(dir=CONFIG.sandbox_tmp_dir) as workdir:
             script_path = os.path.join(workdir, "script.py")
             with open(script_path, "w") as f:
                 f.write(code)
+            # Audit 2026-09-26: TemporaryDirectory dibuat 0700 — container berjalan
+            # sebagai `nobody` sehingga di host Linux (dan DinD) SETIAP code_run
+            # gagal "Permission denied" membaca /work/script.py. Tak terlihat di
+            # macOS karena Docker Desktop melonggarkan izin berkas. Mount tetap :ro.
+            os.chmod(workdir, 0o755)
+            os.chmod(script_path, 0o644)
 
             cmd = self._base_docker_args(f"{workdir}:/work:ro", "64m") + [
                 "timeout",
