@@ -208,7 +208,8 @@ Cari satu pending approval by ID — dipakai `web/main.py` untuk cek kepemilikan
 **`auto_approve(session_id, tool_name, tool_input, agent_identity=None, task_id=None, node_id=None) → bool`** *(async)*  
 Trust mode per-sesi (§ user request otonomi): tool YANG BUTUH APPROVAL tetap DIEKSEKUSI sungguhan, tapi tanpa Future/blocking — langsung catat ke `approval_log` dengan `decision="auto:trust_mode"` (berbeda dari `"approved"` manual, agar audit trail membedakan keputusan manusia vs toggle) lalu return `True`. Beda dari `queue_proposal`: manusia SEDANG hadir di sesi chat aktif (bukan autopilot tanpa manusia), hanya melewati klik. Caller (`AgentLoop._execute_tool`) yang memutuskan tool mana boleh lewat sini — `code_run`/`build_sandbox_image` TIDAK PERNAH, berapa pun trust mode-nya (CLAUDE.md §1, lihat `core/agent_loop.py` § `_TRUST_MODE_EXEMPT`). `agent_identity` (§ Prioritas 9.2) dicatat SEKALIGUS PENTING di jalur ini — approval yang MELEWATI klik manusia justru paling perlu bisa dijawab "agent versi mana yang melakukannya". `task_id`/`node_id` (§ Task Graph) — sama catatan dengan `request()` di atas.
 
-**`queue_proposal(session_id, tool_name, tool_input, task_id=None, node_id=None) → None`** *(async)*  
+**`queue_proposal(session_id, tool_name, tool_input, task_id=None, node_id=None, owner_user_id=None) → None`** *(async)*  
+`owner_user_id` (audit 2026-09-25): diisi `AgentLoop` dari `AgentConfig.user_id` — subtask Task Graph kini mewarisi pemilik graph, dan `GET /autopilots` memfilter proposal per pemilik (sebelumnya proposal subtask user lain, lengkap `tool_input`, terlihat semua user).  
 Antri aksi destruktif dari autopilot sebagai PROPOSAL (`decision="proposal:pending"`) — TANPA Future hidup, TANPA memblokir. Dipanggil `AgentLoop._execute_tool` saat `AgentConfig.autopilot=True` dan tool butuh approval: tidak ada manusia menunggu, jadi eksekusi nyata TIDAK terjadi, keputusan tetap di tangan user yang meninjau lewat `GET /approvals` nanti (CLAUDE.md §17). Fail-soft: kegagalan tulis hanya di-log, tak menjatuhkan run autopilot. **Ini JALUR NYATA yang dipakai subtask DAG** (§ Task Graph, `core/task_executor.py`) — subtask SELALU `autopilot=True` (tak ada listener SSE/UI yang mengawasi sesinya, `request()`/`auto_approve()` biasa akan menggantung sampai timeout tanpa siapa pun melihat kartu approval-nya), jadi `task_id`/`node_id` di sini yang benar-benar terisi untuk approval dari subtask, bukan parameter serupa di `request()`/`auto_approve()`.
 
 **`pending_list(session_id=None, owner_user_id=None) → list[dict]`**  
@@ -239,12 +240,15 @@ menolak dengan `False` bila `approval_id` masih punya Future di `self._pending`,
 tak ada dua sumber kebenaran untuk satu approval yang sama). Return `True` hanya bila
 baris memang masih `pending` & berhasil diselesaikan; `False` bila sudah diputuskan
 lebih dulu (race dua caller menyelesaikan approval yatim yang sama — approval_id unik
-per permintaan, jadi ini cuma bisa terjadi dari klik ganda). Dipanggil `core/late_execute.py`
-dua kali: langsung untuk reject, atau SETELAH tool selesai dieksekusi mandiri untuk
-approve (dengan `decision="approved:late"`, bukan `"approved"` biasa, agar audit trail
-membedakan approve lewat sesi live vs. dieksekusi mandiri lintas restart).
+per permintaan, jadi ini cuma bisa terjadi dari klik ganda). Dipanggil `core/late_execute.py`:
+langsung untuk reject, atau **SEBELUM** tool dieksekusi mandiri untuk approve (dengan
+`decision="approved:late"`, bukan `"approved"` biasa, agar audit trail membedakan approve
+lewat sesi live vs. dieksekusi mandiri lintas restart). **Audit 2026-09-25:** klaim kini
+atomik (`_record_decision` → `UPDATE … WHERE decision='pending'`, rowcount) dan approve
+diklaim sebelum eksekusi — sebelumnya SELECT lalu UPDATE terpisah, dan approve diklaim
+SETELAH tool jalan, sehingga dua `POST /approve` bersamaan menjalankan tool destruktif dua kali.
 
-**`_record_decision(approval_id, decision) → None`** *(async, private)*  
+**`_record_decision(approval_id, decision) → bool`** *(async, private)* — `True` bila UPDATE mengenai baris (pemenang klaim).  
 Update row `approval_log` yang `approval_id`-nya cocok DAN `decision='pending'`, jadi
 keputusan final. **[§ Durable execution]** Sejak Prioritas 8.1: hanya menulis entry
 `audit_chain` bila `UPDATE` benar-benar mengenai baris (`cursor.rowcount > 0`) — sebelum
@@ -256,7 +260,7 @@ menulis entry `approval.decided` PALSU ke rantai audit. Sama pola dengan `set_hu
 
 ## `core/late_execute.py`
 
-**`execute_orphan_approval(db, config, approval_gate, approval_id) → dict`** *(async)*  
+**`execute_orphan_approval(db, config, approval_gate, approval_id, workdir_roots=None) → dict`** *(async)*  
 **[§ Durable execution, TODO.md Prioritas 8.1]** Jalankan MANDIRI tool dari satu
 approval **yatim** (dibuat sebelum restart server terakhir) yang baru saja user
 approve lewat `POST /approve` (`docs/web.md`). Turn percakapan ASLI yang memintanya
@@ -279,11 +283,13 @@ bisa berubah SELAMA approval tersangkut, kadang berbulan-bulan):
    dievaluasi ulang, bukan dipercaya dari keputusan lama, karena policy admin bisa
    berubah selama approval menunggu.
 5. Pulihkan folder kerja sesi dari `SessionWorkspaceStore` (`infra/workspace.py`,
-   § working directory adaptif) ke `CURRENT_WORKSPACE_ROOT` — tanpa ini tool file jatuh
-   ke `CONFIG.workspace_root` global, bukan folder yang sebenarnya dipakai sesi itu.
-6. `tool.execute(tool_input, vault=Vault(), db=db)` dengan timeout `config.tool_timeout_sec`
+   § working directory adaptif) ke `CURRENT_WORKSPACE_ROOT` — **divalidasi ulang**
+   terhadap `workdir_roots` (allowlist user yang MENYETUJUI, dari `web/main.py`
+   `_workdir_roots_for`; audit 2026-09-25 #1). Tak lolos → workspace default.
+6. `approval_gate.finalize_orphan(approval_id, "approved:late")` — klaim atomik; kalah
+   → `{"ok": False}` tanpa eksekusi (audit 2026-09-25: dulu langkah ini SETELAH eksekusi).
+7. `tool.execute(tool_input, vault=Vault(), db=db)` dengan timeout `config.tool_timeout_sec`
    (pola sama `AgentLoop._execute_tool`) + `ToolAudit.record(...)`.
-7. `approval_gate.finalize_orphan(approval_id, "approved:late")`.
 
 Return `{"ok": False, "error": ...}` bila eksekusi TIDAK terjadi sama sekali (langkah
 1-4/5 gagal); `{"ok": True, "executed": True, "result": {...}}` bila tool BENAR-BENAR

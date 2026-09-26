@@ -66,7 +66,7 @@ TOOL_REGISTRY = {
 
 `AgentLoop` mengakses registry ini untuk lookup dan schema generation. Tool menerima `execute(input_data, vault, db=None)` — `db` (DatabaseManager) hanya dipakai `db_query`/`memory_search`, tool lain mengabaikannya.
 
-> **Jaring pengaman eksekusi (§1.3).** `AgentLoop._execute_tool` membungkus setiap `tool.execute()` dengan: (1) validasi input vs `input_schema` (required fields) — error jelas balik ke model bila salah bentuk, tool tidak dijalankan; (2) `asyncio.wait_for` timeout `CONFIG.tool_timeout_sec` (default 40s); (3) try/except yang mengubah exception apa pun menjadi `{"error": ...}` anggun + di-log; (4) pemotongan output seragam ke `CONFIG.tool_max_output`. Satu tool yang menggantung/melempar TIDAK menjatuhkan turn. Setiap eksekusi dicatat ke telemetri (`tool_invocations`) lewat `ToolAudit` — lihat [core.md](core.md) & [database.md](database.md).
+> **Jaring pengaman eksekusi (§1.3).** `AgentLoop._execute_tool` membungkus setiap `tool.execute()` dengan: (1) validasi input vs `input_schema` (required fields) — error jelas balik ke model bila salah bentuk, tool tidak dijalankan; (2) `asyncio.wait_for` timeout `tool.timeout_sec` bila tool mendefinisikannya (audit 2026-09-25 — saat ini hanya `task_graph_submit`, = `CONFIG.task_graph_timeout_sec`), selain itu `CONFIG.tool_timeout_sec` (default 40s); (3) try/except yang mengubah exception apa pun menjadi `{"error": ...}` anggun + di-log; (4) pemotongan output seragam ke `CONFIG.tool_max_output`. Satu tool yang menggantung/melempar TIDAK menjatuhkan turn. Setiap eksekusi dicatat ke telemetri (`tool_invocations`) lewat `ToolAudit` — lihat [core.md](core.md) & [database.md](database.md).
 
 > **Workspace sandbox (keamanan #1).** Semua tool filesystem (`file_read`, `file_write`,
 > `file_edit`, `file_append`, `apply_patch`, `list_dir`, `glob`, `grep`, `pdf_read`) dibatasi ke `CONFIG.workspace_root` lewat
@@ -178,6 +178,8 @@ untuk string yang diawali salah satu `_FORMULA_TRIGGER_CHARS`; nilai non-string
 ### `PdfWriteTool`
 
 Tulis dokumen **PDF** ke workspace via `reportlab` (murni-Python). **Destruktif** → butuh approval. `reportlab` di-import lazy.
+
+**Audit 2026-09-25:** semua teks di-escape (`_plain`) sebelum masuk `reportlab.Paragraph` — mini-markup Paragraph (`<img src>`, `<a href>`, `<font>`) dari konten LLM sebelumnya ditafsirkan (bisa menyematkan file gambar lokal di luar workspace; markup rusak menggagalkan render). Render PDF, penulisan `doc_write`, dan parsing `pdf_read` dijalankan di thread (`asyncio.to_thread`), tak memblokir event loop.
 
 - `requires_approval = True`
 - Input: `{"path": "....pdf", "content": {"title"?, "sections":[{"heading"?, "body"?, "bullets"?:[]}]}}` (bentuk sama `doc_write` docx)

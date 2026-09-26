@@ -800,7 +800,7 @@ Tandai blocker `resolved` (`agent_blockers.status`, set `resolved_at`). Form: `b
 
 **Kelola tugas agent terjadwal** (terinspirasi Autopilots Multica). Template: `web/templates/autopilots.html`.
 
-`GET` menampilkan jadwal (`AutopilotStore.list_all`), riwayat run (`recent_runs`), dan proposal menunggu (`approval_log.decision='proposal:pending'` — aksi destruktif yang DIANTRI autopilot, bukan dieksekusi). `POST` membuat autopilot: form `name`, `role` (harus dikenal), `prompt`, `every` + `unit` (menit/jam/hari → detik). Validasi gagal → redirect tanpa membuat.
+`GET` menampilkan jadwal (`AutopilotStore.list_all`), riwayat run (`recent_runs`), dan proposal menunggu (`approval_log.decision='proposal:pending'` — aksi destruktif yang DIANTRI autopilot, bukan dieksekusi). **Audit 2026-09-25:** proposal difilter `_session_owner_filter` (non-admin: milik sendiri + tanpa owner, yaitu autopilot admin) — sebelumnya proposal subtask Task Graph user lain beserta `tool_input` terlihat semua user. `POST` membuat autopilot: form `name`, `role` (harus dikenal), `prompt`, `every` + `unit` (menit/jam/hari → detik). Validasi gagal → redirect tanpa membuat.
 
 **Keamanan (§1, §17):** autopilot dijalankan `_run_autopilot` dengan `AgentConfig.autopilot=True` → tool butuh-approval tidak dieksekusi, diantri jadi proposal. Scheduler (`AutopilotScheduler`) start/stop di lifespan.
 

@@ -575,6 +575,16 @@ eksekusi (bukan hanya di titik agregasi via `return_exceptions=True`) — fault
 containment STRUKTURAL: satu node yang meledak TAK PERNAH menjalar ke
 `asyncio.wait`, jadi tak mungkin membatalkan sibling yang jalan bersamaan.
 
+**Pembatalan (audit 2026-09-25).** `run()` memisahkan loop penjadwalan ke `_drive()` dan
+ringkasan ke `_finalize()`. Bila executor sendiri dibatalkan (timeout tool di
+`AgentLoop._execute_tool`, disconnect), semua child task dibatalkan & ditunggu, node
+`pending`/`running` ditandai `failed` ("graph dibatalkan…"), dan `task_graphs.status`
+ditutup `failed` sebelum exception diteruskan — sebelumnya subtask tetap jalan tanpa
+induk dan baris graph macet `running` selamanya (direproduksi). `task_graph_submit`
+kini memakai `Tool.timeout_sec = CONFIG.task_graph_timeout_sec` (default 1800s),
+bukan `tool_timeout_sec` (40s) yang jauh di bawah timeout per node (300s). Subtask
+mewarisi `user_id` pemilik graph.
+
 **`AgentConfig` untuk tiap subtask** (dibuat `_run_node`, BUKAN opsional):
 `session_id=f"{task_id}:{node_id}"` (sesi terpisah — context hygiene, bukan
 berbagi transkrip induk), `persist_history=False` (fresh, tak memuat

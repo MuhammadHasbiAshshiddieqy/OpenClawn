@@ -37,6 +37,17 @@ A whole-codebase pass focused on the seams *between* modules — issues that the
 
 87 new tests (1205 passed, up from 1118), ruff clean, no new dependencies.
 
+**Second pass**
+- Orphan-approval execution now re-validates the saved session folder against the approver's allowlist. Before, the #1 hole was still reachable through that path.
+- Orphan approvals are now claimed atomically *before* the tool runs. Before, two concurrent `POST /approve` calls both executed the tool.
+- `task_graph_submit` had been capped by the 40s `tool_timeout_sec`, while each node gets 300s. Graphs stuck at `running`, subtasks were orphaned, and results were lost. The graph now has its own budget (`task_graph_timeout_sec`, default 1800s) via the new `Tool.timeout_sec`. A cancelled executor now cancels its children and closes the graph as `failed`.
+- Subtasks inherit the graph owner. Proposals record their owner, and `/autopilots` filters them by owner.
+- Deleting a chat now also removes its L4 archive (the full transcript) and its L1 checkpoint.
+- `pdf_write` escapes reportlab markup, so `<img src>` in LLM text can no longer embed a local file. Document I/O runs in a thread.
+- Skill-pack URL import uses the connect-time SSRF client. The SSRF DNS checks in the skill pack and MCP no longer block the event loop.
+
+8 more tests (1213 passed).
+
 ### Fixed — CRITICAL: path traversal via `role` → arbitrary soul.toml load (TODO.md § 16)
 
 Found while auditing the frontend (tracing where `chat.js`'s `role` form field ends up server-side). The `role` string was used completely unvalidated to build a filesystem path in four places — `core/agent_loop.py`, `core/router.py`, `core/late_execute.py`, `core/task_graph.py` all did the equivalent of `open(f"roles/{role}/soul.toml")` with no check that `role` was one of the actual configured roles.

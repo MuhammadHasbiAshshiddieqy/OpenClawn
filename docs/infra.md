@@ -67,6 +67,7 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `task_graph_max_node_attempts` | `3` | **[§ Task Graph]** Percobaan maksimum per node sebelum menyerah permanen (`status='failed'`) — INI SEKALIGUS breaker-nya, tak ada abstraksi circuit-breaker terpisah |
 | `task_graph_retry_backoff_sec` | `2.0` | **[§ Task Graph]** Backoff dasar antar percobaan node (eksponensial: `base * 2^(attempt-1)`) |
 | `task_graph_node_timeout_sec` | `300` | **[§ Task Graph]** Timeout keras per node — subtask yang menggantung tak boleh membekukan seluruh graph selamanya |
+| `task_graph_timeout_sec` | `1800` | **[Audit 2026-09-25]** Budget TOTAL satu graph — dipakai sebagai `TaskGraphSubmitTool.timeout_sec`. Sebelumnya tool ini ikut `tool_timeout_sec` (40s < 300s per node), sehingga graph nyata hampir selalu terpotong |
 | `fallback_chain` | lihat di bawah | Urutan model jika provider utama gagal |
 
 **Fallback chain default:**
@@ -306,7 +307,7 @@ Murni di atas `DatabaseManager` (tabel `chat_sessions`, lihat `docs/database.md`
 | `set_title(session_id, title) → None` *(async)* | Simpan judul; strip tanda kutip pembungkus (LLM kadang membungkus jawaban dengan `"..."`) & potong ke `MAX_TITLE_CHARS` |
 | `has_title(session_id) → bool` *(async)* | Cek apakah sesi sudah punya judul — gate agar generate judul hanya sekali (turn pertama) |
 | `list_active(limit=200) → list[dict]` *(async)* | Sesi MILIK TENANT INI yang belum dihapus, terbaru dulu — mentah (tak dikelompokkan; `web/main.py` § `GET /chat-sessions` yang menghitung `bucket` waktu). Sesi tenant lain tak pernah muncul |
-| `soft_delete(session_id) → None` *(async)* | Hapus dari sidebar (`deleted_at` terisi — metadata tetap ada untuk audit trail), TAPI `session_turns` & `session_workspace` terkait dihapus FISIK (user minta "hapus", isi percakapan harus benar hilang). WHERE menyertakan `tenant_id=?` (defense-in-depth) — tenant A tak bisa menghapus sesi tenant B walau tahu `session_id`-nya |
+| `soft_delete(session_id) → None` *(async)* | Hapus dari sidebar (`deleted_at` terisi — metadata tetap ada untuk audit trail), TAPI `session_turns`, `session_workspace`, arsip `memory_l4` dan checkpoint `memory_l1` (`last_summary:<session_id>`) terkait dihapus FISIK (audit 2026-09-25: L4 berisi transkrip penuh dan sebelumnya tertinggal — tetap dicari FTS & disuntik ke prompt) (user minta "hapus", isi percakapan harus benar hilang). WHERE menyertakan `tenant_id=?` (defense-in-depth) — tenant A tak bisa menghapus sesi tenant B walau tahu `session_id`-nya |
 
 Judul di-generate `AgentLoop._generate_session_title` (dipanggil `_post_turn` di turn pertama, gated `has_title`) via `compaction_local_model` (gemma4:e2b) — model kecil yang sama dipakai `_maybe_compact`, konsisten & gratis (lokal). Fail-safe (§1.3): LLM/parsing gagal → sesi tetap tanpa judul (sidebar fallback ke `"New chat"`), tak menjatuhkan turn.
 

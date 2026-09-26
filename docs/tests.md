@@ -63,6 +63,7 @@ Audit 2026-09-25 (#2, kritis) — memori tak bocor antar sesi/user.
 | `test_l4_default_user_excludes_owned_sessions` | Mode tanpa auth tak melihat sesi milik user login |
 | `test_memory_search_l1_hides_other_sessions` | `memory_search` L1 tak membocorkan checkpoint sesi lain |
 
+| `test_deleting_chat_removes_l4_archive_and_l1_checkpoint` | Hapus chat ikut menghapus arsip L4 & checkpoint L1 sesi |
 ---
 
 ### `tests/test_provider_adapters.py`
@@ -839,6 +840,9 @@ Fase 2: concurrency engine + fault containment). `AgentLoop` di-mock TOTAL
 | `test_retry_backoff_is_awaited` | Backoff eksponensial (`base * 2^(attempt-1)`) benar-benar di-`await` dengan nilai yang tepat |
 | `test_task_nodes_persisted_to_db` | Baris `task_graphs`/`task_nodes` benar-benar tertulis (goal, owner, prompt, result_summary), bukan cuma di memori |
 
+| `test_cancelled_graph_cancels_children_and_closes_row` | Audit 2026-09-25: executor dibatalkan → child dibatalkan, node & graph `failed` |
+| `test_subtasks_inherit_graph_owner` | Subtask mewarisi `user_id` pemilik graph |
+| `test_task_graph_submit_uses_graph_budget_not_tool_timeout` | `timeout_sec` = `task_graph_timeout_sec` > timeout per node |
 ---
 
 ### `tests/test_task_graph_submit.py`
@@ -883,6 +887,7 @@ Test tool batch 3: git (sandbox), `todo_write` (DB), `pdf_write` (reportlab).
 | `test_pdf_write_rejects_outside_workspace` | Path di luar workspace ditolak |
 | `test_pdf_write_rejects_bad_content` | content bukan objek → error |
 
+| `test_pdf_write_escapes_reportlab_markup` | Audit 2026-09-25: markup reportlab dari LLM dirender literal |
 ---
 
 ### `tests/test_calibration.py`
@@ -1378,6 +1383,7 @@ Test trust mode per-sesi (§ user request otonomi: kurangi approval yang tak per
 | `test_policy_forced_approval_not_bypassable_even_if_caller_passes_bypass_true` | Defense-in-depth (§ Policy Engine, TODO.md Prioritas 3): trust mode TIDAK bisa melewati approval yang dipaksa policy, bahkan bila caller keliru meneruskan `bypass_approval=True` |
 | `test_policy_deny_blocks_before_approval_entirely` | Policy `deny_if` menolak SEBELUM approval sempat dipanggil sama sekali |
 
+| `test_autopilot_proposal_records_owner` | Audit 2026-09-25: proposal autopilot mencatat `owner_user_id` |
 ---
 
 ### `tests/test_policy_engine.py`
@@ -1622,6 +1628,8 @@ Test untuk `ApprovalGate.pending_list_with_orphans`/`finalize_orphan` dan `core/
 | `test_execute_orphan_approval_reevaluates_policy_deny` | `PolicyEngine` dievaluasi ULANG (bukan dipercaya dari keputusan lama) — deny → tool TIDAK dijalankan (file tak tertulis) |
 | `test_execute_orphan_approval_does_not_double_execute_live_future` | Approval yang masih live (Future hidup) ditolak jalur ini — mencegah double-execute lewat dua jalur berbeda |
 
+| `test_concurrent_orphan_approve_executes_tool_once` | Audit 2026-09-25: dua approve bersamaan → tool dieksekusi SEKALI |
+| `test_orphan_saved_workdir_outside_roots_not_used` | Folder sesi di luar allowlist tak dipakai late-execute |
 ---
 
 ### `tests/test_durable_approval_web.py`

@@ -1873,6 +1873,41 @@ Diverifikasi via `uv run`: **1205 passed** (dari 1118; +87 test di 3 file baru
 bersih, tanpa dependency baru (httpcore sudah dependency transitif httpx).
 Plus `tests/conftest.py` baru: memulihkan `infra.config.CONFIG` antar test.
 
+### Putaran 2 (sesi yang sama, setelah commit putaran 1)
+
+Modul yang belum dibaca mendalam di putaran 1 — fokus ke interaksinya dengan
+perbaikan di atas. Semua diperbaiki:
+
+- **`late_execute` memakai folder sesi tersimpan tanpa validasi allowlist** —
+  celah #1 lolos lewat approval yatim (`session_workspace="/"` + `file_write`
+  yang di-approve). Kini divalidasi terhadap allowlist user yang menyetujui.
+- **Approval yatim diklaim SETELAH tool dieksekusi** — dua `POST /approve`
+  bersamaan menjalankan tool destruktif dua kali (docstring lama menyebutnya
+  "risiko fail-soft yang diterima"). Kini klaim atomik dulu, eksekusi hanya
+  oleh pemenang. Ditest dengan `asyncio.gather`.
+- **`task_graph_submit` terpotong `tool_timeout_sec` (40s) padahal timeout
+  node 300s** — direproduksi: baris `task_graphs` macet `running` selamanya,
+  subtask tetap jalan tanpa induk, hasil hilang. Kini `Tool.timeout_sec`
+  (graph: `task_graph_timeout_sec`=1800) + executor membatalkan anak & menutup
+  graph saat dibatalkan.
+- **Proposal subtask tanpa owner** → terlihat semua user di `/autopilots`
+  lengkap `tool_input`; subtask kini mewarisi `user_id` pemilik graph,
+  proposal mencatat owner, halaman memfilter.
+- **"Hapus chat" meninggalkan arsip L4** (transkrip penuh, tetap dicari FTS
+  & disuntik ke prompt) dan checkpoint L1 sesi → ikut dihapus.
+- **`pdf_write`**: teks LLM masuk `reportlab.Paragraph` tanpa escape
+  (mini-markup `<img src=...>` bisa menyematkan file lokal di luar workspace);
+  kini di-escape. I/O dokumen dipindah ke thread.
+- `skill_pack` import URL & MCP remote: DNS guard ke thread; `skill_pack`
+  memakai client dengan validasi IP saat connect. **Catatan jujur:** MCP
+  remote memakai httpx milik SDK `mcp`, jadi validasi saat connect TIDAK
+  berlaku di sana (URL hanya bisa diisi admin).
+
+Diperiksa, bersih: `EventBus` percakapan multi-agent dibuat per orkestrator
+(tak ada kebocoran token/approval_id antar percakapan bersamaan).
+
+1213 passed (+8), ruff bersih.
+
 ---
 
 ## Sumber riset tren (dicari 2026-07-27)
