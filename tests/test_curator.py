@@ -245,3 +245,67 @@ async def test_curation_throttled(db):
     assert first["skipped"] is False
     second = await cur.maybe_run_curation_pass()
     assert second["skipped"] is True
+
+
+# ── Audit 2026-09-26: judge merge tak boleh lebih lemah dari generator skill ──
+
+
+@pytest.mark.asyncio
+async def test_judge_model_follows_evaluator_for_generator(db):
+    """SEBELUMNYA judge di-hardcode gemma4:e4b (terlemah) — menulis ulang skill
+    hasil model yang lebih kuat. Kini judge = EVALUATOR_FOR[generator]."""
+    from unittest.mock import AsyncMock
+
+    from core.crystallizer import EVALUATOR_FOR
+
+    for name in ("lap-1", "lap-2"):
+        await db.execute(
+            "INSERT INTO skills (role, skill_name, skill_content, trigger_pattern, status, "
+            "confidence, generator_model, decay_score, use_count) "
+            "VALUES ('dev', ?, ?, 'x', 'active', 0.8, 'gemini-2.5-pro', 0.5, 1)",
+            (
+                name,
+                "langkah baca file data csv lalu hitung total penjualan per bulan dan tulis laporan ringkas ke xlsx",
+            ),
+        )
+    seen = {}
+
+    async def stream(provider, model, messages, *a, **k):
+        seen["judge"] = (provider, model)
+        async for c in _judge_stream(True, 5)(provider, model, messages):
+            yield c
+
+    llm = AsyncMock()
+    llm.stream_with_fallback = stream
+    await _curator(db, llm, curation_interval_sec=0)._run_pass()
+    assert seen["judge"] == EVALUATOR_FOR["gemini-2.5-pro"]
+
+
+@pytest.mark.asyncio
+async def test_no_merge_when_judge_falls_back(db):
+    from unittest.mock import AsyncMock
+
+    await _add(
+        db,
+        "lap-1",
+        "langkah baca file data csv lalu hitung total penjualan per bulan dan tulis laporan ringkas ke xlsx",
+    )
+    await _add(
+        db,
+        "lap-2",
+        "langkah baca file data csv lalu hitung total penjualan per bulan dan tulis laporan ringkas ke xlsx",
+    )
+    called = {}
+
+    async def stream(provider, model, messages, *a, **k):
+        called["judge"] = True
+        yield LLMChunk(type="fallback", fallback_used=True, fallback_model="gemma4:e2b")
+        async for c in _judge_stream(True, 5)(provider, model, messages):
+            yield c
+
+    llm = AsyncMock()
+    llm.stream_with_fallback = stream
+    await _curator(db, llm, curation_interval_sec=0, curation_auto=True)._run_pass()
+    assert called.get("judge"), "pasangan harus sampai ke judge (bukan lolos kebetulan)"
+    rows = await db.fetchall("SELECT status FROM skills")
+    assert all(r["status"] == "active" for r in rows)

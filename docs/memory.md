@@ -134,6 +134,8 @@ Menggerakkan revive (I2) & refine (I3) berdasarkan apakah turn yang memakai skil
 Gabung/dedup skill mirip agar library tak terfragmentasi. Throttled (`curation_interval_sec`), gated (judge ≥ `curation_judge_min_confidence`) **dan** gated oleh `curation_auto` (§8, default `False`): merge yang disetujui judge hanya **diusulkan** sampai manusia klik Terapkan di `/skills` — tidak langsung mengubah skill. Anti kehilangan data (§1): loser jadi `merged` (bukan dihapus), revertible.
 
 ### Kelas: `SkillCuratorManager`
+
+**Audit 2026-09-26:** judge merge dipilih `_judge_model(a, b)` = `EVALUATOR_FOR[generator]` bila evaluator kedua skill SAMA (generator kosong → dianggap `gemma4:e4b`); beda/tak dikenal → tak di-merge. Chunk `fallback` saat judging → tak di-merge. Sebelumnya judge di-hardcode `gemma4:e4b` (tier terlemah) padahal ia menulis ulang isi skill hasil model yang lebih kuat — melanggar aturan inti evaluator ≥ generator.
 - **`maybe_run_curation_pass() → dict`** *(async)* — throttled (pola decay), dipanggil post-turn.
 - **`_find_candidate_pairs() → list`** *(async, private)* — pre-filter leksikal **Jaccard token** (bukan FTS5 — FTS5 di repo ini hanya untuk `memory_l4`); pasangan dengan similarity ≥ threshold.
 - **`_judge(a, b) → dict`** *(async, private)* — LLM judge tier-ringan → keputusan merge terstruktur; parse gagal/error → jangan merge (fail-safe).
@@ -151,6 +153,8 @@ Gabung/dedup skill mirip agar library tak terfragmentasi. Throttled (`curation_i
 Profil user naratif lintas sesi dari L2 facts, disuntik sebagai blok stabil (`## User`) di context (cocok prompt-caching). Default **nonaktif** (`user_model_enabled`); versioned + revertible; dapat dihapus (privasi §1).
 
 ### Kelas: `UserModel`
+
+**Audit 2026-09-26:** `_usable()` = `user_model_enabled AND NOT auth_active` — profil disimpan per ROLE (bukan per user), jadi di mode multi-user akan bocor lintas user; dinonaktifkan saat auth aktif. Catatan produk: fitur ini praktis dorman karena tak ada kode produksi yang menulis `memory_l2` (sumber faktanya).
 - **`get_active_profile() → str`** *(async)* — profil aktif untuk context (kosong bila nonaktif/tak ada).
 - **`maybe_update() → dict`** *(async)* — throttled: rangkum L2 facts → profil baru (versioned).
 - **`clear()`** *(async)* — hapus profil (privasi).

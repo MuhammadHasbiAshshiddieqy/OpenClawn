@@ -2021,6 +2021,29 @@ Diperiksa, bersih: `core/sandbox_reaper.py`, `tools/sandbox_persist.py`,
 
 1266 passed (+11), ruff bersih.
 
+### Putaran 6 — memory/ & infra/logging (2026-09-26)
+
+- 🟠 **Curator (I1) menulis ulang skill memakai model TERLEMAH** — judge
+  di-hardcode `gemma4:e4b` padahal menghasilkan `merged_content` pengganti isi
+  skill dari gemini-2.5-pro/Claude (melanggar aturan inti evaluator ≥
+  generator). Kini `EVALUATOR_FOR` per generator; beda/tak dikenal atau
+  fallback → tak di-merge.
+- 🟡 **Skrip CLI berjalan tanpa scrubber log** — `setup_logging()` hanya
+  dipanggil lifespan web; kini dipasang saat modul diimpor. Hint `token`
+  substring me-redact `tokens_in`/`max_tokens` → segmen kata. Pola `tvly-`/
+  `github_pat_` ditambah.
+- 🟡 **UserModel (I5) per-role bocor lintas user bila diaktifkan di mode
+  multi-user** → dinonaktifkan saat auth aktif. **Catatan produk:** I5
+  praktis dorman — tak ada kode produksi yang menulis `memory_l2`.
+
+Diperiksa, bersih: `tools/todo.py`, `tools/blocker.py`, `GET /tasks/{id}`
+(kepemilikan dicek).
+
+Catatan proses: pemeriksa izin otomatis Bash beberapa kali timeout di sesi
+ini; pekerjaan dilanjutkan lewat tool Edit/Read, tak ada langkah terlewati.
+
+1273 passed (+7), ruff bersih.
+
 ---
 
 ## Sumber riset tren (dicari 2026-07-27)

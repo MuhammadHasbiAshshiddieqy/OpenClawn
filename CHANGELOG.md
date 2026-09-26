@@ -86,6 +86,13 @@ A whole-codebase pass focused on the seams *between* modules — issues that the
 
 11 more tests (1266 passed).
 
+**Sixth pass (`memory/`, logging)**
+- The skill curator's merge judge was hard-coded to the weakest local model, yet it rewrites the content of skills produced by stronger models. The judge now follows `EVALUATOR_FOR` for both skills' generators. If the generators map to different evaluators, or the judge falls back to another model, the skills are not merged.
+- The log secret scrubber is now installed on import, so CLI scripts ran unscrubbed before this. Key matching works on word segments, so `tokens_in` is no longer redacted, and Tavily and fine-grained GitHub tokens are now caught.
+- The per-role user profile (I5) is disabled when auth is on, because in multi-user mode it would leak across users.
+
+7 more tests (1273 passed).
+
 ### Fixed — CRITICAL: path traversal via `role` → arbitrary soul.toml load (TODO.md § 16)
 
 Found while auditing the frontend (tracing where `chat.js`'s `role` form field ends up server-side). The `role` string was used completely unvalidated to build a filesystem path in four places — `core/agent_loop.py`, `core/router.py`, `core/late_execute.py`, `core/task_graph.py` all did the equivalent of `open(f"roles/{role}/soul.toml")` with no check that `role` was one of the actual configured roles.

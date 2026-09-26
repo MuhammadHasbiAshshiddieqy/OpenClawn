@@ -101,6 +101,19 @@ Test `security/guardrails.py` (rail input/output) + `core/guardrails_config.py`.
 
 ---
 
+### `tests/test_logging_scrub.py`
+
+Audit 2026-09-26 — scrubber log (`infra/logging.py`, CLAUDE.md §1.2).
+
+| Test | Yang Diverifikasi |
+|---|---|
+| `test_usage_token_counts_are_not_redacted` | `tokens_in`/`max_tokens`/`input_tokens` tak ikut di-redact |
+| `test_secret_named_fields_still_redacted` | `access_token`, `api_key`, `client_secret`, `Authorization` tetap di-redact |
+| `test_tavily_and_fine_grained_github_tokens_redacted` | Pola `tvly-`/`github_pat_` di-redact |
+| `test_scrubber_active_without_explicit_setup` | Scrubber aktif hanya dengan mengimpor modul (skrip CLI) |
+
+---
+
 ### `tests/test_router.py`
 
 Test untuk `core/router.py` (Inovasi 1 — routing).
@@ -482,6 +495,8 @@ Compounding **I1** — Skill Curator (merge/dedup, anti data-loss, revert).
 | `test_revert_noop_when_no_merge` | Tanpa merge → no-op |
 | `test_curation_throttled` | Pass kedua < interval → di-skip |
 
+| `test_judge_model_follows_evaluator_for_generator` | Audit 2026-09-26: judge = `EVALUATOR_FOR[generator]` (dulu hardcode gemma4:e4b) |
+| `test_no_merge_when_judge_falls_back` | Judge jatuh ke fallback → tak ada merge |
 ---
 
 ### `tests/test_user_model.py`
@@ -497,6 +512,7 @@ Compounding **I5** (opsional) — dialectic user model.
 | `test_no_facts_skips` | Tanpa fakta → skip |
 | `test_clear_removes_profile` | `clear()` hapus profil (privasi §1) |
 
+| `test_profile_not_injected_in_multi_user_mode` | Audit 2026-09-26: profil per-role dinonaktifkan saat auth aktif |
 ---
 
 ### `tests/test_audit.py`

@@ -15,10 +15,37 @@ _SECRET_VALUE_PATTERNS = [
     re.compile(r"AKIA[0-9A-Z]{16}"),  # AWS access key id
     re.compile(r"AIza[0-9A-Za-z_-]{20,}"),  # Google API key
     re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),  # Slack token
+    # Audit 2026-09-26: Tavily & GitHub fine-grained sebelumnya lolos.
+    re.compile(r"tvly-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
 ]
-# Nama field yang nilainya selalu di-redact penuh (apa pun isinya).
-_SECRET_KEY_HINTS = ("api_key", "apikey", "token", "secret", "password", "authorization")
+# Nama field yang nilainya selalu di-redact penuh (apa pun isinya). Audit
+# 2026-09-26: dicocokkan per SEGMEN kata (dipisah non-alfanumerik), bukan
+# substring — sebelumnya "token" membuat tokens_in/max_tokens/input_tokens ikut
+# [REDACTED] (metrik penggunaan hilang dari log). "access_token", "api_key",
+# "client_secret", "Authorization" tetap ter-redact.
+_SECRET_KEY_SEGMENTS = frozenset(
+    {
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "authorization",
+        "apikey",
+        "credential",
+        "credentials",
+        "cookie",
+    }
+)
+_SECRET_KEY_PHRASES = ("api_key", "private_key", "access_key")
 _REDACTED = "[REDACTED]"
+
+
+def _is_secret_key(key) -> bool:
+    k = str(key).lower()
+    if any(p in k for p in _SECRET_KEY_PHRASES):
+        return True
+    return any(seg in _SECRET_KEY_SEGMENTS for seg in re.split(r"[^a-z0-9]+", k))
 
 
 def _scrub_value(value: str) -> str:
@@ -35,12 +62,7 @@ def _scrub_container(value):
     disentuh sama sekali."""
     if isinstance(value, dict):
         return {
-            k: (
-                _REDACTED
-                if any(h in str(k).lower() for h in _SECRET_KEY_HINTS)
-                else _scrub_container(v)
-            )
-            for k, v in value.items()
+            k: (_REDACTED if _is_secret_key(k) else _scrub_container(v)) for k, v in value.items()
         }
     if isinstance(value, (list, tuple)):
         return type(value)(_scrub_container(v) for v in value)
@@ -58,7 +80,7 @@ def scrub_secrets(logger, method_name, event_dict: dict) -> dict:
     """
     try:
         for key, val in list(event_dict.items()):
-            if any(hint in key.lower() for hint in _SECRET_KEY_HINTS):
+            if _is_secret_key(key):
                 event_dict[key] = _REDACTED
             else:
                 event_dict[key] = _scrub_container(val)
@@ -68,7 +90,7 @@ def scrub_secrets(logger, method_name, event_dict: dict) -> dict:
 
 
 def setup_logging() -> None:
-    """Setup structlog JSON renderer. Dipanggil sekali saat startup."""
+    """Setup structlog JSON renderer. Dipanggil sekali saat startup (idempoten)."""
     structlog.configure(
         processors=[
             structlog.processors.add_log_level,
@@ -78,5 +100,11 @@ def setup_logging() -> None:
         ],
     )
 
+
+# Audit 2026-09-26: pasang konfigurasi (dengan scrubber) SAAT modul diimpor.
+# Sebelumnya hanya lifespan web yang memanggil setup_logging() — skrip CLI
+# (scripts/*.py) yang mengimpor modul core berjalan dengan konfigurasi default
+# structlog TANPA scrub_secrets.
+setup_logging()
 
 log = structlog.get_logger()

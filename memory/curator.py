@@ -13,6 +13,7 @@ Mirror pola SkillDecayManager: throttled, post-turn, extractable (DatabaseManage
 import json
 import re
 
+from core.crystallizer import EVALUATOR_FOR
 from infra.config import AppConfig
 from infra.database import DatabaseManager
 from infra.logging import log
@@ -122,8 +123,30 @@ class SkillCuratorManager:
         pairs.sort(key=lambda p: p[2], reverse=True)
         return pairs
 
+    @staticmethod
+    def _judge_model(a: dict, b: dict) -> tuple[str, str] | None:
+        """Model judge yang TERBUKTI minimal setara generator KEDUA skill.
+
+        Audit 2026-09-26: judge SEBELUMNYA di-hardcode gemma4:e4b (tier terlemah)
+        padahal ia MENULIS ULANG isi skill (`merged_content`) yang bisa berasal dari
+        gemini-2.5-pro/Claude — melanggar aturan inti "evaluator ≥ generator"
+        (CLAUDE.md §6, sama dengan crystallizer). Kini: EVALUATOR_FOR per
+        generator; bila evaluator kedua skill BERBEDA (tak ada urutan kekuatan
+        lintas provider yang terbukti) atau generator tak dikenal → None (jangan
+        merge). Generator kosong (skill lama/impor) dianggap tier lokal default,
+        pola sama `ConfidenceCrystallizer.refine_on_correction`."""
+        evals = {EVALUATOR_FOR.get(s.get("generator_model") or "gemma4:e4b") for s in (a, b)}
+        if len(evals) != 1 or None in evals:
+            return None
+        return next(iter(evals))
+
     async def _judge(self, a: dict, b: dict) -> dict:
-        """LLM judge tier-ringan → keputusan merge terstruktur. Parse gagal → jangan merge."""
+        """LLM judge (≥ generator kedua skill) → keputusan merge terstruktur. Parse
+        gagal / judge tak terbukti setara / judge jatuh ke fallback → jangan merge."""
+        judge_model = self._judge_model(a, b)
+        if judge_model is None:
+            log.info("curation_judge_unverified", a=a.get("id"), b=b.get("id"))
+            return {"should_merge": False, "confidence": 1}
         prompt = (
             "Dua skill agent mungkin duplikat. Putuskan apakah sebaiknya digabung jadi satu.\n\n"
             f"SKILL A ({a['skill_name']}):\n{(a['skill_content'] or '')[:800]}\n\n"
@@ -135,8 +158,12 @@ class SkillCuratorManager:
         response = ""
         try:
             async for chunk in self.llm.stream_with_fallback(
-                "ollama", "gemma4:e4b", [{"role": "user", "content": prompt}]
+                judge_model[0], judge_model[1], [{"role": "user", "content": prompt}]
             ):
+                if chunk.type == "fallback" and chunk.fallback_used:
+                    # Judge pengganti tak terjamin setara generator — fail-safe.
+                    log.warning("curation_judge_fell_back", to_model=chunk.fallback_model)
+                    return {"should_merge": False, "confidence": 1}
                 if chunk.type == "text":
                     response += chunk.text
         except Exception as e:  # noqa: BLE001 — judge gagal → jangan merge (fail-safe)

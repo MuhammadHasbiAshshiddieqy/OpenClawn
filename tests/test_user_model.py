@@ -95,3 +95,15 @@ async def test_clear_removes_profile(db):
     await um.maybe_update()
     await um.clear()
     assert await um.get_active_profile() == ""
+
+
+async def test_profile_not_injected_in_multi_user_mode(db):
+    """Audit 2026-09-26: profil per ROLE — di mode multi-user akan bocor lintas
+    user. Dinonaktifkan saat auth aktif walau user_model_enabled=True."""
+    cfg = AppConfig(db_path=":memory:", user_model_enabled=True, auth_token="t")
+    await db.execute(
+        "INSERT INTO user_model (role, version, profile, active) VALUES ('dev', 1, 'profil A', 1)"
+    )
+    um = UserModel("dev", db, AsyncMock(), cfg)
+    assert await um.get_active_profile() == ""
+    assert (await um.maybe_update())["skipped"] is True

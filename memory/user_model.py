@@ -27,9 +27,16 @@ class UserModel:
         self.config = config
         self._ts_key = f"user_model_last_ts:{role}"
 
+    def _usable(self) -> bool:
+        """Audit 2026-09-26: profil disimpan PER ROLE, bukan per user — di mode
+        multi-user (auth aktif) profil satu user akan disuntik ke prompt SEMUA
+        user role itu. Fitur ini hanya bermakna single-user; dinonaktifkan saat
+        auth aktif walau `user_model_enabled=True`."""
+        return self.config.user_model_enabled and not self.config.auth_active
+
     async def get_active_profile(self) -> str:
         """Profil aktif untuk disuntik ke context (string kosong bila tak ada/nonaktif)."""
-        if not self.config.user_model_enabled:
+        if not self._usable():
             return ""
         row = await self.db.fetchone(
             "SELECT profile FROM user_model WHERE role=? AND active=1 ORDER BY version DESC LIMIT 1",
@@ -39,7 +46,7 @@ class UserModel:
 
     async def maybe_update(self) -> dict:
         """Throttled: rangkum L2 facts → profil naratif baru (versioned). Opt-in."""
-        if not self.config.user_model_enabled:
+        if not self._usable():
             return {"skipped": True, "reason": "disabled"}
         row = await self.db.fetchone("SELECT value FROM app_settings WHERE key=?", (self._ts_key,))
         now = time.time()

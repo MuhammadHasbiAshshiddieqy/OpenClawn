@@ -195,6 +195,8 @@ Processor yang diaktifkan (urut):
 - `JSONRenderer()` — render ke JSON
 
 ### Fungsi: `scrub_secrets(logger, method_name, event_dict) → dict`
+
+**Audit 2026-09-26:** nama field dicocokkan per SEGMEN kata (`_is_secret_key`: segmen `token`/`secret`/`password`/`authorization`/`cookie`/… atau frasa `api_key`/`private_key`/`access_key`) — sebelumnya substring `token` ikut me-redact `tokens_in`/`max_tokens`. Pola nilai ditambah `tvly-…` dan `github_pat_…`. `setup_logging()` kini juga dipanggil saat modul diimpor (idempoten) — sebelumnya skrip CLI yang mengimpor modul core berjalan dengan konfigurasi default structlog TANPA scrubber.
 Processor structlog yang me-redact secret SEBELUM di-render JSON, sebagai lapisan terakhir di atas `Vault` (yang menjaga credential keluar dari prompt). Bukan izin untuk log secret — tetap jangan log nilai vault.
 - Field dengan nama mengandung `api_key`/`token`/`secret`/`password`/`authorization` → nilai di-`[REDACTED]` penuh.
 - Nilai string berpola secret (`sk-…`, `Bearer …`, `ghp_…`, AWS/Google/Slack key) → bagian yang cocok di-redact.
