@@ -1062,6 +1062,7 @@ class AgentLoop:
                     input_data,
                     task_id=self.cfg.task_id,
                     node_id=self.cfg.node_id,
+                    owner_user_id=self.cfg.user_id if self.cfg.user_id != "default" else None,
                 )
                 return {
                     "proposed": True,
@@ -1116,17 +1117,16 @@ class AgentLoop:
         started = time.monotonic()
         outcome = "ok"
         try:
+            timeout = getattr(tool, "timeout_sec", None) or self.config.tool_timeout_sec
             result = await asyncio.wait_for(
                 tool.execute(input_data, vault=self.vault, db=self.db),
-                timeout=self.config.tool_timeout_sec,
+                timeout=timeout,
             )
             result = self._truncate_tool_output(result)
         except asyncio.TimeoutError:
             outcome = "timeout"
             log.warning("tool_timeout", tool=name, session=self.cfg.session_id)
-            result = {
-                "error": f"Tool '{name}' melebihi batas waktu {self.config.tool_timeout_sec}s"
-            }
+            result = {"error": f"Tool '{name}' melebihi batas waktu {timeout}s"}
         except Exception as exc:  # noqa: BLE001 — tool pihak ketiga, kegagalan harus anggun
             outcome = "error"
             log.error("tool_failed", tool=name, error=str(exc), session=self.cfg.session_id)

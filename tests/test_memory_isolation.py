@@ -89,3 +89,14 @@ async def test_memory_search_l1_hides_other_sessions(db):
         db=db,
     )
     assert result["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_deleting_chat_removes_l4_archive_and_l1_checkpoint(db):
+    """Audit 2026-09-25: "hapus chat" SEBELUMNYA meninggalkan transkrip penuh di
+    memory_l4 (tetap dicari & disuntik ke prompt) dan checkpoint L1 sesi."""
+    await _archive(db, "sess-del", None, "deploy bug database rahasia")
+    await MemoryManager("pm", "sess-del", db).update_checkpoint("ringkasan rahasia")
+    await ChatSessionStore(db).soft_delete("sess-del")
+    assert await db.fetchall("SELECT 1 FROM memory_l4 WHERE session_id='sess-del'") == []
+    assert await db.fetchall("SELECT 1 FROM memory_l1 WHERE key='last_summary:sess-del'") == []

@@ -213,3 +213,26 @@ async def test_pdf_write_rejects_bad_content(tmp_path, monkeypatch):
     _patch_workspace(monkeypatch, tmp_path, "tools.document")
     result = await PdfWriteTool().execute({"path": "x.pdf", "content": "string"}, vault=None)
     assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_pdf_write_escapes_reportlab_markup(tmp_path):
+    """Audit 2026-09-25: markup reportlab dari LLM (mis. <img src> ke file lokal)
+    tak boleh ditafsirkan — dirender sebagai teks literal."""
+    from pypdf import PdfReader
+    from infra.workspace import CURRENT_WORKSPACE_ROOT
+
+    token = CURRENT_WORKSPACE_ROOT.set(str(tmp_path))
+    try:
+        result = await PdfWriteTool().execute(
+            {
+                "path": "x.pdf",
+                "content": {"sections": [{"body": '<img src="/etc/hosts"/> a & b <b>unclosed'}]},
+            },
+            vault=None,
+        )
+    finally:
+        CURRENT_WORKSPACE_ROOT.reset(token)
+    assert result.get("ok") is True, result
+    text = PdfReader(str(tmp_path / "x.pdf")).pages[0].extract_text()
+    assert "<img" in text and "a & b" in text

@@ -1507,7 +1507,9 @@ async def approve(request: Request):
     # approve: tool ASLI (turn percakapan yang memintanya sudah hilang lintas
     # restart) dieksekusi MANDIRI di sini — lihat docstring core/late_execute.py
     # untuk kenapa ini bukan resume percakapan penuh.
-    outcome = await execute_orphan_approval(db, CONFIG, approval_gate, approval_id)
+    outcome = await execute_orphan_approval(
+        db, CONFIG, approval_gate, approval_id, workdir_roots=_workdir_roots_for(request)
+    )
     return {
         "ok": outcome["ok"],
         "approval_id": approval_id,
@@ -2046,11 +2048,24 @@ async def autopilots_page(request: Request):
     autopilots = await autopilot_store.list_all()
     runs = await autopilot_store.recent_runs()
     # Proposal yang diantri autopilot (decision='proposal:pending') — menunggu tinjauan.
-    proposals = await db.fetchall(
-        """SELECT id, session_id, tool_name, tool_input, created_at
-           FROM approval_log WHERE decision='proposal:pending'
-           ORDER BY id DESC LIMIT 30"""
-    )
+    # Audit 2026-09-25: proposal subtask Task Graph milik user lain (lengkap
+    # tool_input-nya) SEBELUMNYA terlihat siapa pun — kini difilter pemilik,
+    # pola sama _can_access_owned_resource (tanpa owner = autopilot admin, terlihat).
+    owner_filter = _session_owner_filter(request)
+    if owner_filter is None:
+        proposals = await db.fetchall(
+            """SELECT id, session_id, tool_name, tool_input, created_at
+               FROM approval_log WHERE decision='proposal:pending'
+               ORDER BY id DESC LIMIT 30"""
+        )
+    else:
+        proposals = await db.fetchall(
+            """SELECT id, session_id, tool_name, tool_input, created_at
+               FROM approval_log WHERE decision='proposal:pending'
+                 AND (owner_user_id IS NULL OR owner_user_id = ?)
+               ORDER BY id DESC LIMIT 30""",
+            (owner_filter,),
+        )
     return templates.TemplateResponse(
         request,
         "autopilots.html",

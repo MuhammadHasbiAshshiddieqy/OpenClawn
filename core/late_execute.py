@@ -27,7 +27,11 @@ from core.tool_audit import ToolAudit
 from infra.config import AppConfig
 from infra.database import DatabaseManager
 from infra.logging import log
-from infra.workspace import CURRENT_WORKSPACE_ROOT, SessionWorkspaceStore
+from infra.workspace import (
+    CURRENT_WORKSPACE_ROOT,
+    SessionWorkspaceStore,
+    validate_workdir_candidate,
+)
 from roles.registry import available_roles
 from security.approval import ApprovalGate
 from security.policy_engine import PolicyEngine
@@ -40,6 +44,7 @@ async def execute_orphan_approval(
     config: AppConfig,
     approval_gate: ApprovalGate,
     approval_id: str,
+    workdir_roots: tuple[str, ...] | None = None,
 ) -> dict:
     """Jalankan tool dari satu approval yatim yang baru user approve.
 
@@ -47,6 +52,9 @@ async def execute_orphan_approval(
     `ok=False` berarti eksekusi TIDAK terjadi (approval sudah diputuskan lebih
     dulu, atau ditolak fail-closed) — beda dari `result={"error": ...}` yang
     berarti tool DIEKSEKUSI tapi gagal (mis. timeout tool itu sendiri).
+
+    `workdir_roots`: allowlist folder kerja milik user yang MENYETUJUI (web/main.py
+    § `_workdir_roots_for`) — None → default config (audit 2026-09-25 #1).
     """
     row = await db.fetchone(
         """SELECT session_id, tool_name, tool_input
@@ -120,6 +128,22 @@ async def execute_orphan_approval(
     # None bila sesi tak pernah pindah folder → tool jatuh ke CONFIG.workspace_root
     # (perilaku default, lihat infra/workspace.py::effective_workspace_root).
     workdir = await SessionWorkspaceStore(db).get(session_id)
+    # Audit 2026-09-25 (#1): folder tersimpan divalidasi ULANG — baris lama (mis.
+    # "/" dari sebelum allowlist ada) tak boleh jadi root tool destruktif yang
+    # dieksekusi di sini tanpa AgentLoop.
+    if workdir:
+        validated, err = validate_workdir_candidate(workdir, workdir_roots)
+        if err:
+            log.warning(
+                "orphan_workdir_rejected", approval_id=approval_id, workdir=workdir, reason=err
+            )
+        workdir = validated
+
+    # Audit 2026-09-25: klaim approval SEBELUM eksekusi — hanya satu pemenang
+    # bila dua POST /approve balapan (sebelumnya keduanya menjalankan tool).
+    if not await approval_gate.finalize_orphan(approval_id, "approved:late"):
+        return {"ok": False, "error": "approval tidak ditemukan atau sudah diputuskan"}
+
     token = CURRENT_WORKSPACE_ROOT.set(workdir)
     outcome = "ok"
     started = time.monotonic()
@@ -140,15 +164,6 @@ async def execute_orphan_approval(
         latency_ms = int((time.monotonic() - started) * 1000)
         await ToolAudit(db).record(session_id, role, tool_name, outcome, latency_ms)
 
-    # "approved:late" (bukan "approved" biasa) agar audit trail membedakan
-    # approve yang melalui sesi live vs. yang dieksekusi mandiri lintas restart.
-    finalized = await approval_gate.finalize_orphan(approval_id, "approved:late")
-    if not finalized:
-        # Race: caller lain menyelesaikan approval_id ini di antara SELECT di
-        # atas dan sini. Tool SUDAH terlanjur dieksekusi (fail-soft yang
-        # diterima — lihat docstring `ApprovalGate.finalize_orphan`); tetap
-        # laporkan hasil apa adanya, jangan sembunyikan bahwa itu terjadi.
-        log.warning("orphan_approval_race", approval_id=approval_id, tool=tool_name)
     log.info(
         "orphan_approval_executed",
         approval_id=approval_id,

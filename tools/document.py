@@ -4,6 +4,9 @@ Semua library murni-Python tanpa dependency sistem (pypdf, python-docx, python-p
 openpyxl, reportlab) — pengecualian dependency yang disetujui owner, lihat CLAUDE.md §7.
 """
 
+import asyncio
+from xml.sax.saxutils import escape as _xml_escape
+
 from pypdf import PdfReader
 
 from infra.config import CONFIG
@@ -11,6 +14,18 @@ from infra.workspace import WorkspaceViolation, resolve_in_current_workspace
 from tools.base import Tool
 
 MAX_PDF_CHARS = CONFIG.tool_max_output
+
+
+def _plain(value) -> str:
+    """Teks → aman untuk `reportlab.Paragraph`.
+
+    Audit 2026-09-25: Paragraph menafsirkan mini-markup (`<img src=...>`,
+    `<a href=...>`, `<font>`). Konten dari LLM (bisa hasil prompt injection)
+    SEBELUMNYA diteruskan mentah — `<img src="/path/di/luar/workspace.png"/>`
+    menyematkan file lokal apa pun ke PDF, dan markup rusak menggagalkan render.
+    Semua teks kini di-escape (tampil literal)."""
+    return _xml_escape(str(value))
+
 
 # Format dokumen yang didukung doc_write → ekstensi file.
 DOC_FORMATS = {"docx", "pptx", "xlsx", "md"}
@@ -47,13 +62,16 @@ class PdfReadTool(Tool):
         if not safe.exists():
             return {"error": f"File tidak ditemukan: {path}"}
 
+        # Audit 2026-09-25: parsing PDF CPU/IO-bound → di thread, bukan event loop.
+        return await asyncio.to_thread(self._extract, safe, input_data.get("page"))
+
+    def _extract(self, safe, page_arg) -> dict:
         try:
             reader = PdfReader(str(safe))
         except Exception as e:  # pypdf melempar beragam error parsing — tangani semua
             return {"error": f"Gagal membuka PDF: {e}"}
 
         # Halaman opsional: 1-indexed agar natural bagi user. Default: semua.
-        page_arg = input_data.get("page")
         total = len(reader.pages)
         try:
             if page_arg is not None:
@@ -119,16 +137,15 @@ class DocWriteTool(Tool):
         except WorkspaceViolation as e:
             return {"error": str(e)}
 
+        writer = {
+            "md": self._write_md,
+            "docx": self._write_docx,
+            "pptx": self._write_pptx,
+            "xlsx": self._write_xlsx,
+        }[fmt]
         try:
-            match fmt:
-                case "md":
-                    self._write_md(safe, content)
-                case "docx":
-                    self._write_docx(safe, content)
-                case "pptx":
-                    self._write_pptx(safe, content)
-                case "xlsx":
-                    self._write_xlsx(safe, content)
+            # Audit 2026-09-25: penulisan dokumen sinkron → thread (tak memblokir loop).
+            await asyncio.to_thread(writer, safe, content)
         except ImportError as e:
             return {"error": f"Library untuk format {fmt} tidak terpasang: {e}"}
         except (ValueError, TypeError) as e:
@@ -268,7 +285,7 @@ class PdfWriteTool(Tool):
             return {"error": str(e)}
 
         try:
-            self._render(str(safe), content)
+            await asyncio.to_thread(self._render, str(safe), content)
         except ImportError as e:
             return {"error": f"reportlab tidak terpasang: {e}"}
         except Exception as e:  # noqa: BLE001 — penulisan PDF harus gagal anggun
@@ -283,16 +300,16 @@ class PdfWriteTool(Tool):
         styles = getSampleStyleSheet()
         flow = []
         if content.get("title"):
-            flow.append(Paragraph(str(content["title"]), styles["Title"]))
+            flow.append(Paragraph(_plain(content["title"]), styles["Title"]))
             flow.append(Spacer(1, 12))
         for sec in content.get("sections", []):
             if sec.get("heading"):
-                flow.append(Paragraph(str(sec["heading"]), styles["Heading2"]))
+                flow.append(Paragraph(_plain(sec["heading"]), styles["Heading2"]))
             if sec.get("body"):
-                flow.append(Paragraph(str(sec["body"]), styles["BodyText"]))
+                flow.append(Paragraph(_plain(sec["body"]), styles["BodyText"]))
             bullets = sec.get("bullets", [])
             if bullets:
-                items = [ListItem(Paragraph(str(b), styles["BodyText"])) for b in bullets]
+                items = [ListItem(Paragraph(_plain(b), styles["BodyText"])) for b in bullets]
                 flow.append(ListFlowable(items, bulletType="bullet"))
             flow.append(Spacer(1, 8))
         SimpleDocTemplate(out_path, pagesize=A4).build(flow)

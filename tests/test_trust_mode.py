@@ -232,3 +232,17 @@ async def test_auto_approve_records_trust_decision_and_returns_true(db):
     )
     assert row["decision"] == "auto:trust_mode"
     assert row["tool_name"] == "shell_run"
+
+
+@pytest.mark.asyncio
+async def test_autopilot_proposal_records_owner(db):
+    """Audit 2026-09-25: proposal dari subtask Task Graph milik user tercatat
+    dengan owner — sebelumnya NULL (terlihat semua user di /autopilots)."""
+    agent = AgentLoop(
+        AgentConfig(role="dev", session_id="s-prop", autopilot=True, user_id="7"), db=db
+    )
+    await agent._execute_tool("file_write", {"path": "a.txt", "content": "x"})
+    row = await db.fetchone(
+        "SELECT owner_user_id FROM approval_log WHERE decision='proposal:pending'"
+    )
+    assert row["owner_user_id"] == "7"

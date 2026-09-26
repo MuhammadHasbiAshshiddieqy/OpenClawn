@@ -36,6 +36,9 @@ class TaskGraphSubmitTool(Tool):
     name = "task_graph_submit"
     requires_approval = False
 
+    # Audit 2026-09-25: budget graph penuh, bukan tool_timeout_sec (40s).
+    timeout_sec = CONFIG.task_graph_timeout_sec
+
     async def execute(self, input_data: dict, vault, db=None) -> dict:
         session_id = input_data.get("_session_id")
         if not session_id:

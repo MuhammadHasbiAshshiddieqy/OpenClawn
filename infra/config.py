@@ -232,6 +232,12 @@ class AppConfig:
     # Timeout keras per node (§1.3) — subtask yang menggantung tak boleh
     # membekukan seluruh graph selamanya.
     task_graph_node_timeout_sec: int = 300
+    # Audit 2026-09-25: budget TOTAL satu graph (`task_graph_submit` dijalankan
+    # di dalam `AgentLoop._execute_tool`). Sebelumnya tool ini ikut
+    # `tool_timeout_sec` (40s) — jauh di bawah timeout per node (300s), jadi graph
+    # nyata hampir selalu dipotong di 40s: baris task_graphs macet 'running'
+    # selamanya dan subtask tetap jalan tanpa induk.
+    task_graph_timeout_sec: int = 1800
     # === Headroom compaction (opt-in via /settings, terinspirasi chopratejas/headroom) ===
     # Saat budget token habis, compactor default MEMOTONG turn lama (truncation — yang
     # hilang benar-benar hilang, tapi jujur). Compaction MERINGKAS turn lama jadi satu

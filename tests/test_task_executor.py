@@ -263,3 +263,49 @@ async def test_task_nodes_persisted_to_db(db):
     assert node_row["status"] == "completed"
     assert node_row["session_id"] == "t8:A"
     assert node_row["result_summary"] == "hasil A"
+
+
+# ── Audit 2026-09-25: graph dibatalkan & batas waktu tool ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cancelled_graph_cancels_children_and_closes_row(db):
+    """SEBELUMNYA executor yang dibatalkan (timeout tool 40s di AgentLoop)
+    meninggalkan subtask tetap jalan dan task_graphs macet 'running'."""
+    FakeAgentLoop._attempt_counts = {}
+    graph = TaskGraph([TaskNode(node_id="slow", role="dev", prompt="x")])
+    executor = TaskGraphExecutor(db, _make_config(), lambda cfg: FakeAgentLoop(cfg, 5))
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(executor.run("tg-cancel", graph, None, "parent"), timeout=0.2)
+
+    row = await db.fetchone("SELECT status FROM task_graphs WHERE id='tg-cancel'")
+    node = await db.fetchone("SELECT status, error FROM task_nodes WHERE task_id='tg-cancel'")
+    assert row["status"] == "failed"
+    assert node["status"] == "failed" and "dibatalkan" in node["error"]
+    await asyncio.sleep(0)
+    pending = [t for t in asyncio.all_tasks() if "_run_node" in repr(t.get_coro())]
+    assert not [t for t in pending if not t.done()]
+
+
+@pytest.mark.asyncio
+async def test_subtasks_inherit_graph_owner(db):
+    FakeAgentLoop._attempt_counts = {}
+    seen: list[str] = []
+
+    def factory(cfg):
+        seen.append(cfg.user_id)
+        return FakeAgentLoop(cfg, "ok")
+
+    graph = TaskGraph([TaskNode(node_id="A", role="dev", prompt="a")])
+    await TaskGraphExecutor(db, _make_config(), factory).run("tg-own", graph, "42", "parent")
+    assert seen == ["42"]
+
+
+def test_task_graph_submit_uses_graph_budget_not_tool_timeout():
+    """task_graph_submit SEBELUMNYA ikut tool_timeout_sec (40s) < node timeout (300s)."""
+    from infra.config import CONFIG
+    from tools.task_graph_submit import TaskGraphSubmitTool
+
+    assert TaskGraphSubmitTool.timeout_sec == CONFIG.task_graph_timeout_sec
+    assert CONFIG.task_graph_timeout_sec > CONFIG.task_graph_node_timeout_sec

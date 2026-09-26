@@ -15,6 +15,7 @@ KEAMANAN (§1): server MCP = kode pihak ketiga TAK TERKENDALI. Maka:
 Extractable: bergantung SDK `mcp` + (`_ssrf_guard` dari tools.web untuk remote).
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
@@ -85,7 +86,11 @@ class MCPClient:
 
             if not self.config.url.startswith(("http://", "https://")):
                 raise MCPError("url MCP harus diawali http:// atau https://")
-            blocked = _ssrf_guard(self.config.url)
+            # Audit 2026-09-25: getaddrinfo sinkron dipindah ke thread. Catatan
+            # jujur: koneksi dibuat SDK `mcp` dengan httpx-nya sendiri, jadi
+            # validasi ulang IP saat connect (tools/web.py::_PublicOnlyBackend)
+            # TIDAK berlaku di sini — URL MCP remote hanya bisa diisi admin.
+            blocked = await asyncio.to_thread(_ssrf_guard, self.config.url)
             if blocked:
                 raise MCPError(f"server MCP remote ditolak (SSRF guard): {blocked}")
             from mcp.client.streamable_http import streamablehttp_client

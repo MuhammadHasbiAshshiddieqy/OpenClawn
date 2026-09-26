@@ -127,8 +127,8 @@ class ChatSessionStore:
 
     async def soft_delete(self, session_id: str) -> None:
         """Hapus dari sidebar (soft — metadata tetap ada untuk audit trail lama),
-        TAPI transkrip (`session_turns`) dan folder aktif (`session_workspace`)
-        dihapus FISIK — user minta "hapus", isi percakapan harus benar hilang.
+        TAPI transkrip (`session_turns`), folder aktif (`session_workspace`), arsip
+        L4 (`memory_l4`) dan checkpoint L1 sesi ini dihapus FISIK — user minta "hapus", isi percakapan harus benar hilang.
 
         Isolasi tenant: `tenant_id=?` di WHERE mencegah tenant A menghapus sesi
         tenant B walau menebak session_id-nya (UUID sudah sulit ditebak, ini
@@ -140,3 +140,10 @@ class ChatSessionStore:
         )
         await self.db.execute("DELETE FROM session_turns WHERE session_id=?", (session_id,))
         await self.db.execute("DELETE FROM session_workspace WHERE session_id=?", (session_id,))
+        # Audit 2026-09-25: arsip L4 (full_content = transkrip penuh, bisa dicari
+        # FTS dan disuntik ke prompt berikutnya) dan checkpoint L1 per sesi
+        # SEBELUMNYA tertinggal setelah "hapus" — isi percakapan tak benar hilang.
+        # (routing_events/audit_chain TETAP — jejak audit dengan retensi minimum,
+        # infra/retention.py, bukan isi percakapan yang bisa dipakai ulang agent.)
+        await self.db.execute("DELETE FROM memory_l4 WHERE session_id=?", (session_id,))
+        await self.db.execute("DELETE FROM memory_l1 WHERE key=?", (f"last_summary:{session_id}",))

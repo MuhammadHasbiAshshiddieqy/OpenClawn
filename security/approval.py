@@ -158,7 +158,7 @@ class ApprovalGate:
         await self._record_decision(approval_id, decision)
         return approved
 
-    async def _record_decision(self, approval_id: str, decision: str) -> None:
+    async def _record_decision(self, approval_id: str, decision: str) -> bool:
         """Update baris pending menjadi keputusan final, dicari via kolom approval_id
         (bukan lagi via 'decision=pending:{id}' yang rapuh — lihat request())."""
         cursor = await self.db.execute(
@@ -170,7 +170,7 @@ class ApprovalGate:
         # 8.1) atau approval_id tak ada. Jangan tulis entry chain untuk keputusan
         # yang TAK BENAR-BENAR terjadi — sama pola `set_human_feedback`.
         if cursor.rowcount <= 0:
-            return
+            return False
         # Entry BARU, bukan mengubah entry 'requested' — pasangan
         # requested→decided inilah bukti bahwa checkpoint manusia benar-benar
         # dilalui (dan berapa lama), bukan diklaim setelah fakta.
@@ -183,35 +183,29 @@ class ApprovalGate:
             ref_table="approval_log",
             ref_id=None,
         )
+        return True
 
     async def finalize_orphan(self, approval_id: str, decision: str) -> bool:
         """Selesaikan approval 'pending' YATIM (dibuat sebelum restart server
         terakhir — tak ada `asyncio.Future` in-memory lagi untuk di-resolve lewat
         `resolve()`) — § Durable execution, TODO.md Prioritas 8.1.
 
-        Dipanggil `core/late_execute.py` dua kali: langsung untuk reject, atau
-        SETELAH tool selesai dieksekusi mandiri untuk approve (`decision`
-        biasanya `"approved:late"` agar audit trail membedakan dari approve
-        langsung lewat klik saat sesi masih live). Return True bila baris
-        memang masih pending & berhasil diselesaikan (rowcount>0), False bila
-        sudah diputuskan lebih dulu (race dengan caller lain) — caller
-        (`core/late_execute.py`) tetap sudah menjalankan tool dalam kasus race
-        approve; itu risiko fail-soft yang diterima, bukan double-execute yang
-        disengaja (approval_id unik per permintaan, race hanya bisa terjadi
-        dari dua klik ganda pada tombol yang sama)."""
+        Dipanggil `core/late_execute.py`: langsung untuk reject, atau SEBELUM
+        tool dieksekusi mandiri untuk approve (`decision` `"approved:late"` agar
+        audit trail membedakan dari approve langsung saat sesi masih live).
+        Return True HANYA untuk satu pemenang (rowcount>0), False bila sudah
+        diputuskan lebih dulu. Audit 2026-09-25: approve SEBELUMNYA diklaim
+        SETELAH tool jalan — dua klik/request bersamaan menjalankan tool
+        destruktif DUA kali; kini klaim dulu, eksekusi hanya oleh pemenang."""
         if approval_id in self._pending:
             # Ada Future hidup — bukan orphan. Caller salah jalur (seharusnya
             # `resolve()`), tolak agar tak ada dua sumber kebenaran untuk satu
             # approval yang sama.
             return False
-        before = await self.db.fetchone(
-            "SELECT 1 FROM approval_log WHERE approval_id=? AND decision='pending'",
-            (approval_id,),
-        )
-        if before is None:
-            return False
-        await self._record_decision(approval_id, decision)
-        return True
+        # Audit 2026-09-25: klaim ATOMIK lewat `UPDATE ... WHERE decision='pending'`
+        # (rowcount) — sebelumnya SELECT lalu UPDATE terpisah, dua caller bersamaan
+        # sama-sama lolos SELECT dan sama-sama menganggap dirinya pemenang.
+        return await self._record_decision(approval_id, decision)
 
     async def pending_list_with_orphans(
         self, session_id: str | None = None, owner_user_id: str | None = None
@@ -311,6 +305,7 @@ class ApprovalGate:
         tool_input: dict,
         task_id: str | None = None,
         node_id: str | None = None,
+        owner_user_id: str | None = None,
     ) -> None:
         """Antri aksi destruktif dari autopilot sebagai PROPOSAL (tanpa Future hidup).
 
@@ -328,8 +323,9 @@ class ApprovalGate:
         try:
             await self.db.execute(
                 """INSERT INTO approval_log
-                   (session_id, tool_name, tool_input, decision, task_id, node_id)
-                   VALUES (?,?,?,?,?,?)""",
+                   (session_id, tool_name, tool_input, decision, task_id, node_id,
+                    owner_user_id)
+                   VALUES (?,?,?,?,?,?,?)""",
                 (
                     session_id,
                     tool_name,
@@ -337,6 +333,7 @@ class ApprovalGate:
                     "proposal:pending",
                     task_id,
                     node_id,
+                    owner_user_id,
                 ),
             )
         except Exception as e:  # noqa: BLE001 — antrian proposal bukan jalur kritis

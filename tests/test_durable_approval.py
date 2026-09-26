@@ -133,7 +133,9 @@ async def test_execute_orphan_approval_happy_path_runs_tool(db, tmp_path):
     await SessionWorkspaceStore(manager).set("s-dev", str(tmp_path))
     gate = ApprovalGate(manager, config)
 
-    outcome = await execute_orphan_approval(manager, config, gate, "orph-exec")
+    outcome = await execute_orphan_approval(
+        manager, config, gate, "orph-exec", workdir_roots=(str(tmp_path),)
+    )
 
     assert outcome["ok"] is True
     assert outcome["executed"] is True
@@ -227,3 +229,54 @@ async def test_execute_orphan_approval_does_not_double_execute_live_future(db):
 
     gate.resolve("live-3", True)
     await task
+
+
+# ── Audit 2026-09-25: klaim sebelum eksekusi & validasi ulang folder kerja ──
+
+
+@pytest.mark.asyncio
+async def test_concurrent_orphan_approve_executes_tool_once(db, tmp_path):
+    """SEBELUMNYA approval diklaim SETELAH tool jalan — dua POST /approve
+    bersamaan menjalankan tool destruktif dua kali."""
+    import asyncio
+
+    manager, config = db
+    await _insert_session(manager, "s-race", "dev")
+    await _insert_pending(
+        manager, "orph-race", "s-race", "file_append", {"path": "log.txt", "content": "x"}
+    )
+    await SessionWorkspaceStore(manager).set("s-race", str(tmp_path))
+    gate = ApprovalGate(manager, config)
+    roots = (str(tmp_path),)
+
+    results = await asyncio.gather(
+        execute_orphan_approval(manager, config, gate, "orph-race", workdir_roots=roots),
+        execute_orphan_approval(manager, config, gate, "orph-race", workdir_roots=roots),
+    )
+    assert sum(1 for r in results if r.get("executed")) == 1
+    assert (tmp_path / "log.txt").read_text() == "x"
+
+
+@pytest.mark.asyncio
+async def test_orphan_saved_workdir_outside_roots_not_used(db, tmp_path, monkeypatch):
+    """Folder sesi tersimpan di luar allowlist tak boleh jadi root tool — jatuh
+    ke workspace default."""
+    manager, config = db
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    # Workspace default proses diarahkan ke folder test (jangan menulis ke repo).
+    monkeypatch.setattr(
+        "tools.file_ops.CONFIG", AppConfig(db_path=":memory:", workspace_root=str(allowed))
+    )
+    await _insert_session(manager, "s-out", "dev")
+    await _insert_pending(
+        manager, "orph-out", "s-out", "file_write", {"path": "x.txt", "content": "y"}
+    )
+    await SessionWorkspaceStore(manager).set("s-out", str(outside))
+    gate = ApprovalGate(manager, config)
+
+    await execute_orphan_approval(manager, config, gate, "orph-out", workdir_roots=(str(allowed),))
+    assert not (outside / "x.txt").exists()
+    assert (allowed / "x.txt").read_text() == "y"

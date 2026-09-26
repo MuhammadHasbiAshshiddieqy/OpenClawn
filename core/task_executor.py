@@ -52,6 +52,8 @@ class TaskGraphExecutor:
         self.db = db
         self.config = config
         self.agent_factory = agent_factory
+        # Pemilik graph yang sedang dijalankan — diwariskan ke setiap subtask.
+        self._owner_user_id: str | None = None
 
     async def run(
         self,
@@ -90,7 +92,39 @@ class TaskGraphExecutor:
 
         completed: set[str] = set()
         running: dict[str, asyncio.Task] = {}
+        self._owner_user_id = owner_user_id
 
+        try:
+            await self._drive(task_id, graph, completed, running)
+        except BaseException:
+            # Audit 2026-09-25: executor dibatalkan (timeout tool di AgentLoop,
+            # disconnect) SEBELUMNYA meninggalkan subtask tetap jalan tanpa induk
+            # dan baris task_graphs macet 'running' selamanya. Batalkan anak,
+            # tandai yang belum selesai 'failed', tutup graph — lalu teruskan.
+            for t in running.values():
+                t.cancel()
+            await asyncio.gather(*running.values(), return_exceptions=True)
+            for n in graph.nodes.values():
+                if n.status in ("pending", "running"):
+                    n.status = "failed"
+                    n.error = n.error or "graph dibatalkan (timeout/cancel) sebelum node selesai"
+                    await self._persist_node(task_id, n)
+            await self.db.execute(
+                "UPDATE task_graphs SET status='failed', finished_at=CURRENT_TIMESTAMP WHERE id=?",
+                (task_id,),
+            )
+            raise
+        return await self._finalize(task_id, graph)
+
+    async def _drive(
+        self,
+        task_id: str,
+        graph: TaskGraph,
+        completed: set[str],
+        running: dict[str, asyncio.Task],
+    ) -> None:
+        """Loop penjadwalan DAG sampai graph terminal (dipisah dari `run` agar
+        pembersihan saat dibatalkan bisa melihat `running` yang sedang jalan)."""
         while not graph.is_terminal():
             ready = [n for n in graph.ready_nodes(completed) if n.node_id not in running]
             for node in ready:
@@ -123,6 +157,7 @@ class TaskGraphExecutor:
                             dep.status = "blocked"
                             await self._persist_node(task_id, dep)
 
+    async def _finalize(self, task_id: str, graph: TaskGraph) -> dict:
         statuses = {n.status for n in graph.nodes.values()}
         if statuses == {"completed"}:
             graph_status = "completed"
@@ -161,6 +196,10 @@ class TaskGraphExecutor:
                 child_cfg = AgentConfig(
                     role=node.role,
                     session_id=f"{task_id}:{node.node_id}",
+                    # Audit 2026-09-25: subtask SEBELUMNYA user_id="default" —
+                    # proposal-nya tercatat tanpa owner (terlihat semua user di
+                    # /autopilots) dan memori L4-nya tak ter-scope ke pemilik.
+                    user_id=self._owner_user_id or "default",
                     autopilot=True,
                     persist_history=False,
                     task_id=task_id,

@@ -18,6 +18,7 @@ Keamanan (CLAUDE.md §1) — impor = teks eksternal masuk ke ranah agent, jadi B
 Extractable: hanya bergantung `DatabaseManager` + stdlib + (opsional) httpx untuk URL.
 """
 
+import asyncio
 import hashlib
 import json
 import re
@@ -30,7 +31,7 @@ from infra.database import DatabaseManager
 from infra.logging import log
 from security.shield import Shield
 from security.skill_scanner import scan_skill
-from tools.web import SSRFBlockedRedirect, _ssrf_guard, _stream_capped
+from tools.web import SSRFBlockedRedirect, _outbound_client, _ssrf_guard, _stream_capped
 
 # Penanda batas antar-skill dalam satu pack Markdown.
 SKILL_DELIMITER = "\n---\n"
@@ -229,11 +230,14 @@ class SkillPack:
         """
         if not url.startswith(("http://", "https://")):
             return {"imported": 0, "skipped": 0, "error": "url harus http:// atau https://"}
-        blocked = _ssrf_guard(url)
+        # Audit 2026-09-25: DNS guard di thread (tak memblokir event loop) +
+        # client yang memvalidasi ulang IP saat connect (anti DNS rebinding),
+        # sama dengan tool web.
+        blocked = await asyncio.to_thread(_ssrf_guard, url)
         if blocked:
             return {"imported": 0, "skipped": 0, "error": blocked}
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with _outbound_client() as client:
                 status, text, _truncated = await _stream_capped(
                     client, "GET", url, MAX_IMPORT_BYTES
                 )
