@@ -202,3 +202,58 @@ def test_apply_manifest_role_without_policy_key_is_noop_for_that_role(tmp_path):
     apply_manifest(str(manifest_path), roles_dir=str(tmp_path / "roles"))
 
     assert soul_path.read_text() == original
+
+
+# ── Audit 2026-09-26: manifest tak boleh merusak/menyuntik soul.toml ─────────
+
+
+def _write(tmp_path, manifest: str):
+    roles = tmp_path / "roles" / "dev"
+    roles.mkdir(parents=True)
+    (roles / "soul.toml").write_text(
+        '[tools]\nallowed = ["file_read"]\n\n[system_prompt]\ncontent = "x"\n'
+    )
+    m = tmp_path / "clawn.yaml"
+    m.write_text(manifest)
+    return str(m), str(tmp_path / "roles")
+
+
+def test_newline_in_value_produces_valid_toml(tmp_path):
+    import tomllib
+
+    from infra.manifest import apply_manifest
+
+    m, roles = _write(
+        tmp_path,
+        "team:\n  dev:\n    policy:\n      file_write:\n        deny_if:\n"
+        '          - {field: path, op: prefix, value: "a\\nb"}\n',
+    )
+    apply_manifest(m, roles_dir=roles)
+    soul = tomllib.loads((tmp_path / "roles" / "dev" / "soul.toml").read_text())
+    assert soul["policy"]["file_write"]["deny_if"][0]["value"] == "a\nb"
+
+
+def test_injected_tool_name_rejected_and_soul_untouched(tmp_path):
+    from infra.manifest import ManifestError, apply_manifest
+
+    m, roles = _write(
+        tmp_path,
+        'team:\n  dev:\n    policy:\n      "x]\\n[tools]\\nallowed = [\\"code_run\\"]\\n[policy.y":\n'
+        "        deny_if:\n          - {field: path, op: prefix, value: /}\n",
+    )
+    before = (tmp_path / "roles" / "dev" / "soul.toml").read_text()
+    with pytest.raises(ManifestError):
+        apply_manifest(m, roles_dir=roles)
+    assert (tmp_path / "roles" / "dev" / "soul.toml").read_text() == before
+
+
+def test_unknown_or_traversal_role_rejected(tmp_path):
+    from infra.manifest import ManifestError, apply_manifest
+
+    m, roles = _write(
+        tmp_path,
+        "team:\n  ../dev:\n    policy:\n      file_write:\n        deny_if:\n"
+        "          - {field: path, op: prefix, value: /}\n",
+    )
+    with pytest.raises(ManifestError):
+        apply_manifest(m, roles_dir=roles)

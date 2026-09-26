@@ -307,6 +307,7 @@ Test untuk `core/activity.py` (Activity Timeline — agregasi lintas tabel, teri
 | `test_timeline_unknown_role_filters_to_empty` | Role tak dikenal → kosong |
 | `test_timeline_respects_limit` | `limit` menjepit jumlah, tetap terbaru-dulu |
 
+| `test_owner_filter_hides_other_users_content` | Audit 2026-09-26: non-admin tak melihat prompt/detail milik user lain |
 ---
 
 ### `tests/test_blocker.py`
@@ -721,6 +722,8 @@ Test untuk `core/audit_chain.py` — tamper-evident audit trail (§ Prioritas 9.
 | `test_append_is_fail_soft_on_db_error` | Kegagalan rantai tak melempar ke caller (turn user tetap jalan) |
 | `test_unicode_payload_roundtrips` | Payload non-ASCII konsisten antara penulisan & verifikasi |
 
+| `test_update_on_audit_chain_is_blocked` | Audit 2026-09-26: UPDATE diblokir trigger append-only (tes tamper kini DROP trigger dulu, meniru penyerang ber-akses DB) |
+| `test_verify_handles_chain_larger_than_one_batch` | `verify()` per batch tetap benar |
 ---
 
 ### `tests/test_security.py`
@@ -823,6 +826,7 @@ Test untuk `tools/`.
 | `test_outbound_client_uses_public_only_backend` | Audit 2026-09-25: backend SSRF terpasang di transport httpx (penjaga atribut privat) |
 | `test_web_fetch_blocks_dns_rebinding_at_connect` | DNS saat connect → 127.0.0.1 ditolak walau guard awal lolos |
 | `test_is_public_ip_handles_ipv4_mapped` | `::ffff:127.0.0.1` & `169.254.169.254` bukan publik |
+| `test_truncate_tool_output_caps_nested_values` | Audit 2026-09-26: dict/list besar di hasil tool ikut dipotong |
 ---
 
 ### `tests/test_task_graph.py`
@@ -1008,6 +1012,7 @@ Smoke test untuk endpoints Web UI.
 | `test_skills_page_shows_visibility_toggle_button` | `/skills` merender tombol toggle visibility untuk skill non-inherited |
 | `test_metrics_shows_auto_apply_badge` | `/metrics` tampilkan badge auto-tune (I4) |
 
+| `test_prometheus_requires_bearer_when_token_configured` | Audit 2026-09-26: token bearer opsional untuk `/metrics/prometheus` |
 ---
 
 ### `tests/test_settings.py`
@@ -1240,6 +1245,7 @@ Test untuk `infra/users.py` (unit, tanpa HTTP) — `UserStore` + `role_at_least`
 | `test_get_by_subject_unknown_returns_none` / `test_get_by_id_unknown_returns_none` | Lookup tak ditemukan → `None`, bukan exception |
 | `test_users_scoped_to_tenant` | Subject sama boleh ada di tenant berbeda, masing-masing bootstrap admin independen |
 
+| `test_cannot_demote_last_admin` / `test_can_demote_admin_when_another_admin_exists` | Audit 2026-09-26: admin terakhir tak bisa diturunkan |
 ---
 
 ### `tests/test_rbac_web.py`
@@ -1288,6 +1294,7 @@ config sistem (`/settings`, `/skills/import`, `/mcp/*`, `/router`,
 | `test_chat_stream_rejects_other_users_session_id` | `session_id` milik user lain → 403 |
 | `test_oidc_login_outside_allowlist_denied` | #12: akun di luar `OPENCLAWN_OIDC_ALLOWED_DOMAINS` tak bisa login |
 | `test_oidc_without_allowlist_closes_new_signups` / `test_oidc_existing_user_can_still_login_without_allowlist` / `test_oidc_open_signup_opt_in_restores_old_behaviour` | Keputusan 2026-09-26: tanpa allowlist pendaftaran baru ditutup, user lama tetap masuk, opt-in open signup |
+| `test_conversations_archive_scoped_to_owner` | Audit 2026-09-26: `/conversations` & `/activity` tak menampilkan transkrip user lain |
 ---
 
 ### `tests/test_prometheus_metrics.py`
@@ -1460,6 +1467,7 @@ Test untuk `infra/manifest.py` — `clawn.yaml` sebagai lapisan deklaratif di at
 | `test_apply_manifest_missing_soul_file_raises_manifest_error` | Role disebut manifest tapi `soul.toml`-nya tak ada → `ManifestError`, bukan membuat file baru diam-diam |
 | `test_apply_manifest_role_without_policy_key_is_noop_for_that_role` | Role ada di manifest tapi tanpa key `policy` (mis. hanya `model`) → no-op untuk role itu |
 
+| `test_newline_in_value_produces_valid_toml` / `test_injected_tool_name_rejected_and_soul_untouched` / `test_unknown_or_traversal_role_rejected` | Audit 2026-09-26: escape nilai, tolak injeksi key TOML (soul.toml tak tersentuh), role divalidasi |
 ---
 
 ### `tests/test_set_workdir.py`

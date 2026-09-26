@@ -572,6 +572,7 @@ seluruh statement termasuk subquery-nya), tak ada jeda `await` Python di
 tengahnya untuk request lain menyisip.
 
 **`set_access_role(user_id, access_role) → bool`** *(async)*  
+**Audit 2026-09-26:** menolak (return `False`) penurunan admin TERAKHIR tenant — guard di dalam satu statement `UPDATE` (atomik). Sebelumnya satu klik bisa membuat deployment OIDC-only tanpa admin sama sekali (terkunci permanen).
 Admin action (`POST /admin/users/set-role`, `web/main.py`). Role tak dikenal
 → ditolak (`False`), tak crash. Return `True` bila user ada & role valid.
 

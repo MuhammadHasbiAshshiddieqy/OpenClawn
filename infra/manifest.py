@@ -17,6 +17,9 @@ Desain (§ keputusan eksplisit owner, lihat riwayat diskusi):
 """
 
 import re
+import json
+import os
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -28,6 +31,11 @@ class ManifestError(Exception):
     tak sesuai (tanpa key 'team'), atau role yang disebut manifest tapi
     soul.toml-nya tak ada."""
 
+
+# Audit 2026-09-26: nama tool & key kondisi disisipkan sebagai bare key TOML —
+# harus identifier aman. Sebelumnya disisipkan mentah: key berisi `]`/newline bisa
+# menyuntik section lain (mis. menimpa `[tools] allowed`).
+_BARE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 _POLICY_SECTION_RE = re.compile(r"^\[policy\.[^\]]+\]\n(?:(?!^\[).*\n?)*", re.MULTILINE)
 
@@ -55,12 +63,21 @@ def _toml_value(value) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
-    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    # Audit 2026-09-26: escape JSON (\n, \t, \", \\, \uXXXX) valid sebagai basic
+    # string TOML — sebelumnya hanya \ dan " yang di-escape, newline/karakter
+    # kontrol menghasilkan soul.toml INVALID (role tak bisa dimuat sama sekali).
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _bare_key(key) -> str:
+    key = str(key)
+    if not _BARE_KEY_RE.match(key):
+        raise ManifestError(f"Nama tidak valid di manifest (hanya huruf/angka/_/-): {key!r}")
+    return key
 
 
 def _condition_toml(cond: dict) -> str:
-    parts = [f"{k} = {_toml_value(v)}" for k, v in cond.items()]
+    parts = [f"{_bare_key(k)} = {_toml_value(v)}" for k, v in cond.items()]
     return "{ " + ", ".join(parts) + " }"
 
 
@@ -72,7 +89,7 @@ def generate_policy_toml_block(policy: dict) -> str:
         return ""
     blocks = []
     for tool_name, rules in policy.items():
-        lines = [f"[policy.{tool_name}]"]
+        lines = [f"[policy.{_bare_key(tool_name)}]"]
         for key in ("deny_if", "approval_required_if"):
             conditions = rules.get(key)
             if not conditions:
@@ -103,23 +120,34 @@ def apply_manifest(manifest_path: str, roles_dir: str = "roles") -> list[str]:
     soul.toml-nya tidak ada di `roles_dir` → ManifestError (jangan diam-diam
     membuat file baru — itu keputusan operator, bukan default tersirat).
     """
-    manifest = load_manifest(manifest_path)
-    updated_roles = []
+    from roles.registry import available_roles
 
+    manifest = load_manifest(manifest_path)
+    known = available_roles(roles_dir)
+    # Audit 2026-09-26: render & validasi SEMUA role dulu, baru tulis — satu role
+    # yang salah tak boleh meninggalkan sebagian soul.toml sudah berubah.
+    pending: list[tuple[str, Path, str]] = []
     for role, cfg in manifest["team"].items():
         if not isinstance(cfg, dict) or "policy" not in cfg:
             continue
-
-        soul_path = Path(roles_dir) / role / "soul.toml"
-        if not soul_path.exists():
+        if role not in known:
             raise ManifestError(
-                f"Role '{role}' ada di manifest tapi soul.toml tidak ditemukan: {soul_path}"
+                f"Role '{role}' ada di manifest tapi soul.toml tidak ditemukan di {roles_dir}"
             )
-
+        soul_path = Path(roles_dir) / role / "soul.toml"
         policy_block = generate_policy_toml_block(cfg["policy"])
-        original = soul_path.read_text()
-        updated = _replace_policy_sections(original, policy_block)
-        soul_path.write_text(updated)
-        updated_roles.append(role)
+        updated = _replace_policy_sections(soul_path.read_text(), policy_block)
+        try:
+            tomllib.loads(updated)  # fail loud SEBELUM menulis, bukan saat agent dimuat
+        except tomllib.TOMLDecodeError as exc:
+            raise ManifestError(f"Hasil soul.toml role '{role}' tidak valid: {exc}") from exc
+        pending.append((role, soul_path, updated))
 
-    return updated_roles
+    for _, soul_path, updated in pending:
+        # Tulis atomik: file sementara di folder yang sama lalu os.replace —
+        # crash di tengah tak meninggalkan soul.toml setengah tertulis.
+        tmp = soul_path.with_suffix(".toml.tmp")
+        tmp.write_text(updated)
+        os.replace(tmp, soul_path)
+
+    return [role for role, _, _ in pending]

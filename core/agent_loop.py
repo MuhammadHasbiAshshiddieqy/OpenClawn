@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 import tomllib
 import uuid
@@ -1198,8 +1199,22 @@ class AgentLoop:
         limit = self.config.tool_max_output
         out: dict = {}
         for k, v in result.items():
-            if isinstance(v, str) and len(v) > limit:
-                out[k] = v[:limit] + f"\n…[dipotong, {len(v) - limit} char lagi]"
+            if isinstance(v, str):
+                text = v
+            elif isinstance(v, (dict, list, tuple)):
+                # Audit 2026-09-26: nilai bersarang SEBELUMNYA lolos utuh (hanya str
+                # yang dipotong) — dict/list besar (json_query tanpa path, baris
+                # db_query panjang, hasil MCP) membanjiri context. Diserialisasi
+                # dan dipotong seperti teks bila melebihi batas.
+                text = json.dumps(v, ensure_ascii=False, default=str)
+                if len(text) <= limit:
+                    out[k] = v
+                    continue
+            else:
+                out[k] = v
+                continue
+            if len(text) > limit:
+                out[k] = text[:limit] + f"\n…[dipotong, {len(text) - limit} char lagi]"
             else:
                 out[k] = v
         return out

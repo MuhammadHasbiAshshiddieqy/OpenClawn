@@ -261,6 +261,16 @@ BEGIN
     SELECT RAISE(ABORT, 'retention: audit_chain baris ini < 180 hari (EU AI Act Article 12, retensi minimum; tabel ini juga sengaja append-only)');
 END;
 
+-- Audit 2026-09-26: komentar di atas mengklaim append-only DITEGAKKAN, padahal
+-- hanya DELETE yang diblokir — UPDATE lolos. Trigger ini menutupnya untuk
+-- jalur kode mana pun. Penyerang dengan akses tulis penuh ke file DB tetap bisa
+-- DROP TRIGGER lebih dulu — itu yang ditangkap verify() + anchoring, bukan ini.
+CREATE TRIGGER IF NOT EXISTS trg_append_only_audit_chain
+BEFORE UPDATE ON audit_chain
+BEGIN
+    SELECT RAISE(ABORT, 'audit_chain append-only: UPDATE tidak diizinkan (entry baru, bukan mengubah yang lama)');
+END;
+
 -- ===================== APP SETTINGS (runtime override) =====================
 -- Key-value sederhana untuk override yang bisa diubah lewat /settings tanpa restart.
 -- mis. model_override_provider / model_override_model (paksa semua tier ke 1 model).
@@ -336,6 +346,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     turns INTEGER DEFAULT 0,
     end_reason TEXT,                        -- strategy_done | max_turns | stopped
     cost_usd REAL DEFAULT 0.0,
+    owner_user_id TEXT,                     -- [Audit 2026-09-26] user pemicu (NULL = auth nonaktif/lama) — filter /activity & /conversations per user
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_session ON conversations(session_id);

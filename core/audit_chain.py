@@ -30,6 +30,7 @@ draft-sharif-agent-audit-trail) juga di luar scope saat ini — butuh manajemen
 kunci yang belum ada di proyek ini.
 """
 
+import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -63,6 +64,11 @@ ENTRY_HUMAN_FEEDBACK = "routing.human_feedback"  # rating eksplisit 1-5 user unt
 # Hash entry pertama merantai ke string kosong — penanda awal rantai yang
 # eksplisit, bukan NULL (NULL menyulitkan verifikasi: "belum diisi" vs "awal").
 GENESIS_PREV_HASH = ""
+# Audit 2026-09-26: verify() membaca rantai per batch (keyset pagination) dan
+# menyerahkan event loop di antaranya — sebelumnya SELURUH rantai dimuat ke
+# memori & di-hash dalam satu langkah, membekukan server untuk semua user pada
+# deployment yang sudah lama berjalan.
+VERIFY_BATCH_SIZE = 2000
 
 
 def _canonical_body(
@@ -202,34 +208,44 @@ class AuditChain:
         entry pertama yang bermasalah (None bila utuh) — bukan cuma boolean,
         supaya operator tahu SEJAK KAPAN riwayat tak bisa dipercaya.
         """
-        rows = await self.db.fetchall(
-            """SELECT id, entry_type, ref_table, ref_id, payload_json,
-                      created_at, prev_hash, record_hash
-               FROM audit_chain ORDER BY id ASC"""
-        )
+        total_row = await self.db.fetchone("SELECT COUNT(*) AS n FROM audit_chain")
+        total = total_row["n"] if total_row else 0
         expected_prev = GENESIS_PREV_HASH
-        for row in rows:
-            if row["prev_hash"] != expected_prev:
-                return {
-                    "ok": False,
-                    "checked": len(rows),
-                    "broken_at": row["id"],
-                    "reason": "prev_hash tidak cocok dengan entry sebelumnya "
-                    "(entry disisipkan/dihapus, atau urutan diubah)",
-                }
-            body = _canonical_body(
-                row["entry_type"],
-                row["ref_table"] or "",
-                row["ref_id"],
-                row["payload_json"],
-                row["created_at"],
+        last_id = 0
+        while True:
+            rows = await self.db.fetchall(
+                """SELECT id, entry_type, ref_table, ref_id, payload_json,
+                          created_at, prev_hash, record_hash
+                   FROM audit_chain WHERE id > ? ORDER BY id ASC LIMIT ?""",
+                (last_id, VERIFY_BATCH_SIZE),
             )
-            if compute_hash(body, row["prev_hash"]) != row["record_hash"]:
-                return {
-                    "ok": False,
-                    "checked": len(rows),
-                    "broken_at": row["id"],
-                    "reason": "record_hash tidak cocok dengan isi entry (isi diubah setelah ditulis)",
-                }
-            expected_prev = row["record_hash"]
-        return {"ok": True, "checked": len(rows), "broken_at": None, "reason": ""}
+            if not rows:
+                break
+            for row in rows:
+                if row["prev_hash"] != expected_prev:
+                    return {
+                        "ok": False,
+                        "checked": total,
+                        "broken_at": row["id"],
+                        "reason": "prev_hash tidak cocok dengan entry sebelumnya "
+                        "(entry disisipkan/dihapus, atau urutan diubah)",
+                    }
+                body = _canonical_body(
+                    row["entry_type"],
+                    row["ref_table"] or "",
+                    row["ref_id"],
+                    row["payload_json"],
+                    row["created_at"],
+                )
+                if compute_hash(body, row["prev_hash"]) != row["record_hash"]:
+                    return {
+                        "ok": False,
+                        "checked": total,
+                        "broken_at": row["id"],
+                        "reason": "record_hash tidak cocok dengan isi entry "
+                        "(isi diubah setelah ditulis)",
+                    }
+                expected_prev = row["record_hash"]
+            last_id = rows[-1]["id"]
+            await asyncio.sleep(0)  # beri giliran request lain di antara batch
+        return {"ok": True, "checked": total, "broken_at": None, "reason": ""}

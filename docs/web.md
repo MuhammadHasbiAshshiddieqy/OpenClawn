@@ -649,6 +649,8 @@ Response:
 
 #### `GET /metrics/prometheus`
 
+**Audit 2026-09-26:** bila `OPENCLAWN_METRICS_TOKEN` diisi, wajib `Authorization: Bearer <token>` (constant-time) → 401 bila salah/absen. Kosong = tetap publik.
+
 **Prometheus text-exposition format** (TODO.md § Prioritas 6) — untuk integrasi
 Grafana/Datadog/scraper Prometheus lain, tanpa perlu SDK `prometheus_client`.
 Detail metric family lengkap: `docs/core.md` § `core/prometheus_metrics.py`.
@@ -741,6 +743,8 @@ Bar decay tiap baris menandai garis ambang arsip; fill berubah warna (kuning→m
 
 #### `GET /conversations`
 
+**Audit 2026-09-26:** non-admin (auth aktif) hanya melihat percakapan dengan `owner_user_id` miliknya — baris lama tanpa owner TIDAK ditampilkan ke non-admin (isinya transkrip utuh, fail-closed). Sebelumnya transkrip lengkap semua user terlihat siapa pun yang login.
+
 **Arsip percakapan multi-agent.**
 
 Template: `web/templates/conversations.html`
@@ -785,11 +789,15 @@ membocorkan struktur filesystem di luar workspace). Dipicu dari chip download di
 
 #### `GET /activity`
 
+**Audit 2026-09-26:** linimasa & daftar blocker terbuka difilter pemilik untuk non-admin (`ActivityTimeline.recent(owner_user_id=...)`).
+
 **Linimasa aksi agent** (terinspirasi Activity Timeline Multica). Template: `web/templates/activity.html`.
 
 Agregasi read-only lintas tabel via `ActivityTimeline.recent(role)` (routing/tool/handoff/conversation/crystallize/blocker). Param `?role=` opsional memfokuskan satu peran (role tak dikenal → abaikan, tampil semua). Blocker terbuka (`agent_blockers.status='open'`) ditampilkan menonjol di banner atas, diurut severity. Read-only.
 
 #### `POST /blockers/resolve`
+
+**Audit 2026-09-26:** non-admin hanya bisa me-resolve blocker dari sesi miliknya (`OWNED_SESSIONS_SQL`); sebelumnya blocker id apa pun.
 
 Tandai blocker `resolved` (`agent_blockers.status`, set `resolved_at`). Form: `blocker_id`. Redirect `/activity`.
 

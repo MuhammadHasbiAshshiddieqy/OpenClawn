@@ -740,3 +740,30 @@ def test_converse_stream_rejects_unknown_participant_role(client):
     assert resp.status_code == 200  # SSE frame, bukan HTTP error status
     assert "event: error" in resp.text
     assert "role tidak dikenal" in resp.text
+
+
+# ── Audit 2026-09-26: token opsional untuk /metrics/prometheus ───────────────
+
+
+def test_prometheus_requires_bearer_when_token_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENCLAWN_METRICS_TOKEN", "scrape-secret")
+    import importlib
+
+    import infra.config as config_mod
+
+    monkeypatch.setenv("OPENCLAWN_DB", str(tmp_path / "t.db"))
+    monkeypatch.setenv("OPENCLAWN_WORKSPACE", str(tmp_path))
+    importlib.reload(config_mod)
+    import web.main as web_main
+
+    importlib.reload(web_main)
+    from fastapi.testclient import TestClient
+
+    with TestClient(web_main.app) as c:
+        assert c.get("/metrics/prometheus").status_code == 401
+        assert (
+            c.get("/metrics/prometheus", headers={"Authorization": "Bearer wrong"}).status_code
+            == 401
+        )
+        ok = c.get("/metrics/prometheus", headers={"Authorization": "Bearer scrape-secret"})
+        assert ok.status_code == 200

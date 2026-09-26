@@ -106,3 +106,42 @@ async def test_timeline_respects_limit(db):
     assert len(events) == 2
     # Tetap terbaru-dulu walau dibatasi.
     assert events[0]["kind"] == "conversation"
+
+
+# ── Audit 2026-09-26: non-admin hanya melihat aktivitas miliknya ─────────────
+
+
+@pytest.mark.asyncio
+async def test_owner_filter_hides_other_users_content(db):
+    """SEBELUMNYA /activity menampilkan initial_message percakapan & detail
+    blocker SEMUA user ke member mana pun."""
+    await db.execute(
+        "INSERT INTO conversations (session_id, pattern, participants, initial_message, "
+        "transcript_json, turns, end_reason, cost_usd, owner_user_id) "
+        "VALUES ('c-a','pipeline','pm,dev','rahasia milik A','[]',1,'done',0,'1')"
+    )
+    await db.execute(
+        "INSERT INTO conversations (session_id, pattern, participants, initial_message, "
+        "transcript_json, turns, end_reason, cost_usd, owner_user_id) "
+        "VALUES ('c-b','pipeline','pm,dev','punya B','[]',1,'done',0,'2')"
+    )
+    await db.execute(
+        "INSERT INTO chat_sessions (session_id, role, owner_user_id) VALUES ('s-a','pm','1')"
+    )
+    await db.execute(
+        "INSERT INTO agent_blockers (session_id, role, summary, detail, severity) "
+        "VALUES ('s-a','pm','blok A','detail rahasia A','high')"
+    )
+    await db.execute(
+        "INSERT INTO routing_events (session_id, role, user_id, query_text, model_chosen, "
+        "provider, complexity_label) VALUES ('s-a','pm','1','q','m','ollama','simple')"
+    )
+
+    events_b = await ActivityTimeline(db).recent(owner_user_id="2")
+    text_b = str(events_b)
+    assert "rahasia milik A" not in text_b and "detail rahasia A" not in text_b
+    assert "punya B" in text_b
+    assert not [e for e in events_b if e["kind"] == "route"]
+
+    events_admin = await ActivityTimeline(db).recent()
+    assert "rahasia milik A" in str(events_admin)

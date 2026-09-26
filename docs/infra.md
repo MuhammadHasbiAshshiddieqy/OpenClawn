@@ -33,6 +33,7 @@ CONFIG = AppConfig.from_env()  # singleton global, di-inject ke semua modul
 | `auth_active` | *(property, bukan field)* | `True` bila SALAH SATU mode auth (`auth_token` ATAU OIDC) aktif — dipakai middleware, BUKAN `bool(auth_token)` lama yang tak tahu soal OIDC-only |
 | `idle_timeout_sec` | `None` (OFF) | Opt-in, TODO.md § Prioritas 1.5 — logout otomatis setelah N detik TAK aktif (beda dari `SESSION_MAX_AGE_SEC` = absolute expiry 7 hari sejak login, tetap berlaku sebagai batas atas). Isi via `OPENCLAWN_IDLE_TIMEOUT_SEC` di `.env`. Hanya berpengaruh bila auth aktif (`auth_active`). Lihat `security/auth.py` & middleware `auth_and_csrf_middleware` di `web/main.py` |
 | `workdir_allowed_roots` | `()` (kosong) | Audit 2026-09-25 (#1, kritis) — allowlist root folder kerja per-sesi (field UI `workdir` / tool `set_workdir`). Kosong → `default_workdir_roots()`: home user + `workspace_root` bila auth nonaktif; **tak ada override sama sekali** bila auth aktif. Saat auth aktif hanya **admin** yang boleh memakai allowlist ini (member/viewer: tuple kosong). Env `OPENCLAWN_WORKDIR_ROOTS` (dipisah `os.pathsep`, mis. `/srv/a:/srv/b`) |
+| `metrics_token` | `""` (kosong) | Audit 2026-09-26 — token bearer opsional untuk `GET /metrics/prometheus`. Kosong = publik (perilaku lama). Env `OPENCLAWN_METRICS_TOKEN` |
 | `allowed_hosts` | `()` (kosong) | Audit 2026-09-25 (kritis) — Host header tambahan yang diterima saat auth NONAKTIF, selain `localhost`/`127.0.0.1`/`::1` (anti DNS rebinding: domain penyerang yang di-resolve ke 127.0.0.1 dianggap same-origin oleh browser). Env `OPENCLAWN_ALLOWED_HOSTS` (koma, tanpa port) |
 | `http_vault_allowed_keys` | `()` (kosong) | Audit 2026-09-25 (#3) — nama env var yang boleh dipakai sebagai `vault:KEY` di header `http_request`. Kosong → semua KECUALI credential aplikasi (`OPENCLAWN_*`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `TAVILY_API_KEY`) yang SELALU ditolak. Env `OPENCLAWN_HTTP_VAULT_KEYS` (koma) |
 | `max_context_tokens` | `28_000` | Batas token context window |
@@ -351,6 +352,8 @@ Baca & validasi `clawn.yaml`. Raise `ManifestError` untuk kondisi di atas.
 Render dict `{tool_name: {deny_if: [...], approval_required_if: [...]}}` jadi blok TOML `[policy.<tool_name>]` siap disisipkan. Angka ditulis TANPA quote, string DENGAN quote (`_toml_value`) — penting karena kondisi numerik (`op: "gt"`, `value: 300`) harus banding angka, bukan string. Dict kosong → string kosong.
 
 ### Fungsi: `apply_manifest(manifest_path, roles_dir="roles") → list[str]`
+
+**Audit 2026-09-26:** role harus ada di `available_roles(roles_dir)`; nama tool & key kondisi harus identifier aman (`[A-Za-z0-9_-]+`, cegah injeksi section TOML); nilai string di-escape JSON (dulu newline menghasilkan soul.toml invalid); SEMUA role dirender & di-parse `tomllib` dulu sebelum ada yang ditulis; penulisan atomik (file `.toml.tmp` + `os.replace`).
 
 Terapkan `clawn.yaml` ke `soul.toml` tiap role yang disebut di `team:`. Return list role yang benar-benar diubah.
 

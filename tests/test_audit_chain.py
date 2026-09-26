@@ -123,6 +123,9 @@ async def test_detects_modified_payload(db):
     await chain.append(ENTRY_ROUTING_DECISION, {"model": "gemini-2.5-pro"}, "routing_events", 1)
     await chain.append(ENTRY_ROUTING_FINALIZED, {"cost_usd": 0.5}, "routing_events", 1)
 
+    # Penyerang dengan akses tulis penuh ke file DB bisa DROP trigger append-only
+    # (audit 2026-09-26) sebelum mengubah isi — verify() tetap wajib menangkapnya.
+    await db.execute("DROP TRIGGER trg_append_only_audit_chain")
     # Penyerang menyamarkan model mahal jadi model murah, tanpa menyentuh hash.
     await db.execute(
         "UPDATE audit_chain SET payload_json=? WHERE id=1",
@@ -199,6 +202,9 @@ async def test_detects_reordered_entries(db):
     await chain.append(ENTRY_ROUTING_DECISION, {"n": 3})
 
     rows = await db.fetchall("SELECT * FROM audit_chain ORDER BY id")
+    # Penyerang dengan akses tulis penuh ke file DB bisa DROP trigger append-only
+    # (audit 2026-09-26) sebelum mengubah isi — verify() tetap wajib menangkapnya.
+    await db.execute("DROP TRIGGER trg_append_only_audit_chain")
     # Tukar payload entry 2 dan 3 (isi bertukar, hash tetap di tempat semula).
     await db.execute("UPDATE audit_chain SET payload_json=? WHERE id=2", (rows[2]["payload_json"],))
     await db.execute("UPDATE audit_chain SET payload_json=? WHERE id=3", (rows[1]["payload_json"],))
@@ -293,3 +299,29 @@ async def test_unicode_payload_roundtrips(db):
     chain = AuditChain(db)
     await chain.append(ENTRY_ROUTING_DECISION, {"query_preview": "buatkan ringkasan 日本語"})
     assert (await chain.verify())["ok"] is True
+
+
+# ── Audit 2026-09-26 ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_update_on_audit_chain_is_blocked(db):
+    """Skema mengklaim append-only DITEGAKKAN trigger — sebelumnya hanya DELETE
+    yang diblokir; UPDATE lolos (baru ketahuan belakangan lewat verify)."""
+    chain = AuditChain(db)
+    await chain.append("routing.decision", {"x": 1})
+    with pytest.raises(Exception, match="append-only"):
+        await db.execute("UPDATE audit_chain SET payload_json='{}' WHERE id=1")
+
+
+@pytest.mark.asyncio
+async def test_verify_handles_chain_larger_than_one_batch(db, monkeypatch):
+    """verify() dibaca per batch (tak memuat seluruh rantai sekaligus)."""
+    import core.audit_chain as ac
+
+    monkeypatch.setattr(ac, "VERIFY_BATCH_SIZE", 3)
+    chain = AuditChain(db)
+    for i in range(10):
+        await chain.append("routing.decision", {"i": i})
+    result = await chain.verify()
+    assert result == {"ok": True, "checked": 10, "broken_at": None, "reason": ""}

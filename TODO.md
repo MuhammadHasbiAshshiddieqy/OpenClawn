@@ -1994,6 +1994,33 @@ Stack, volume, dan image uji dibongkar setelahnya.
 
 1255 passed (+15), ruff bersih.
 
+### Putaran 5 — sisa modul yang belum dibaca ulang (2026-09-26)
+
+- 🔴 **`/conversations` menampilkan transkrip LENGKAP percakapan multi-agent
+  SEMUA user** ke siapa pun yang login; `/activity` menampilkan prompt
+  percakapan & detail blocker semua user; `/blockers/resolve` menerima blocker
+  id apa pun. Kelas sama dengan kebocoran memori L1 (putaran 1). Kini
+  `conversations.owner_user_id` dicatat dan ketiganya difilter per pemilik
+  untuk non-admin (transkrip lama tanpa owner: fail-closed untuk non-admin).
+- 🟠 **Admin terakhir bisa diturunkan** → deployment OIDC-only terkunci
+  permanen. Guard atomik di `UserStore.set_access_role`.
+- 🟡 `audit_chain`: komentar mengklaim append-only DITEGAKKAN trigger, padahal
+  hanya DELETE — trigger BEFORE UPDATE ditambah; `verify()` per batch (dulu
+  memuat seluruh rantai sekaligus, membekukan event loop).
+- 🟡 `apply_manifest`: newline di nilai menghasilkan soul.toml invalid (role
+  tak bisa dimuat), key/nama tool bisa menyuntik section TOML, role tak
+  divalidasi, tulis non-atomik → escape JSON, identifier aman, parse-check
+  sebelum tulis, `os.replace`.
+- 🟡 Jaring token `_truncate_tool_output` hanya memotong string — dict/list
+  besar lolos ke context → ikut dipotong.
+- 🟢 `/metrics/prometheus`: token bearer opsional `OPENCLAWN_METRICS_TOKEN`.
+
+Diperiksa, bersih: `core/sandbox_reaper.py`, `tools/sandbox_persist.py`,
+`tools/data.py::JsonQueryTool`, `/metrics` (hanya agregat),
+`core/prometheus_metrics.py` (agregat, tanpa PII).
+
+1266 passed (+11), ruff bersih.
+
 ---
 
 ## Sumber riset tren (dicari 2026-07-27)

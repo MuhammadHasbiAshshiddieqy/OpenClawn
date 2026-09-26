@@ -87,6 +87,12 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # Multi-Tenant (TODO.md § Prioritas 5) — lihat komentar approval_log.
         ("tenant_id", "TEXT DEFAULT 'default'"),
     ],
+    "conversations": [
+        # Audit 2026-09-26: pemilik percakapan multi-agent — sebelumnya tak tercatat
+        # sama sekali, sehingga /activity & /conversations menampilkan prompt dan
+        # transkrip SEMUA user ke member mana pun. NULL = auth nonaktif / baris lama.
+        ("owner_user_id", "TEXT"),
+    ],
     "chat_sessions": [
         # Multi-Tenant (TODO.md § Prioritas 5): WIRED PENUH — ChatSessionStore
         # benar-benar filter per-tenant (bukan cuma kolom pasif seperti tabel

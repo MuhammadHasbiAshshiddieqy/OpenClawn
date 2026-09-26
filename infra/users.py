@@ -111,12 +111,22 @@ class UserStore:
 
     async def set_access_role(self, user_id: int, access_role: str) -> bool:
         """Ubah role akses user — admin action. Role tak dikenal → ditolak (False),
-        tak crash. Return True bila berhasil (user ada & role valid)."""
+        tak crash. Return True bila berhasil (user ada & role valid & bukan
+        penurunan admin terakhir)."""
         if access_role not in ACCESS_ROLES:
             return False
+        # Audit 2026-09-26: tolak menurunkan admin TERAKHIR tenant ini — tanpa
+        # guard, satu klik membuat tak ada lagi yang bisa mengelola user/settings
+        # (deployment OIDC-only terkunci permanen, butuh edit DB manual). Guard di
+        # DALAM satu statement UPDATE (pola bootstrap admin di atas) agar dua
+        # demote bersamaan tak bisa sama-sama lolos.
         cursor = await self.db.execute(
-            "UPDATE users SET access_role=? WHERE id=? AND tenant_id=?",
-            (access_role, user_id, self.tenant_id),
+            """UPDATE users SET access_role=?
+               WHERE id=? AND tenant_id=?
+                 AND NOT (access_role='admin' AND ?<>'admin'
+                          AND (SELECT COUNT(*) FROM users
+                               WHERE tenant_id=? AND access_role='admin') <= 1)""",
+            (access_role, user_id, self.tenant_id, access_role, self.tenant_id),
         )
         return cursor.rowcount > 0
 

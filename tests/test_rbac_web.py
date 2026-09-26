@@ -1325,3 +1325,33 @@ def test_oidc_open_signup_opt_in_restores_old_behaviour(tmp_path, monkeypatch):
         client.cookies.clear()
         other = _login_via_oidc(client, "someone-else")
         assert "error" not in other.headers["location"]
+
+
+def test_conversations_archive_scoped_to_owner(client_oidc):
+    """Audit 2026-09-26: /conversations SEBELUMNYA menampilkan transkrip lengkap
+    percakapan multi-agent SEMUA user ke siapa pun yang login."""
+    import asyncio
+
+    import web.main as web_main
+    from infra.users import UserStore
+
+    _login_via_oidc(client_oidc, "user-admin")
+    client_oidc.cookies.clear()
+    _login_via_oidc(client_oidc, "user-alice")
+    client_oidc.cookies.clear()
+    _login_via_oidc(client_oidc, "user-bob")
+
+    async def _seed():
+        alice = await UserStore(web_main.db).get_by_subject("user-alice")
+        await web_main.db.execute(
+            "INSERT INTO conversations (session_id, pattern, participants, initial_message, "
+            "transcript_json, turns, end_reason, cost_usd, owner_user_id) "
+            "VALUES ('c1','pipeline','pm,dev','RAHASIA-ALICE','[]',1,'done',0,?)",
+            (str(alice.id),),
+        )
+
+    asyncio.run(_seed())
+    resp = client_oidc.get("/conversations")
+    assert resp.status_code == 200
+    assert "RAHASIA-ALICE" not in resp.text
+    assert "RAHASIA-ALICE" not in client_oidc.get("/activity").text

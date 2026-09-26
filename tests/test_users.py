@@ -88,6 +88,7 @@ async def test_concurrent_first_logins_bootstrap_only_one_admin(db):
 async def test_upsert_idempotent_does_not_reset_role(db):
     """Login berulang tak menimpa role yang sudah di-set admin secara eksplisit."""
     store = UserStore(db)
+    await store.upsert_on_login("bootstrap-admin")  # admin pertama (tak boleh diturunkan)
     user = await store.upsert_on_login("user-alice")
     await store.set_access_role(user.id, "viewer")
 
@@ -111,6 +112,7 @@ async def test_shared_secret_subject_constant_used_consistently(db):
 @pytest.mark.asyncio
 async def test_set_access_role_updates_role(db):
     store = UserStore(db)
+    await store.upsert_on_login("bootstrap-admin")  # admin pertama (tak boleh diturunkan)
     user = await store.upsert_on_login("user-alice")
     ok = await store.set_access_role(user.id, "viewer")
     assert ok is True
@@ -180,3 +182,24 @@ async def test_users_scoped_to_tenant(db):
     users_b = await store_b.list_users()
     assert len(users_a) == 1
     assert len(users_b) == 1
+
+
+# ── Audit 2026-09-26: admin terakhir tak boleh diturunkan (lockout) ──────────
+
+
+@pytest.mark.asyncio
+async def test_cannot_demote_last_admin(db):
+    store = UserStore(db)
+    admin = await store.upsert_on_login("first")  # bootstrap admin
+    assert await store.set_access_role(admin.id, "member") is False
+    assert (await store.get_by_id(admin.id)).access_role == "admin"
+
+
+@pytest.mark.asyncio
+async def test_can_demote_admin_when_another_admin_exists(db):
+    store = UserStore(db)
+    a = await store.upsert_on_login("first")
+    b = await store.upsert_on_login("second")
+    assert await store.set_access_role(b.id, "admin") is True
+    assert await store.set_access_role(a.id, "viewer") is True
+    assert (await store.get_by_id(a.id)).access_role == "viewer"

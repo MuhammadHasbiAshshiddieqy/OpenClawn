@@ -201,6 +201,7 @@ Policy Engine dicek SEBELUM approval: `action="deny"` → tolak SEBELUM approval
 Cabang approval, urut prioritas: (1) `autopilot` → `ApprovalGate.queue_proposal` (tool TIDAK dieksekusi, proposal untuk ditinjau); (2) `bypass_approval and name not in _TRUST_MODE_EXEMPT and not policy_forces_approval` → `ApprovalGate.auto_approve` (tool TETAP dieksekusi, tercatat `decision="auto:trust_mode"`); (3) selain itu → `ApprovalGate.request` biasa (blocking, menunggu klik manusia atau timeout→DENY). `code_run` SELALU jatuh ke (3) berapa pun `bypass_approval`-nya — pengecualian dicek langsung di sini, bukan hanya dipercaya dari caller. `policy_forces_approval` juga SELALU jatuh ke (3) meski `bypass_approval=True` diteruskan caller — **defense-in-depth** (pola sama `_TRUST_MODE_EXEMPT`): keputusan trust-mode-bypass untuk approval yang dipaksa policy dicek independen DUA kali (di `_run_tool_loop` untuk status UI, dan di sini untuk eksekusi), bukan caller mempercayakan seluruhnya ke satu perhitungan.
 
 **`_truncate_tool_output(result) → dict`** *(private)*  
+**Audit 2026-09-26:** nilai dict/list kini diserialisasi JSON dan dipotong seperti teks bila melebihi `tool_max_output` — sebelumnya hanya field string yang dipotong, sehingga `json_query` tanpa path, baris `db_query` panjang, atau hasil MCP lolos utuh ke context. Nilai kecil tak disentuh.
 Potong field teks hasil tool yang melebihi `tool_max_output` (token-first §1.4) — jaring akhir agar tidak ada tool yang membanjiri context.
 
 **`_validate_tool_input(tool, input_data) → str | None`** *(module-level)*  
@@ -722,6 +723,8 @@ Sengaja **selektif**: hanya titik keputusan relevan-compliance. Bisa ditambah na
 
 ### Kelas: `AuditChain`
 
+**Audit 2026-09-26:** trigger `trg_append_only_audit_chain` (BEFORE UPDATE → ABORT) kini menegakkan append-only yang sebelumnya hanya diklaim komentar (dulu hanya DELETE yang diblokir). `verify()` membaca rantai per batch (`VERIFY_BATCH_SIZE` = 2000, keyset pagination) dan menyerahkan event loop di antaranya — sebelumnya seluruh rantai dimuat & di-hash sekaligus. Catatan: bila baris >180 hari suatu saat di-prune (diizinkan trigger retensi), `verify()` dari genesis akan melaporkan putus di baris pertama yang tersisa — anchoring yang membedakan pruning sah vs manipulasi.
+
 **`append(entry_type, payload, ref_table="", ref_id=None) → str | None`** *(async)*
 Tambah satu entry ke ujung rantai; return `record_hash` (atau `None` bila gagal). Penulisan **ATOMIK dalam satu statement SQL** — `prev_hash` dibaca lewat subquery di dalam INSERT yang sama, sehingga dua turn bersamaan tak bisa membaca head yang sama lalu menulis rantai bercabang (yang akan tampak sebagai "rantai rusak" padahal tak ada manipulasi — alarm palsu yang merusak kepercayaan pada mekanisme ini). Hash dihitung fungsi SQLite `SHA256` yang didaftarkan `DatabaseManager` — pola sama `POWER()` untuk skill decay.
 
@@ -1050,6 +1053,8 @@ Agregasi per tool untuk `/metrics`: `total`, `errors`, `timeouts`, `fail_rate` (
 ---
 
 ## `core/activity.py` — Activity Timeline
+
+**Audit 2026-09-26:** `recent(role=None, limit=60, owner_user_id=None)` — bila `owner_user_id` diisi (web: non-admin saat auth aktif), routing/tool difilter `user_id`, percakapan `owner_user_id`, blocker lewat `OWNED_SESSIONS_SQL` (sesi chat ATAU percakapan milik user). Handoff & kristalisasi (hanya nama role/skill, dibagi per role) tak difilter. Sebelumnya `initial_message` percakapan & `detail` blocker SEMUA user terlihat. `ConversationOrchestrator(..., owner_user_id=None)` menulis `conversations.owner_user_id`.
 
 Linimasa kronologis aksi agent (terinspirasi *Activity Timeline* Multica). **Tanpa tabel baru** — mengagregasi peristiwa yang sudah dicatat: `routing_events`, `tool_invocations`, `role_handoffs`, `conversations`, `crystallization_log`, `agent_blockers`. Read-only & extractable (hanya `DatabaseManager`).
 

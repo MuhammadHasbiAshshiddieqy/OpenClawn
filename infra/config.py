@@ -198,6 +198,11 @@ class AppConfig:
     # 127.0.0.1 (DNS rebinding) dianggap same-origin oleh browser dan bisa
     # mengendalikan agent. Env: `OPENCLAWN_ALLOWED_HOSTS` (koma, tanpa port).
     allowed_hosts: tuple = ()
+    # Audit 2026-09-26: token bearer opsional untuk GET /metrics/prometheus (publik
+    # agar scraper tak perlu cookie sesi). Kosong → tetap publik (perilaku lama);
+    # diisi → wajib `Authorization: Bearer <token>` (didukung Prometheus
+    # `bearer_token`/`authorization`). Env: OPENCLAWN_METRICS_TOKEN.
+    metrics_token: str = ""
     # Batas hasil tool agar tidak membanjiri context (token-first §1.4).
     tool_max_output: int = 10_000
     # Timeout keras per eksekusi tool (§1.3 kegagalan anggun): tool yang menggantung
@@ -320,6 +325,7 @@ class AppConfig:
                 for p in os.environ.get("OPENCLAWN_WORKDIR_ROOTS", "").split(os.pathsep)
                 if p.strip()
             ),
+            metrics_token=os.environ.get("OPENCLAWN_METRICS_TOKEN", ""),
             allowed_hosts=tuple(
                 h.strip().lower()
                 for h in os.environ.get("OPENCLAWN_ALLOWED_HOSTS", "").split(",")

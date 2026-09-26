@@ -73,6 +73,19 @@ A whole-codebase pass focused on the seams *between* modules — issues that the
 
 15 more tests (1255 passed).
 
+**Fifth pass (remaining modules)**
+- `/conversations` showed the **full transcripts** of every user's multi-agent conversations to anyone logged in. `/activity` exposed every user's conversation prompts and blocker details, and `/blockers/resolve` accepted any blocker id. Conversations now record `owner_user_id`, and all three are scoped per owner for non-admins.
+- The last admin could be demoted, which permanently locked OIDC-only deployments out of administration. `set_access_role` now has an atomic guard against this.
+- `audit_chain`: append-only is now actually enforced by a `BEFORE UPDATE` trigger (previously only DELETE was blocked). `verify()` streams the chain in batches instead of loading it all at once.
+- `apply_manifest`:
+  - String values are escaped (a newline used to produce an invalid `soul.toml`).
+  - Tool names and condition keys must be safe identifiers, so they can no longer inject TOML sections.
+  - Roles are validated, and every file is parse-checked before any write, then written atomically.
+- The tool-output token cap now also applies to large dict/list values.
+- Optional bearer token for `/metrics/prometheus` (`OPENCLAWN_METRICS_TOKEN`).
+
+11 more tests (1266 passed).
+
 ### Fixed — CRITICAL: path traversal via `role` → arbitrary soul.toml load (TODO.md § 16)
 
 Found while auditing the frontend (tracing where `chat.js`'s `role` form field ends up server-side). The `role` string was used completely unvalidated to build a filesystem path in four places — `core/agent_loop.py`, `core/router.py`, `core/late_execute.py`, `core/task_graph.py` all did the equivalent of `open(f"roles/{role}/soul.toml")` with no check that `role` was one of the actual configured roles.

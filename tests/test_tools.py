@@ -1341,3 +1341,24 @@ def test_is_public_ip_handles_ipv4_mapped():
     assert _is_public_ip("8.8.8.8") is True
     assert _is_public_ip("::ffff:127.0.0.1") is False
     assert _is_public_ip("169.254.169.254") is False
+
+
+# ── Audit 2026-09-26: jaring token juga untuk nilai non-string ───────────────
+
+
+@pytest.mark.asyncio
+async def test_truncate_tool_output_caps_nested_values():
+    """SEBELUMNYA hanya field string yang dipotong — dict/list besar (json_query
+    tanpa path, baris db_query panjang, hasil MCP) lolos utuh ke context."""
+    from core.agent_loop import AgentConfig, AgentLoop
+    from infra.config import AppConfig
+    from infra.database import DatabaseManager
+
+    cfg = AppConfig(db_path=":memory:", tool_max_output=1000)
+    agent = AgentLoop(AgentConfig(role="dev", session_id="s-trunc"), DatabaseManager(cfg), cfg)
+    out = agent._truncate_tool_output(
+        {"value": {"rows": ["x" * 400] * 20}, "count": 20, "ok": True}
+    )
+    assert isinstance(out["value"], str) and "dipotong" in out["value"]
+    assert len(out["value"]) < 1200
+    assert out["count"] == 20 and out["ok"] is True  # nilai kecil tak disentuh

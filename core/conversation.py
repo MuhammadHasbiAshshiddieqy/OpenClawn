@@ -293,9 +293,13 @@ class ConversationOrchestrator:
         control: ConversationControl | None = None,
         pattern: str = "",
         event_bus: EventBus | None = None,
+        owner_user_id: str | None = None,
     ):
         self.strategy = strategy
         self.db = db
+        # Audit 2026-09-26: dicatat ke conversations.owner_user_id agar arsip
+        # (transkrip lengkap) hanya terlihat pemiliknya / admin.
+        self.owner_user_id = owner_user_id
         self.agent_factory = agent_factory
         self.session_id = session_id
         self.config = config
@@ -519,8 +523,9 @@ class ConversationOrchestrator:
         try:
             await self.db.execute(
                 """INSERT INTO conversations (session_id, pattern, participants,
-                       initial_message, transcript_json, turns, end_reason, cost_usd)
-                   VALUES (?,?,?,?,?,?,?,?)""",
+                       initial_message, transcript_json, turns, end_reason, cost_usd,
+                       owner_user_id)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
                 (
                     self.session_id,
                     self.pattern or "",
@@ -530,6 +535,7 @@ class ConversationOrchestrator:
                     totals.get("turns", 0),
                     end_reason,
                     totals.get("cost_usd", 0.0),
+                    self.owner_user_id,
                 ),
             )
         except Exception as e:  # noqa: BLE001 — arsip gagal jangan jatuhkan percakapan

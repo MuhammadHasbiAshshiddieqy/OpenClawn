@@ -386,6 +386,8 @@ Setiap percobaan kristalisasi (termasuk yang jadi `draft`/`duplicate`) dicatat o
 
 ### `conversations` — Arsip Percakapan Multi-Agent
 
+**Audit 2026-09-26:** kolom `owner_user_id` (TEXT, NULL = auth nonaktif/baris lama; ditambal ke DB lama via `_ADDED_COLUMNS`) — `/conversations` & `/activity` memfilter per pemilik untuk non-admin. Trigger baru `trg_append_only_audit_chain` memblokir UPDATE pada `audit_chain`.
+
 Transkrip percakapan multi-agent (pipeline/debate/orchestrator) disimpan oleh `ConversationOrchestrator._persist` di setiap `conversation_end`, agar bisa ditinjau ulang di `/conversations` (sebelumnya ephemeral).
 
 | Kolom | Tipe | Keterangan |

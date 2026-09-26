@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from core.activity import ActivityTimeline
+from core.activity import OWNED_SESSIONS_SQL, ActivityTimeline
 from core.agent_loop import AgentConfig, AgentLoop
 from core.audit import RoutingAuditor
 from core.audit_chain import AuditChain
@@ -1395,6 +1395,7 @@ async def converse_stream(request: Request):
         config=CONFIG,
         control=control,
         pattern=pattern,
+        owner_user_id=owner_user_id,
     )
 
     async def generate():
@@ -1689,13 +1690,26 @@ async def metrics_cost_savings_json():
 
 
 @app.get("/metrics/prometheus")
-async def metrics_prometheus():
+async def metrics_prometheus(request: Request):
     """Endpoint Prometheus text-exposition (TODO.md § Prioritas 6) — cukup untuk
     integrasi Grafana/Datadog tanpa SDK `prometheus_client` (CLAUDE.md §8: opsi
     ringan di atas data yang sudah ada sebelum dependency berat). PUBLIC
     (`security/auth.py::PUBLIC_PATHS`) — scraper tak bawa cookie sesi, data
     murni agregat operasional, tak ada PII/kredensial.
+
+    Audit 2026-09-26: bila `CONFIG.metrics_token` diisi, wajib header
+    `Authorization: Bearer <token>` (dibandingkan constant-time) — saat auth aktif
+    endpoint ini sebelumnya terbuka ke internet tanpa opsi pembatasan sama sekali.
     """
+    if CONFIG.metrics_token:
+        supplied = request.headers.get("authorization", "")
+        expected = f"Bearer {CONFIG.metrics_token}"
+        if not hmac.compare_digest(supplied.encode(), expected.encode()):
+            return JSONResponse(
+                {"ok": False, "error": "unauthorized"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     return PlainTextResponse(
         await render_prometheus_metrics(db),
         media_type="text/plain; version=0.0.4; charset=utf-8",
@@ -2036,12 +2050,22 @@ async def skills_import(request: Request):
 
 @app.get("/conversations", response_class=HTMLResponse)
 async def conversations_page(request: Request):
-    """Arsip percakapan multi-agent (pipeline/debate/orchestrator) untuk ditinjau ulang."""
-    rows = await db.fetchall(
-        """SELECT id, pattern, participants, initial_message, transcript_json,
-                  turns, end_reason, cost_usd, created_at
-           FROM conversations ORDER BY id DESC LIMIT 50"""
-    )
+    """Arsip percakapan multi-agent (pipeline/debate/orchestrator) untuk ditinjau ulang.
+
+    Audit 2026-09-26: SEBELUMNYA transkrip LENGKAP percakapan semua user terlihat
+    siapa pun yang login. Non-admin kini hanya melihat miliknya (baris lama tanpa
+    owner tercatat TIDAK ditampilkan ke non-admin — isinya transkrip utuh, fail-closed).
+    """
+    owner = _session_owner_filter(request)
+    cols = """id, pattern, participants, initial_message, transcript_json,
+              turns, end_reason, cost_usd, created_at"""
+    if owner is None:
+        rows = await db.fetchall(f"SELECT {cols} FROM conversations ORDER BY id DESC LIMIT 50")
+    else:
+        rows = await db.fetchall(
+            f"SELECT {cols} FROM conversations WHERE owner_user_id = ? ORDER BY id DESC LIMIT 50",
+            (owner,),
+        )
     convos = []
     for r in rows:
         try:
@@ -2066,13 +2090,18 @@ async def activity_page(request: Request, role: str | None = None):
     roles = available_roles()
     # Validasi filter: role tak dikenal → abaikan (tampilkan semua), jangan error.
     active_role = role if role in roles else None
-    timeline = await ActivityTimeline(db).recent(role=active_role)
+    # Audit 2026-09-26: non-admin hanya melihat aktivitas miliknya (sebelumnya
+    # prompt percakapan & detail blocker semua user terlihat).
+    owner = _session_owner_filter(request)
+    timeline = await ActivityTimeline(db).recent(role=active_role, owner_user_id=owner)
     # Blocker terbuka ditampilkan menonjol di atas linimasa (proactive reporting).
+    owned = f"AND {OWNED_SESSIONS_SQL}" if owner is not None else ""
     open_blockers = await db.fetchall(
-        """SELECT id, role, summary, detail, severity, created_at
-           FROM agent_blockers WHERE status='open'
-           ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
-                    id DESC LIMIT 20"""
+        f"""SELECT id, role, summary, detail, severity, created_at
+            FROM agent_blockers WHERE status='open' {owned}
+            ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                     id DESC LIMIT 20""",
+        (owner, owner) if owner is not None else (),
     )
     return templates.TemplateResponse(
         request,
@@ -2100,10 +2129,21 @@ async def blockers_resolve(request: Request):
     except (ValueError, TypeError):
         blocker_id = 0
     if blocker_id:
-        await db.execute(
-            "UPDATE agent_blockers SET status='resolved', resolved_at=CURRENT_TIMESTAMP WHERE id=?",
-            (blocker_id,),
-        )
+        # Audit 2026-09-26: hanya pemilik sesi blocker (atau admin) yang boleh
+        # menandainya resolved — sebelumnya member mana pun, blocker id apa pun.
+        owner = _session_owner_filter(request)
+        if owner is None:
+            await db.execute(
+                "UPDATE agent_blockers SET status='resolved', resolved_at=CURRENT_TIMESTAMP "
+                "WHERE id=?",
+                (blocker_id,),
+            )
+        else:
+            await db.execute(
+                "UPDATE agent_blockers SET status='resolved', resolved_at=CURRENT_TIMESTAMP "
+                f"WHERE id=? AND {OWNED_SESSIONS_SQL}",
+                (blocker_id, owner, owner),
+            )
     return RedirectResponse(url="/activity", status_code=303)
 
 
